@@ -75,7 +75,16 @@ sync_openwebui_function() {
   fi
 
   section "Syncing OpenWebUI admin filter function"
-  python3 "$REPO_ROOT/codex/bin/sync_openwebui_function.py"
+  python3 "$REPO_ROOT/codex/bin/sync_openwebui_function.py" \
+    --function-id codex_gateway_admin_filter \
+    --source codex/bin/openwebui_gateway_admin_filter.py
+
+  if [ -f "$REPO_ROOT/codex/bin/openwebui_codex_auto_tools_filter.py" ]; then
+    section "Syncing OpenWebUI auto tools filter function"
+    python3 "$REPO_ROOT/codex/bin/sync_openwebui_function.py" \
+      --function-id codex_auto_tools_filter \
+      --source codex/bin/openwebui_codex_auto_tools_filter.py
+  fi
 }
 
 if [ "${1:-}" = "--restart-only" ]; then

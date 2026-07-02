@@ -19,6 +19,7 @@ Lokální AI stack pro OpenWebUI, Ollama a izolované Codex/OpenCode workspaces.
 - `codex/bin/start_codex_stack.sh`: startuje Codex/OpenCode stack, gateway a workspaces ve WSL.
 - `codex/bin/add_workspace.py`: registruje nový repozitářový workspace do `codex/workspaces.json`.
 - `codex/bin/watch_gateway.sh`: hlídá změny `codex/gateway/gateway.py`, validuje syntaxi a restartuje gateway.
+- `codex/bin/openwebui_codex_auto_tools_filter.py`: OpenWebUI filter pro automatické připojení toolsetů a úzké mapování bezpečných codex-local intentů.
 - `codex/gateway/gateway.py`: OpenAI-compatible gateway pro modely a workspace snapshoty.
 - `codex/workspaces.json`: registr workspaces, portů a resource limitů.
 - `codex/opencode-default.json`: výchozí OpenCode konfigurace pro nové workspaces.
@@ -141,6 +142,8 @@ Protože nasazení restartuje i gateway, běží asynchronně. Stav sleduj dalš
 Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a až potom restartuje Codex stack a OpenWebUI. Po restartu čeká na gateway, OpenWebUI root a `/static/loader.js`, aby krátký náběh služby nevypadal jako chyba. Pokud `sudo` vyžaduje heslo, pokusí se o restart přes WSL root interop (`wsl.exe -d Ubuntu -u root`), stejně jako Windows startovací `.bat` skript. Když selže i to, vypíše ruční fallback. Pokud má k dispozici `OWUI_API_KEY` nebo ignorovaný soubor `codex/state/openwebui-api.key`, po restartu také sesynchronizuje OpenWebUI admin filter funkci.
 
 Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `tail` nebo `log_tail` balí do rozbalovacích `<details>` bloků, aby chat zůstal čitelný. OpenWebUI raw HTML v Markdownu escapuje, proto `openwebui/loader.js` tyto doslovné bloky po vykreslení zprávy převádí na skutečné lokální dropdowny.
+
+`Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat úzké přirozené požadavky nad `ai-stack`. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá explicitní whitelisted admin workflow.
 
 Příklad aplikace konkrétního patche:
 
