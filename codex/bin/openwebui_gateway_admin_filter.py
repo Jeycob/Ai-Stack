@@ -8,6 +8,7 @@ description: Applies explicitly marked, whitelisted ai-stack gateway patches fro
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional
+import html
 import json
 import os
 import py_compile
@@ -1042,8 +1043,7 @@ class Filter:
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
-            "output:\n"
-            + output.rstrip()
+            + self._details("output", output)
         )
 
     def _add_workspace_admin(self, text: str) -> str:
@@ -1086,14 +1086,12 @@ class Filter:
             f"name={result.get('name', name)}",
             f"path={result.get('path', path)}",
             f"exit_code={result.get('exit_code')}",
-            "output:",
-            self._trim(str(result.get("output", "")), 12000).rstrip(),
+            self._details("output", self._trim(str(result.get("output", "")), 12000)),
         ]
         if "restart_exit_code" in result:
             lines.extend([
                 f"restart_exit_code={result.get('restart_exit_code')}",
-                "restart_output:",
-                self._trim(str(result.get("restart_output", "")), 12000).rstrip(),
+                self._details("restart_output", self._trim(str(result.get("restart_output", "")), 12000)),
             ])
         return "\n".join(lines).rstrip()
 
@@ -1119,8 +1117,7 @@ class Filter:
             f"branch={result.get('branch', branch)}\n"
             f"pid={result.get('pid')}\n"
             f"log={result.get('log')}\n"
-            "tail:\n"
-            + self._trim(str(result.get("tail", "")), 12000).rstrip()
+            + self._details("tail", self._trim(str(result.get("tail", "")), 12000))
         ).rstrip()
 
     def _deploy_status_admin(self) -> str:
@@ -1131,10 +1128,9 @@ class Filter:
             f"pid={result.get('pid')}\n"
             f"head={result.get('head')}\n"
             f"log={result.get('log')}\n"
-            "git_status:\n"
-            + str(result.get("git_status", "")).rstrip()
-            + "\nlog_tail:\n"
-            + self._trim(str(result.get("tail", "")), 24000).rstrip()
+            + self._details("git_status", str(result.get("git_status", "")))
+            + "\n"
+            + self._details("log_tail", self._trim(str(result.get("tail", "")), 24000))
         ).rstrip()
 
     def _gateway_admin_request(self, path: str, payload: dict, timeout: int = 90) -> dict:
@@ -1211,6 +1207,18 @@ class Filter:
         if len(text) <= limit:
             return text
         return text[:limit] + f"\n[truncated at {limit} chars]"
+
+    def _details(self, title: str, text: str) -> str:
+        body = text.rstrip() or "(empty)"
+        escaped_title = html.escape(title, quote=True)
+        escaped_body = html.escape(body, quote=False)
+        lines = body.count("\n") + 1 if body else 0
+        chars = len(body)
+        return (
+            f"\n<details><summary>{escaped_title} ({lines} lines, {chars} chars)</summary>\n\n"
+            f"<pre><code>{escaped_body}</code></pre>\n"
+            "</details>"
+        )
 
     def _shell_join(self, command) -> str:
         if isinstance(command, list):
