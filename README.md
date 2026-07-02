@@ -123,6 +123,7 @@ Praktická pravidla pro zadávání úloh:
 - Smoke test gateway: `python3 codex/bin/codex_gateway_smoke.py --base-url http://192.168.0.48:9101 --workspace ai-stack`.
 - Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `OWUI_API_KEY=<set locally> python3 codex/bin/sync_openwebui_function.py --dry-run`.
 - Aplikace synchronizace OpenWebUI funkce po review: `OWUI_API_KEY=<set locally> python3 codex/bin/sync_openwebui_function.py`.
+- Bezpečné mapování OpenWebUI endpointů bez mutačních metod: `OWUI_API_KEY=<set locally> python3 codex/bin/discover_openwebui_endpoints.py --path /api/config --path /api/v1/functions/list`.
 - Seznam modelů: `curl http://192.168.0.48:9101/v1/models`.
 - Seznam workspaces: `curl http://192.168.0.48:9101/v1/workspaces`.
 
