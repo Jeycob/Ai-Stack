@@ -99,7 +99,7 @@ Pro admin nebo patch operace používej oddělený viditelný a technický promp
 
 Technické markery typu `GATEWAY_ADMIN_APPLY_NOW` jsou interní bezpečnostní protokol pro whitelisted zápis souborů. V běžném OpenWebUI chatu mají být schované za helperem a viditelné jen jako lidské shrnutí práce, status a výsledek.
 
-Další technický krok pro opravdu živé tokeny je upravit `codex/gateway/gateway.py` tak, aby uměl skutečné streaming SSE z Ollamy a neposílal OpenWebUI odpověď až po dokončení celé generace.
+Gateway podporuje skutečné streaming SSE pro běžné modelové odpovědi: při `stream=true` proxyuje chunkované odpovědi z Ollamy průběžně do OpenWebUI. Admin a patch odpovědi zůstávají pevné, aby se bezpečnostní flow nechovalo nedeterministicky.
 
 Praktická pravidla pro zadávání úloh:
 

@@ -204,9 +204,33 @@ def ollama_chat(model_id, messages, timeout=300):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode() or "{}")
 
+def ollama_chat_stream(model_id, messages, timeout=300):
+    body = json.dumps({"model": model_id, "messages": messages, "stream": True}).encode()
+    req = urllib.request.Request(f"{OLLAMA_OPENAI_URL}/chat/completions", data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", "Bearer local")
+    return urllib.request.urlopen(req, timeout=timeout)
+
+def gateway_admin_text(payload):
+    return "\n".join(content_to_text(m.get("content", "")) for m in payload.get("messages", []) if m.get("role") != "system")
+
+def gateway_fixed_response_requested(payload):
+    admin_text = gateway_admin_text(payload)
+    direct_prefix = "GATEWAY_ADMIN_DIRECT_RESPONSE"
+    direct_match = re.search(rf"(?ims)^\s*{re.escape(direct_prefix)}\s*\n(.*)", admin_text)
+    has_admin_marker = "GATEWAY_ADMIN_APPLY" in admin_text
+    has_admin_patch = "diff --git " in admin_text or "\n--- " in admin_text or "\n+++" in admin_text
+    return bool(direct_match or (has_admin_marker and has_admin_patch))
+
+def model_request(payload, model_name):
+    spec = MODELS.get(model_name, MODELS["codex-local-plan-qwen14b"])
+    workspace_name, workspace = select_workspace(payload.get("messages", []))
+    snapshot = repo_snapshot(workspace_name, workspace)
+    return spec, direct_messages(payload.get("messages", []), workspace_name, snapshot, spec["mode"])
+
 def completion(payload):
     model_name = payload.get("model") or "codex-local-plan-qwen14b"
-    admin_text = "\n".join(content_to_text(m.get("content", "")) for m in payload.get("messages", []) if m.get("role") != "system")
+    admin_text = gateway_admin_text(payload)
     direct_prefix = "GATEWAY_ADMIN_DIRECT_RESPONSE"
     direct_match = re.search(rf"(?ims)^\s*{re.escape(direct_prefix)}\s*\n(.*)", admin_text)
     if direct_match:
@@ -223,7 +247,7 @@ def completion(payload):
             }],
             "usage": {"prompt_tokens": 0, "completion_tokens": len(direct_text.split()), "total_tokens": len(direct_text.split())},
         }
-    has_admin_marker = "GATEWAY_ADMIN_APPLY" in admin_text or "GATEWAY_ADMIN_APPLY" in admin_text
+    has_admin_marker = "GATEWAY_ADMIN_APPLY" in admin_text
     has_admin_patch = "diff --git " in admin_text or "\n--- " in admin_text or "\n+++" in admin_text
     if has_admin_marker and has_admin_patch:
         return {
@@ -239,10 +263,8 @@ def completion(payload):
             "usage": {"prompt_tokens": 0, "completion_tokens": 3, "total_tokens": 3},
         }
 
-    spec = MODELS.get(model_name, MODELS["codex-local-plan-qwen14b"])
-    workspace_name, workspace = select_workspace(payload.get("messages", []))
-    snapshot = repo_snapshot(workspace_name, workspace)
-    resp = ollama_chat(spec["model"], direct_messages(payload.get("messages", []), workspace_name, snapshot, spec["mode"]))
+    spec, messages = model_request(payload, model_name)
+    resp = ollama_chat(spec["model"], messages)
 
     text = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
     usage = resp.get("usage", {})
@@ -272,6 +294,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         text = result["choices"][0]["message"]["content"]
         chunk = {"id": result["id"], "object": "chat.completion.chunk", "created": result["created"], "model": result["model"], "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}]}
@@ -279,6 +302,24 @@ class H(BaseHTTPRequestHandler):
         done = {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
         self.wfile.write(f"data: {json.dumps(done, ensure_ascii=False)}\n\n".encode())
         self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
+    def proxy_ollama_sse(self, payload):
+        model_name = payload.get("model") or "codex-local-plan-qwen14b"
+        spec, messages = model_request(payload, model_name)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        with ollama_chat_stream(spec["model"], messages) as upstream:
+            for raw in upstream:
+                if not raw:
+                    continue
+                self.wfile.write(raw)
+                if raw.endswith(b"\n") and not raw.endswith(b"\n\n"):
+                    self.wfile.write(b"\n")
+                self.wfile.flush()
 
     def do_GET(self):
         if self.path == "/health":
@@ -298,6 +339,8 @@ class H(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(n).decode() or "{}")
+            if payload.get("stream") and not gateway_fixed_response_requested(payload):
+                return self.proxy_ollama_sse(payload)
             result = completion(payload)
             return self.sendsse(result) if payload.get("stream") else self.sendj(result)
         except Exception as e:
