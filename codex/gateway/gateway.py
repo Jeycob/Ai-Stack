@@ -207,6 +207,21 @@ def ollama_chat(model_id, messages, timeout=300):
 def completion(payload):
     model_name = payload.get("model") or "codex-local-plan-qwen14b"
     admin_text = "\n".join(content_to_text(m.get("content", "")) for m in payload.get("messages", []) if m.get("role") != "system")
+    direct_prefix = "GATEWAY_ADMIN_DIRECT_RESPONSE"
+    if direct_prefix in admin_text:
+        direct_text = admin_text.split(direct_prefix, 1)[1].strip()
+        return {
+            "id": "chatcmpl-" + uuid.uuid4().hex,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": direct_text},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": len(direct_text.split()), "total_tokens": len(direct_text.split())},
+        }
     has_admin_marker = "GATEWAY_ADMIN_APPLY" in admin_text or "GATEWAY_ADMIN_APPLY" in admin_text
     has_admin_patch = "diff --git " in admin_text or "\n--- " in admin_text or "\n+++" in admin_text
     if has_admin_marker and has_admin_patch:
