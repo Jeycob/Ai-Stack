@@ -121,6 +121,7 @@ Praktická pravidla pro zadávání úloh:
 - Přidání workspace: `python3 codex/bin/add_workspace.py <name> <path> --port <port>`.
 - Kontrola gateway: `curl http://127.0.0.1:9101/health` ve WSL nebo `curl http://192.168.0.48:9101/health` z LAN.
 - Smoke test gateway: `python3 codex/bin/codex_gateway_smoke.py --base-url http://192.168.0.48:9101 --workspace ai-stack`.
+- Celkový healthcheck lokálního stacku ve WSL: `bash codex/bin/check_ai_stack.sh`; pro LAN kontrolu nastav `OPENWEBUI_URL=http://192.168.0.48:9090 CODEX_GATEWAY_URL=http://192.168.0.48:9101`.
 - Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `OWUI_API_KEY=<set locally> python3 codex/bin/sync_openwebui_function.py --dry-run`.
 - Aplikace synchronizace OpenWebUI funkce po review: `OWUI_API_KEY=<set locally> python3 codex/bin/sync_openwebui_function.py`.
 - Bezpečné mapování OpenWebUI endpointů bez mutačních metod: `OWUI_API_KEY=<set locally> python3 codex/bin/discover_openwebui_endpoints.py --path /api/config --path /api/v1/functions/list`.
