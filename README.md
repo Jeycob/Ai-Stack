@@ -81,6 +81,11 @@ Příklad read-only guard kontroly registrovaného workspace:
     repo: ai-stack
     GATEWAY_ADMIN_REPO_GUARD ai-stack main
 
+Příklad rychlého read-only scanu workspace:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_WORKSPACE_SCAN ai-stack
+
 Proč se běžný chat sám nepustí do akce: modely `codex-local-*` mají normální chat cestu schválně read-only. Umí číst snapshot workspace, vysvětlovat a navrhovat plán nebo patch. Rizikové akce jako shell, instalace balíčků, generování SSH klíčů, vytváření GitHub repozitářů, push a reálné editace souborů musí jít přes explicitní whitelisted admin/tool workflow. Gateway takový požadavek v běžném chatu zachytí a místo prázdné nebo zavádějící odpovědi vysvětlí, že nic neprovedla.
 
 Příklad požadavku na nový úzký tool:

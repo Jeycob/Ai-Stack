@@ -65,6 +65,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_GIT_STATUS`: ukaze stav repozitare, allowed/blocked cesty a sensitive cesty.
 - `GATEWAY_ADMIN_GIT_DIFF [path]`: ukaze diff jen pro whitelisted commitovatelne soubory. Bezpecne pred pushem.
 - `GATEWAY_ADMIN_REPO_GUARD [workspace] [branch]`: read-only kontrola registrovaneho workspace, branch, dirty stavu a suspicious/sensitive cest bez vypisu obsahu souboru.
+- `GATEWAY_ADMIN_WORKSPACE_SCAN [workspace]`: read-only scan manifestu, jazyku, package script names a navrzenych build/test prikazu bez spousteni prikazu.
 - `GATEWAY_ADMIN_READ <path>`: precte whitelisted soubor bez cisel radku.
 - `GATEWAY_ADMIN_READ_NUMBERED <path> [start] [end]`: precte whitelisted soubor s realnymi cisly radku. Pouzivat pred presnymi patchemi.
 - `GATEWAY_ADMIN_APPLY_NOW`: aplikuje prilozeny unified diff na whitelisted soubory a provede validaci Python souboru.
