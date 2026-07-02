@@ -194,7 +194,11 @@ def direct_messages(payload_messages, workspace_name, snapshot, mode):
         "Do not output tool calls, task calls, JSON function calls, or subagent markup. "
         "If the snapshot is insufficient, say exactly what extra file or command output is needed. "
         "Reply in the user's language. When asked for exact file content, quote it exactly and do not translate it. "
-        "For build/edit requests, propose a plan or patch, but do not claim files were edited."
+        "Normal chat is read-only: do not claim shell commands, package installs, key generation, "
+        "GitHub repository creation, pushes, or file edits were executed. "
+        "If the user asks to create, modify, install, generate keys, push, or run commands, first say clearly that you did not execute it. "
+        "Then explain that execution requires an explicit whitelisted admin/tool workflow. "
+        "For build/edit requests, propose a plan or patch, but do not ask for OS basics already visible in the snapshot."
     )
     msgs = [{"role": "system", "content": system}, {"role": "system", "content": snapshot}]
     for m in payload_messages:
@@ -229,6 +233,65 @@ def gateway_fixed_response_requested(payload):
     has_admin_marker = "GATEWAY_ADMIN_APPLY" in admin_text
     has_admin_patch = "diff --git " in admin_text or "\n--- " in admin_text or "\n+++" in admin_text
     return bool(direct_match or (has_admin_marker and has_admin_patch))
+
+def fallback_response_text(payload):
+    text = strip_routing(gateway_admin_text(payload)).strip()
+    execute_re = re.compile(
+        r"(?i)\b(vytvor|vytvoř|zaloz|založ|push|pushni|commit|commitni|install|nainstaluj|"
+        r"spust|spusť|uprav|edituj|generate|vygeneruj|ssh|github|repo|repository)\b"
+    )
+    if execute_re.search(text):
+        return (
+            "Tuhle akci jsem sam nevykonal, protoze bezny codex-local chat je read-only. "
+            "Umim analyzovat snapshot repozitare a navrhnout plan nebo patch, ale shell, instalace balicku, "
+            "generovani klicu, vytvareni GitHub repozitaru, push a realne editace souboru musi jit pres "
+            "explicitni whitelisted admin/tool workflow."
+        )
+    return (
+        "Model vratil prazdnou odpoved. Zkus prosim dotaz zopakovat nebo ho zuzit; "
+        "gateway to zachytila, aby v OpenWebUI nezustala prazdna zprava."
+    )
+
+def normal_chat_requires_tool(payload):
+    text = strip_routing(gateway_admin_text(payload)).strip()
+    if "GATEWAY_ADMIN_" in text:
+        return False
+    risky_re = re.compile(
+        r"(?is)\b(ssh|github|push|pushni|install|nainstaluj|spust|spusť|shell|command|"
+        r"vygeneruj\s+.*(?:klic|klíč|key)|generate\s+.*key|"
+        r"(?:vytvor|vytvoř|zaloz|založ)\s+.*(?:repo|repository|repozitar|repozitář))\b"
+    )
+    return bool(risky_re.search(text))
+
+def sse_line_info(raw):
+    line = raw.decode("utf-8", "replace").strip()
+    if not line.startswith("data:"):
+        return "", False, False
+    data = line.split(":", 1)[1].strip()
+    if data == "[DONE]":
+        return "", True, False
+    try:
+        obj = json.loads(data)
+    except Exception:
+        return "", False, False
+    choices = obj.get("choices") or []
+    if not choices:
+        return "", False, False
+    choice = choices[0]
+    delta = choice.get("delta") or {}
+    message = choice.get("message") or {}
+    content = delta.get("content") or message.get("content") or ""
+    return content if isinstance(content, str) else "", False, choice.get("finish_reason") is not None
+
+def sse_chunk(result_id, created, model_name, content="", finish_reason=None):
+    delta = {} if finish_reason else {"role": "assistant", "content": content}
+    return {
+        "id": result_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model_name,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
 
 def model_request(payload, model_name):
     spec = MODELS.get(model_name, MODELS["codex-local-plan-qwen14b"])
@@ -271,10 +334,27 @@ def completion(payload):
             "usage": {"prompt_tokens": 0, "completion_tokens": 3, "total_tokens": 3},
         }
 
+    if normal_chat_requires_tool(payload):
+        text = fallback_response_text(payload)
+        return {
+            "id": "chatcmpl-" + uuid.uuid4().hex,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": len(text.split()), "total_tokens": len(text.split())},
+        }
+
     spec, messages = model_request(payload, model_name)
     resp = ollama_chat(spec["model"], messages)
 
     text = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    if not text:
+        text = fallback_response_text(payload)
     usage = resp.get("usage", {})
     return {
         "id": "chatcmpl-" + uuid.uuid4().hex,
@@ -314,20 +394,43 @@ class H(BaseHTTPRequestHandler):
 
     def proxy_ollama_sse(self, payload):
         model_name = payload.get("model") or "codex-local-plan-qwen14b"
+        result_id = "chatcmpl-" + uuid.uuid4().hex
+        created = int(time.time())
         spec, messages = model_request(payload, model_name)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
+        seen_text = []
+        pending_finish = []
         with ollama_chat_stream(spec["model"], messages) as upstream:
             for raw in upstream:
                 if not raw:
+                    continue
+                content, done_seen, finish_seen = sse_line_info(raw)
+                if done_seen:
+                    break
+                if content:
+                    seen_text.append(content)
+                if finish_seen:
+                    pending_finish.append(raw)
                     continue
                 self.wfile.write(raw)
                 if raw.endswith(b"\n") and not raw.endswith(b"\n\n"):
                     self.wfile.write(b"\n")
                 self.wfile.flush()
+        if "".join(seen_text).strip():
+            for raw in pending_finish:
+                self.wfile.write(raw)
+                if raw.endswith(b"\n") and not raw.endswith(b"\n\n"):
+                    self.wfile.write(b"\n")
+        else:
+            fallback = fallback_response_text(payload)
+            self.wfile.write(f"data: {json.dumps(sse_chunk(result_id, created, model_name, fallback), ensure_ascii=False)}\n\n".encode())
+            self.wfile.write(f"data: {json.dumps(sse_chunk(result_id, created, model_name, finish_reason='stop'), ensure_ascii=False)}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
 
     def do_GET(self):
         if self.path == "/health":
@@ -347,7 +450,7 @@ class H(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(n).decode() or "{}")
-            if payload.get("stream") and not gateway_fixed_response_requested(payload):
+            if payload.get("stream") and not gateway_fixed_response_requested(payload) and not normal_chat_requires_tool(payload):
                 return self.proxy_ollama_sse(payload)
             result = completion(payload)
             return self.sendsse(result) if payload.get("stream") else self.sendj(result)

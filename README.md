@@ -76,6 +76,17 @@ Příklad bezpečného diffu jen pro whitelisted soubory:
     repo: ai-stack
     GATEWAY_ADMIN_GIT_DIFF
 
+Příklad read-only guard kontroly registrovaného workspace:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_REPO_GUARD ai-stack main
+
+Proč se běžný chat sám nepustí do akce: modely `codex-local-*` mají normální chat cestu schválně read-only. Umí číst snapshot workspace, vysvětlovat a navrhovat plán nebo patch. Rizikové akce jako shell, instalace balíčků, generování SSH klíčů, vytváření GitHub repozitářů, push a reálné editace souborů musí jít přes explicitní whitelisted admin/tool workflow. Gateway takový požadavek v běžném chatu zachytí a místo prázdné nebo zavádějící odpovědi vysvětlí, že nic neprovedla.
+
+Příklad požadavku na nový úzký tool:
+
+    Dopln whitelisted admin tool pro přípravu nového GitHub repozitáře: vytvoř pouze lokální složku, git init, README, vygeneruj public SSH key a vrať public key k ručnímu vložení do GitHubu. Nepushuj bez potvrzení.
+
 Příklad čtení whitelisted souboru:
 
     repo: ai-stack

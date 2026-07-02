@@ -56,6 +56,7 @@ Na RTX 4080 16 GB je 14B prakticky vychozi volba. 32B muze byt pomaly, protoze c
 - OpenWebUI nesmi mit pripojeny Docker socket bez jasneho duvodu.
 - Runtime cesty `codex/state/`, `codex/audit/`, `logs/`, `.env`, `__pycache__`, `.bak-*` necommitovat.
 - Pokud je potreba novy nastroj, ma byt uzky, pojmenovany, testovany a zdokumentovany.
+- Bezny chat je read-only. Pozadavky na shell, instalace, generovani klicu, GitHub repo, push nebo realne editace musi bud vratit vysvetleni, nebo jit pres explicitni whitelisted admin/tool workflow.
 
 ## Admin prikazy
 
@@ -63,6 +64,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 
 - `GATEWAY_ADMIN_GIT_STATUS`: ukaze stav repozitare, allowed/blocked cesty a sensitive cesty.
 - `GATEWAY_ADMIN_GIT_DIFF [path]`: ukaze diff jen pro whitelisted commitovatelne soubory. Bezpecne pred pushem.
+- `GATEWAY_ADMIN_REPO_GUARD [workspace] [branch]`: read-only kontrola registrovaneho workspace, branch, dirty stavu a suspicious/sensitive cest bez vypisu obsahu souboru.
 - `GATEWAY_ADMIN_READ <path>`: precte whitelisted soubor bez cisel radku.
 - `GATEWAY_ADMIN_READ_NUMBERED <path> [start] [end]`: precte whitelisted soubor s realnymi cisly radku. Pouzivat pred presnymi patchemi.
 - `GATEWAY_ADMIN_APPLY_NOW`: aplikuje prilozeny unified diff na whitelisted soubory a provede validaci Python souboru.

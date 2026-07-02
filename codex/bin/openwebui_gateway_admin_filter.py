@@ -89,6 +89,8 @@ class Filter:
             return self._direct_response(body, self._git_status())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_DIFF"):
             return self._direct_response(body, self._git_diff(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_REPO_GUARD"):
+            return self._direct_response(body, self._repo_guard(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_UNTRACK_IGNORED"):
             return self._direct_response(body, self._git_untrack_ignored())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SMOKE"):
@@ -689,6 +691,50 @@ class Filter:
             + ("\n".join(blocked) if blocked else "(none)")
             + "\ndiff:\n"
             + body
+        )
+
+    def _repo_guard(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_REPO_GUARD(?:\s+([A-Za-z0-9_.-]+))?(?:\s+([A-Za-z0-9_.\/-]+))?\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_REPO_GUARD [workspace] [branch]")
+        workspace = (m.group(1) or "ai-stack").strip()
+        branch = (m.group(2) or "main").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+        if not re.fullmatch(r"[A-Za-z0-9_.\/-]{1,120}", branch):
+            raise ValueError("Unsafe branch name")
+
+        root = self._repo_root()
+        script = root / "codex/bin/repo_guard.py"
+        workspaces_file = root / "codex/workspaces.json"
+        if not script.is_file():
+            raise FileNotFoundError("repo guard script is missing")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--workspace",
+                workspace,
+                "--workspaces-file",
+                str(workspaces_file),
+                "--branch",
+                branch,
+                "--max-paths",
+                "120",
+            ],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=90,
+        )
+        return (
+            "REPO_GUARD_RESULT\n"
+            f"workspace={workspace}\n"
+            f"branch={branch}\n"
+            f"exit_code={proc.returncode}\n"
+            "output:\n"
+            + proc.stdout.strip()
         )
 
     def _status_paths(self, status_lines: list[str]) -> list[str]:
