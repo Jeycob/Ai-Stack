@@ -77,6 +77,8 @@ class Filter:
             return self._direct_response(body, self._diag())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_PROBE"):
             return self._direct_response(body, self._probe_paths())
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_READ_NUMBERED"):
+            return self._direct_response(body, self._read_numbered_requested_file(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_READ"):
             return self._direct_response(body, self._read_requested_file(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SSH_KEYGEN"):
@@ -394,6 +396,27 @@ class Filter:
         max_chars = 30000
         suffix = "" if len(data) <= max_chars else f"\n\n[truncated at {max_chars} chars]"
         return f"FILE {rel}\n--- BEGIN ---\n{data[:max_chars]}\n--- END ---{suffix}"
+
+    def _read_numbered_requested_file(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_READ_NUMBERED\s+(\S+)(?:\s+(\d+))?(?:\s+(\d+))?\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_READ_NUMBERED <whitelisted-relative-path> [start-line] [end-line]")
+        rel = self._clean_patch_path(m.group(1))
+        self._assert_allowed(rel)
+        start = int(m.group(2) or "1")
+        end = int(m.group(3) or str(start + 199))
+        if start < 1 or end < start:
+            raise ValueError("Line range must be positive and end must be >= start")
+        if end - start > 399:
+            raise ValueError("Read range is limited to 400 lines")
+        target = self._target(rel)
+        if not target.is_file():
+            raise FileNotFoundError(f"Whitelisted file does not exist: {rel}")
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+        end = min(end, len(lines))
+        width = max(4, len(str(end)))
+        body = "\n".join(f"{idx:0{width}d}: {lines[idx - 1]}" for idx in range(start, end + 1))
+        return f"FILE {rel} lines={start}-{end} total={len(lines)}\n--- BEGIN NUMBERED ---\n{body}\n--- END NUMBERED ---"
 
     def _ssh_keygen(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_SSH_KEYGEN(?:\s+([A-Za-z0-9_.-]+))?(?:\s+(.+?))?\s*$", text)
