@@ -75,6 +75,11 @@ Příklad čtení whitelisted souboru:
     repo: ai-stack
     GATEWAY_ADMIN_READ codex/gateway/gateway.py
 
+Příklad vestavěného smoke testu gateway:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_SMOKE ai-stack
+
 Příklad aplikace konkrétního patche:
 
     repo: ai-stack

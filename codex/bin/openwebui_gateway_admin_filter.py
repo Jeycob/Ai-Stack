@@ -13,6 +13,7 @@ import py_compile
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -86,6 +87,8 @@ class Filter:
             return self._direct_response(body, self._git_status())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_UNTRACK_IGNORED"):
             return self._direct_response(body, self._git_untrack_ignored())
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SMOKE"):
+            return self._direct_response(body, self._gateway_smoke(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_PUSH"):
             return self._direct_response(body, self._git_push(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
@@ -715,6 +718,47 @@ class Filter:
             + ("\n".join(removed) if removed else "(none)")
             + "\nskipped:\n"
             + ("\n".join(skipped) if skipped else "(none)")
+        )
+
+    def _gateway_smoke(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_SMOKE(?:\s+(\S+))?(?:\s+([A-Za-z0-9_.-]+))?\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_SMOKE [base-url|workspace] [workspace]")
+        base_url = os.getenv("CODEX_GATEWAY_PUBLIC_URL", "http://192.168.0.48:9101")
+        workspace = "ai-stack"
+        if m.group(1):
+            first = m.group(1).strip()
+            if first.startswith(("http://", "https://")):
+                base_url = first
+                if m.group(2):
+                    workspace = m.group(2).strip()
+            else:
+                workspace = first
+                if m.group(2):
+                    workspace = m.group(2).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+
+        root = self._repo_root()
+        script = root / "codex/bin/codex_gateway_smoke.py"
+        if not script.is_file():
+            raise FileNotFoundError("codex gateway smoke runner is missing")
+        proc = subprocess.run(
+            [sys.executable, str(script), "--base-url", base_url, "--workspace", workspace, "--timeout", "90"],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=120,
+        )
+        status = "GATEWAY_SMOKE_OK" if proc.returncode == 0 else "GATEWAY_SMOKE_FAILED"
+        return (
+            f"{status}\n"
+            f"base_url={base_url}\n"
+            f"workspace={workspace}\n"
+            f"exit_code={proc.returncode}\n"
+            "output:\n"
+            + proc.stdout.strip()
         )
 
     def _git_push(self, text: str) -> str:
