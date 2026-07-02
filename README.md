@@ -70,6 +70,11 @@ Příklad explicitního admin statusu:
     repo: ai-stack
     GATEWAY_ADMIN_GIT_STATUS
 
+Příklad bezpečného diffu jen pro whitelisted soubory:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_GIT_DIFF
+
 Příklad čtení whitelisted souboru:
 
     repo: ai-stack

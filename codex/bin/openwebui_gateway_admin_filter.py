@@ -87,6 +87,8 @@ class Filter:
             return self._direct_response(body, self._install_ssh_client())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_STATUS"):
             return self._direct_response(body, self._git_status())
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_DIFF"):
+            return self._direct_response(body, self._git_diff(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_UNTRACK_IGNORED"):
             return self._direct_response(body, self._git_untrack_ignored())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SMOKE"):
@@ -639,6 +641,54 @@ class Filter:
             + ("\n".join(blocked) if blocked else "(none)")
             + "\nsensitive_paths_seen:\n"
             + ("\n".join(sensitive) if sensitive else "(none)")
+        )
+
+    def _git_diff(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_GIT_DIFF(?:\s+(\S+))?\s*$", text)
+        requested = m.group(1).strip() if m and m.group(1) else None
+        root = self._repo_root()
+        self._ensure_safe_git_repo(root)
+        status = self._git_status_lines(root)
+        allowed, blocked = self._classify_status_paths(status)
+        paths = allowed
+        if requested:
+            rel = self._clean_patch_path(requested)
+            if not self._is_commit_allowed_path(rel):
+                raise PermissionError(f"Path is not allowed for git diff: {rel}")
+            paths = [rel]
+        if not paths:
+            return "GIT_DIFF\nchanged_allowed_paths=(none)\nblocked_paths:\n" + ("\n".join(blocked) if blocked else "(none)")
+
+        sections = []
+        for rel in sorted(set(paths)):
+            status_line = next((line for line in status if self._status_paths([line])[0] == rel), "")
+            if status_line.startswith("??"):
+                sections.append(f"--- {rel} ---\n[untracked allowed file; content not shown by git diff. Use GATEWAY_ADMIN_READ_NUMBERED for review.]")
+                continue
+            worktree = self._run_git(root, ["diff", "--", rel], timeout=30)
+            cached = self._run_git(root, ["diff", "--cached", "--", rel], timeout=30)
+            if worktree.returncode != 0:
+                raise RuntimeError(f"git diff failed for {rel}:\n{worktree.stdout}")
+            if cached.returncode != 0:
+                raise RuntimeError(f"git diff --cached failed for {rel}:\n{cached.stdout}")
+            text_parts = []
+            if cached.stdout.strip():
+                text_parts.append("[cached]\n" + cached.stdout.strip())
+            if worktree.stdout.strip():
+                text_parts.append("[worktree]\n" + worktree.stdout.strip())
+            sections.append(f"--- {rel} ---\n" + ("\n".join(text_parts) if text_parts else "[no textual diff]"))
+
+        body = "\n\n".join(sections)
+        if len(body) > 30000:
+            body = body[:30000] + "\n[truncated at 30000 chars]"
+        return (
+            "GIT_DIFF\n"
+            "allowed_paths:\n"
+            + "\n".join(sorted(set(paths)))
+            + "\nblocked_paths:\n"
+            + ("\n".join(blocked) if blocked else "(none)")
+            + "\ndiff:\n"
+            + body
         )
 
     def _status_paths(self, status_lines: list[str]) -> list[str]:
