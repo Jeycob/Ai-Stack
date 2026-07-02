@@ -93,6 +93,8 @@ Při dlouhých operacích používej helper `codex/bin/owui_chat_turn.py`; ten z
 
     OWUI_API_KEY=<set locally> codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --prompt-file /tmp/prompt.txt --status-interval 3 --quiet
 
+Další technický krok pro opravdu živé tokeny je upravit `codex/gateway/gateway.py` tak, aby uměl skutečné streaming SSE z Ollamy a neposílal OpenWebUI odpověď až po dokončení celé generace.
+
 Praktická pravidla pro zadávání úloh:
 
 - Napiš, zda agent smí editovat soubory, nebo má jen analyzovat.
