@@ -12,7 +12,13 @@ from pathlib import Path
 WORKSPACES_FILE = os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json")
 OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1")
 REPO_ROOT = Path(WORKSPACES_FILE).resolve().parents[1]
+ADMIN_TOKEN_FILE = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN_FILE", "")
 ADMIN_TOKEN = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN", "")
+if not ADMIN_TOKEN and ADMIN_TOKEN_FILE:
+    try:
+        ADMIN_TOKEN = Path(ADMIN_TOKEN_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        ADMIN_TOKEN = ""
 
 MODELS = {
     "codex-local-plan-qwen14b": {"model": "qwen2.5-coder:14b", "mode": "plan"},

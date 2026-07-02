@@ -10,6 +10,7 @@ GATEWAY="$CODEX_ROOT/gateway/gateway.py"
 STATE_ROOT="$CODEX_ROOT/state"
 AUDIT_ROOT="$CODEX_ROOT/audit"
 PASS_FILE="$STATE_ROOT/opencode-smoke.pass"
+ADMIN_TOKEN_FILE="$STATE_ROOT/codex-gateway-admin.token"
 IMAGE="ghcr.io/anomalyco/opencode"
 
 mkdir -p "$STATE_ROOT" "$AUDIT_ROOT"
@@ -20,6 +21,12 @@ if [ ! -f "$PASS_FILE" ]; then
 fi
 chown "$AI_USER:$AI_USER" "$PASS_FILE" || true
 chmod 600 "$PASS_FILE" || true
+
+if [ ! -f "$ADMIN_TOKEN_FILE" ]; then
+  openssl rand -hex 32 > "$ADMIN_TOKEN_FILE"
+fi
+chown "$AI_USER:$AI_USER" "$ADMIN_TOKEN_FILE" || true
+chmod 600 "$ADMIN_TOKEN_FILE" || true
 
 OPENCODE_PASS="$(cat "$PASS_FILE")"
 AI_UID="$(id -u "$AI_USER")"
@@ -103,7 +110,7 @@ if [ -f "$STATE_ROOT/codex-gateway.pid" ]; then
 fi
 pkill -f "$GATEWAY" >/dev/null 2>&1 || true
 
-runuser -u "$AI_USER" -- bash -lc "OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
+runuser -u "$AI_USER" -- bash -lc "OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
 
 for i in {1..30}; do
   curl -fsS http://127.0.0.1:9101/health >/dev/null 2>&1 && break

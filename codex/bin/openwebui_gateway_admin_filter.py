@@ -8,14 +8,18 @@ description: Applies explicitly marked, whitelisted ai-stack gateway patches fro
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional
+import json
 import os
 import py_compile
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 
 
 class Filter:
@@ -39,6 +43,14 @@ class Filter:
         inject_instructions: bool = Field(
             default=True,
             description="Teach build model how to request gateway patch application.",
+        )
+        gateway_url: str = Field(
+            default="http://192.168.0.48:9101",
+            description="Codex gateway base URL for admin endpoint calls.",
+        )
+        gateway_admin_token_file: str = Field(
+            default="auto",
+            description="Admin token file path, or auto to resolve from ai-stack codex/state.",
         )
 
     def __init__(self):
@@ -99,6 +111,10 @@ class Filter:
             return self._direct_response(body, self._gateway_smoke(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CHECK_STACK"):
             return self._direct_response(body, self._check_ai_stack(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE"):
+            return self._direct_response(body, self._run_workspace_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
+            return self._direct_response(body, self._add_workspace_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_PUSH"):
             return self._direct_response(body, self._git_push(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
@@ -968,6 +984,197 @@ class Filter:
             "output:\n"
             + proc.stdout.strip()
         )
+
+    def _run_workspace_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_RUN_WORKSPACE\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE <workspace> [--timeout seconds] [--env KEY=VALUE] -- <command> [args...]")
+        parts = shlex.split(m.group(1))
+        if not parts:
+            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE <workspace> [--timeout seconds] [--env KEY=VALUE] -- <command> [args...]")
+
+        workspace = parts.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+
+        timeout = 300
+        env_map = {}
+        while parts and parts[0] != "--":
+            opt = parts.pop(0)
+            if opt == "--timeout" and parts:
+                timeout = int(parts.pop(0))
+                continue
+            if opt == "--env" and parts:
+                item = parts.pop(0)
+                if "=" not in item:
+                    raise ValueError("--env expects KEY=VALUE")
+                key, value = item.split("=", 1)
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key):
+                    raise ValueError(f"Unsafe env key: {key}")
+                env_map[key] = value
+                continue
+            raise ValueError(f"Unknown GATEWAY_ADMIN_RUN_WORKSPACE option before --: {opt}")
+
+        if not parts or parts[0] != "--":
+            raise ValueError("GATEWAY_ADMIN_RUN_WORKSPACE requires -- before the command")
+        command = parts[1:]
+        if not command:
+            raise ValueError("GATEWAY_ADMIN_RUN_WORKSPACE command is empty")
+        if timeout < 1 or timeout > 1800:
+            raise ValueError("Timeout must be between 1 and 1800 seconds")
+
+        payload = {"workspace": workspace, "timeout": timeout, "command": command}
+        if env_map:
+            payload["env"] = env_map
+        result = self._gateway_admin_request("/v1/admin/workspace/run", payload, timeout=max(timeout + 45, 90))
+        output = str(result.get("output", ""))
+        output = self._trim(output, 24000)
+        status = "WORKSPACE_RUN_OK" if result.get("ok") else "WORKSPACE_RUN_FAILED"
+        return (
+            f"{status}\n"
+            f"workspace={result.get('workspace', workspace)}\n"
+            f"cwd={result.get('cwd', '(unknown)')}\n"
+            f"command={self._shell_join(result.get('command', command))}\n"
+            f"exit_code={result.get('exit_code')}\n"
+            f"runner_exit_code={result.get('runner_exit_code')}\n"
+            f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
+            "output:\n"
+            + output.rstrip()
+        )
+
+    def _add_workspace_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_ADD_WORKSPACE\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_ADD_WORKSPACE <name> <path> [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
+        parts = shlex.split(m.group(1))
+        if len(parts) < 2:
+            raise ValueError("Usage: GATEWAY_ADMIN_ADD_WORKSPACE <name> <path> [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
+
+        name = parts.pop(0)
+        path = parts.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+            raise ValueError("Unsafe workspace name")
+        payload = {"name": name, "path": path}
+
+        while parts:
+            opt = parts.pop(0)
+            if opt == "--port" and parts:
+                payload["port"] = int(parts.pop(0))
+                continue
+            if opt == "--cpus" and parts:
+                payload["cpus"] = int(parts.pop(0))
+                continue
+            if opt == "--memory" and parts:
+                payload["memory"] = parts.pop(0)
+                continue
+            if opt == "--default":
+                payload["default"] = True
+                continue
+            if opt == "--restart":
+                payload["restart"] = True
+                continue
+            raise ValueError(f"Unknown GATEWAY_ADMIN_ADD_WORKSPACE option: {opt}")
+
+        result = self._gateway_admin_request("/v1/admin/workspace/add", payload, timeout=360 if payload.get("restart") else 90)
+        status = "WORKSPACE_ADD_OK" if result.get("ok") else "WORKSPACE_ADD_FAILED"
+        lines = [
+            status,
+            f"name={result.get('name', name)}",
+            f"path={result.get('path', path)}",
+            f"exit_code={result.get('exit_code')}",
+            "output:",
+            self._trim(str(result.get("output", "")), 12000).rstrip(),
+        ]
+        if "restart_exit_code" in result:
+            lines.extend([
+                f"restart_exit_code={result.get('restart_exit_code')}",
+                "restart_output:",
+                self._trim(str(result.get("restart_output", "")), 12000).rstrip(),
+            ])
+        return "\n".join(lines).rstrip()
+
+    def _gateway_admin_request(self, path: str, payload: dict, timeout: int = 90) -> dict:
+        base_url = os.getenv("CODEX_GATEWAY_PUBLIC_URL", self.valves.gateway_url).rstrip("/")
+        token = self._gateway_admin_token()
+        if not token and not base_url.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]")):
+            raise RuntimeError(
+                "GATEWAY_ADMIN_TOKEN_MISSING\n"
+                "OpenWebUI is calling the gateway over the LAN address, so it needs an admin token.\n"
+                "Expected token file: codex/state/codex-gateway-admin.token"
+            )
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(base_url + path, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", "replace")
+            raise RuntimeError(
+                f"GATEWAY_ADMIN_HTTP_{exc.code}\n"
+                f"url={base_url + path}\n"
+                "response:\n"
+                + self._trim(raw, 4000)
+            )
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"GATEWAY_ADMIN_CONNECT_FAILED\nurl={base_url + path}\nerror={exc}")
+
+        try:
+            return json.loads(raw or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "GATEWAY_ADMIN_BAD_JSON\n"
+                f"url={base_url + path}\n"
+                f"error={exc}\n"
+                "response:\n"
+                + self._trim(raw, 4000)
+            )
+
+    def _gateway_admin_token(self) -> str:
+        token = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN", "").strip()
+        if token:
+            return token
+
+        candidates = []
+        env_file = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN_FILE", "").strip()
+        if env_file:
+            candidates.append(Path(env_file))
+        if self.valves.gateway_admin_token_file and self.valves.gateway_admin_token_file != "auto":
+            candidates.append(Path(self.valves.gateway_admin_token_file))
+        try:
+            candidates.append(self._repo_root() / "codex/state/codex-gateway-admin.token")
+        except Exception:
+            pass
+        candidates.append(Path("/data/repositories/ai-stack/codex/state/codex-gateway-admin.token"))
+
+        seen = set()
+        for path in candidates:
+            resolved = str(path)
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                value = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if value:
+                return value
+        return ""
+
+    def _trim(self, text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"\n[truncated at {limit} chars]"
+
+    def _shell_join(self, command) -> str:
+        if isinstance(command, list):
+            try:
+                return shlex.join(str(x) for x in command)
+            except Exception:
+                return " ".join(str(x) for x in command)
+        return str(command)
 
     def _git_push(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_GIT_PUSH(?:\s+([A-Za-z0-9_.\\/-]+))?(?:\s+(.+?))?\s*$", text)

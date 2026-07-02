@@ -12,6 +12,8 @@ services:
       - OLLAMA_BASE_URL=http://192.168.0.48:11434
       - WEBUI_URL=http://192.168.0.48:9090
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - CODEX_GATEWAY_PUBLIC_URL=http://192.168.0.48:9101
+      - CODEX_GATEWAY_ADMIN_TOKEN_FILE=/data/repositories/ai-stack/codex/state/codex-gateway-admin.token
     volumes:
       - open-webui-data:/app/backend/data
       - /mnt/c/Repositories:/data/repositories
