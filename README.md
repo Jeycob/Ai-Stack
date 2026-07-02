@@ -46,6 +46,61 @@ Gateway zveřejňuje OpenAI-compatible aliasy pro OpenWebUI.
 
 Na RTX 4080 16 GB je 14B praktičtější výchozí volba, protože se vejde do VRAM. 32B může běžet částečně přes CPU a je vhodnější jako ruční deep mode.
 
+## Příklady práce s codex-local agentem
+
+Primární způsob práce je přes viditelný OpenWebUI audit chat. Instrukce mají být konkrétní, ideálně s prvním řádkem `repo: <workspace>`, aby gateway věděla, nad kterým repozitářem má agent pracovat.
+
+Příklad rychlé analýzy bez editace:
+
+    repo: ai-stack
+    Prohlédni strukturu projektu a stručně řekni, jak je zapojená gateway. Nic needituj.
+
+Příklad práce nad jiným registrovaným repozitářem:
+
+    repo: Odysseus-Lite
+    Najdi hlavní runtime soubory, popiš architekturu a navrhni další testy. Nic needituj.
+
+Příklad bezpečné změny souborů:
+
+    repo: ai-stack
+    Uprav README.md a doplň sekci s provozními příklady. Měň jen README.md a po změně ukaž git status.
+
+Příklad explicitního admin statusu:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_GIT_STATUS
+
+Příklad čtení whitelisted souboru:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_READ codex/gateway/gateway.py
+
+Příklad aplikace konkrétního patche:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_APPLY_NOW
+    diff --git a/README.md b/README.md
+    --- a/README.md
+    +++ b/README.md
+    @@ ...
+
+Příklad pushnutí povolených změn:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_GIT_PUSH main Update ai-stack documentation
+
+Při dlouhých operacích používej helper `codex/bin/owui_chat_turn.py`; ten zapíše instrukci do OpenWebUI chatu hned, založí běžící assistant zprávu a průběžně ji aktualizuje:
+
+    OWUI_API_KEY=<set locally> codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --prompt-file /tmp/prompt.txt --status-interval 3 --quiet
+
+Praktická pravidla pro zadávání úloh:
+
+- Napiš, zda agent smí editovat soubory, nebo má jen analyzovat.
+- U editací omez rozsah: například `měň jen README.md` nebo `měň jen codex/gateway/gateway.py`.
+- Pro rychlou práci používej `codex-local-plan-qwen14b` a `codex-local-build-qwen14b`; 32B nech pro složitější analýzy.
+- Do promptů ani souborů nevkládej secrets; používej placeholdery typu `OWUI_API_KEY=<set locally>`.
+- Před pushem vždy zkontroluj `GATEWAY_ADMIN_GIT_STATUS` a ujisti se, že `blocked_paths` i `sensitive_paths_seen` jsou `(none)`.
+
 ## Provozní příkazy
 
 - Start z Windows: `C:\Repositories\ai-stack\start_docker.bat`.
