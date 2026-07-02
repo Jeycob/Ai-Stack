@@ -1,59 +1,104 @@
-# Codex Local Operating Context
+# Codex-local Operating Context
 
-This document captures the current local-ai workflow so future sessions can resume without reconstructing the setup from chat history.
+Tento dokument je startovni kontext pro budouci codex-local agenty v OpenWebUI. Cilem je, aby agent dokazal navazat na praci v ai-stacku bez hadani, bez vypisovani secretu a bez obchazeni viditelneho audit chatu.
 
-## Primary rule
+## Cil agenta
 
-Use the visible OpenWebUI audit chat for repository work whenever possible:
+Codex-local ma byt lokalni coding agent a domaci AI operator pro tento stack. Ma umet analyzovat repozitare, navrhovat zmeny, pripravovat whitelisted patche, spoustet bezpecne healthchecky, dokumentovat provoz a po kontrole pushovat zmeny do GitHubu.
 
-- OpenWebUI base URL: http://192.168.0.48:9090
-- Audit chat ID: 57529037-84b9-42e1-8bae-9eab35b601bd
-- Default model alias: codex-local-plan-qwen14b
-- Use OWUI_API_KEY from the local environment. Never write API keys, private SSH keys, passwords, `.env`, `codex/state/`, or `codex/audit/` contents into git.
+Zakladni pravidlo: autonomie se pridava postupne a jen pres konkretni, uzke, auditovatelne nastroje. Nepridavat obecny shell ani neomezene Docker/Git pravo do OpenWebUI.
 
-## Live helper workflow
+## Architektura
 
-The preferred helper is `codex/bin/owui_chat_turn.py`. It writes the user instruction into the visible OpenWebUI chat immediately, creates a running assistant placeholder, updates it with heartbeat progress, and then replaces it with the final response.
+- OpenWebUI bezi na `http://192.168.0.48:9090` a slouzi jako viditelne UI i audit chat.
+- Ollama bezi na `http://192.168.0.48:11434` a poskytuje lokalni modely.
+- Codex gateway bezi na `http://192.168.0.48:9101` a vystavuje OpenAI-compatible model aliasy pro OpenWebUI.
+- OpenCode workspaces bezi jako izolovane kontejnery nad registrovanymi repozitari.
+- `ai-stack` je verzovany zdroj pravdy pro konfigurace, helpery, dokumentaci a OpenWebUI admin filter.
+- Runtime stav, secrets, logy a private key material jsou ignorovane a nepatri do Gitu.
 
-Typical invocation from a trusted shell:
+## Viditelny audit chat
 
-    OWUI_API_KEY=... codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --prompt-file /tmp/prompt.txt --status-interval 3 --quiet
+Primarni audit chat je:
 
-Supporting helpers:
+`http://192.168.0.48:9090/c/57529037-84b9-42e1-8bae-9eab35b601bd`
 
-- `codex/bin/http_retry.py`: standard-library HTTP retries with proxy disabled by default.
-- `codex/bin/owui_request.sh`: wrapper for OpenWebUI REST calls using `OWUI_API_KEY`.
-- `codex/bin/owui_chat_append.py`: offline chat JSON append helper, useful for diagnostics or repairs.
-- `codex/bin/openwebui_gateway_admin_filter.py`: source copy of the OpenWebUI admin filter that is installed in OpenWebUI.
+Prace s repozitari ma jit pres `codex/bin/owui_chat_turn.py`. Helper zapise lidsky citelnou instrukci do OpenWebUI historie a technicky prompt muze poslat oddelene. Diky tomu uzivatel vidi zamer, prubeh a vysledek, ale nevidi interni admin payloady nebo dlouhe diffy, pokud to neni potreba.
 
-## Gateway and workspace flow
+Doporuceny vzor:
 
-OpenWebUI calls the local OpenAI-compatible gateway on port 9101. The gateway routes prompts by a leading line such as:
+```bash
+OWUI_API_KEY=<set locally> python3 codex/bin/owui_chat_turn.py \
+  --model codex-local-plan-qwen14b \
+  --visible-prompt-file /tmp/visible.txt \
+  --prompt-file /tmp/technical.txt \
+  --status-interval 3 \
+  --quiet
+```
 
-    repo: ai-stack
-    repo: Odysseus-Lite
+Pro admin operace pouzivej `--no-live-status`, pokud odpoved ma byt kratka a deterministicka. Pro dlouhe modelove analyzy live status zapni.
 
-The gateway injects a read-only repository snapshot into the local model. Admin changes are intentionally narrow and must go through explicit whitelisted commands handled by the OpenWebUI admin filter.
+## Modely
 
-Useful admin commands in the visible chat:
+- `codex-local-plan-qwen14b`: vychozi rychly model pro analyzy a mensi navrhy.
+- `codex-local-build-qwen14b`: rychly model pro mensi editacni ulohy.
+- `codex-local-plan-qwen32b`: pomalejsi deep mode pro slozitejsi uvazovani.
+- `codex-local-build-qwen32b`: pomalejsi build/edit deep mode.
 
-- `GATEWAY_ADMIN_GIT_STATUS`: show safe git status, allowed paths, blocked paths, and sensitive-path detection.
-- `GATEWAY_ADMIN_READ <path>`: read a whitelisted file.
-- `GATEWAY_ADMIN_APPLY_NOW` followed by a unified diff: apply a whitelisted patch immediately.
-- `GATEWAY_ADMIN_GIT_PUSH main <message>`: commit allowed paths and push to GitHub via the runtime SSH key.
+Na RTX 4080 16 GB je 14B prakticky vychozi volba. 32B muze byt pomaly, protoze cast bezi pres CPU.
 
-## Marker safety
+## Bezpecnostni pravidla
 
-Admin markers should be interpreted only when they appear as standalone command lines. This matters because the source code itself contains marker strings. The gateway and filter were hardened for this after direct-response and source-versioning work.
+- Nikdy nevypisovat API klice, tokeny, private SSH klice ani obsah `.env`.
+- Nepouzivat obecny shell tool z OpenWebUI pro neomezene prikazy.
+- Admin filter smi zapisovat jen whitelisted soubory.
+- Pred pushem musi byt `blocked_paths` a `sensitive_paths_seen` prazdne.
+- OpenWebUI nesmi mit pripojeny Docker socket bez jasneho duvodu.
+- Runtime cesty `codex/state/`, `codex/audit/`, `logs/`, `.env`, `__pycache__`, `.bak-*` necommitovat.
+- Pokud je potreba novy nastroj, ma byt uzky, pojmenovany, testovany a zdokumentovany.
 
-## Current GitHub flow
+## Admin prikazy
 
-The ai-stack repository remote is:
+Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pro uzivatele.
 
-    git@github.com:Jeycob/Ai-Stack.git
+- `GATEWAY_ADMIN_GIT_STATUS`: ukaze stav repozitare, allowed/blocked cesty a sensitive cesty.
+- `GATEWAY_ADMIN_GIT_DIFF [path]`: ukaze diff jen pro whitelisted commitovatelne soubory. Bezpecne pred pushem.
+- `GATEWAY_ADMIN_READ <path>`: precte whitelisted soubor bez cisel radku.
+- `GATEWAY_ADMIN_READ_NUMBERED <path> [start] [end]`: precte whitelisted soubor s realnymi cisly radku. Pouzivat pred presnymi patchemi.
+- `GATEWAY_ADMIN_APPLY_NOW`: aplikuje prilozeny unified diff na whitelisted soubory a provede validaci Python souboru.
+- `GATEWAY_ADMIN_CHECK_STACK [workspace] [model]`: spusti celkovy healthcheck stacku a gateway smoke test.
+- `GATEWAY_ADMIN_SMOKE [workspace]`: spusti gateway smoke test.
+- `GATEWAY_ADMIN_GIT_PUSH <branch> <message>`: commitne a pushne pouze allowed cesty.
+- `GATEWAY_ADMIN_SSH_KEYGEN`: vygeneruje SSH klic do ignorovane runtime cesty.
+- `GATEWAY_ADMIN_GIT_UNTRACK_IGNORED`: pomuze odstranit ignorovane runtime soubory z indexu, pokud se tam omylem dostaly.
 
-The public deploy key was added by the user on GitHub. The private key remains under ignored runtime state and is copied to an OpenWebUI runtime path with strict permissions when pushing. Do not print or commit private key material.
+## Workflow zmeny
 
-## Recovery notes
+1. Zacni viditelnou zpravu v audit chatu: co chces zmenit a proc.
+2. Ziskej kontext pres `GATEWAY_ADMIN_READ_NUMBERED`, ne pres hadani line numberu.
+3. Nech lokalni model navrhnout zmenu nebo patch, ale over faktickou spravnost.
+4. Aplikuj jen maly whitelisted patch pres `GATEWAY_ADMIN_APPLY_NOW`.
+5. Spust `GATEWAY_ADMIN_GIT_DIFF` a zkontroluj, ze diff odpovida zameru.
+6. Spust `GATEWAY_ADMIN_CHECK_STACK ai-stack codex-local-plan-qwen14b`.
+7. Spust `GATEWAY_ADMIN_GIT_STATUS` a over `(none)` u blocked/sensitive cest.
+8. Pushni pres `GATEWAY_ADMIN_GIT_PUSH main <message>`.
+9. Po pushi zkontroluj cisty status.
 
-If OpenWebUI package state is lost after container recreation, `openssh-client` may need to be reinstalled in the running OpenWebUI container before `GATEWAY_ADMIN_GIT_PUSH` can push. The admin filter has `GATEWAY_ADMIN_INSTALL_SSH_CLIENT`, but image-level persistence should eventually be solved in Dockerfile or compose.
+## Pro nove nastroje
+
+Novy nastroj ma splnit:
+
+- uzky ucel a jasny nazev,
+- zadne vypisovani secretu,
+- validace vstupu,
+- timeouty a retry/backoff u sitovych volani,
+- dokumentace v README nebo v tomto dokumentu,
+- test pres OpenWebUI audit chat,
+- commit a push do `Jeycob/Ai-Stack`.
+
+## Aktualni priorita rozvoje
+
+1. Zlepsovat spolehlivost viditelneho OpenWebUI workflow.
+2. Pridavat bezpecne read-only a review nastroje pred zapisovymi nastroji.
+3. Rozsirovat workspace schopnosti pro realne programovaci use-cases.
+4. Pripravovat budouci integrace Home Assistant a read-only financnich dat s duslednym secret managementem.

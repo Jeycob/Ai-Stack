@@ -22,6 +22,7 @@ Lokální AI stack pro OpenWebUI, Ollama a izolované Codex/OpenCode workspaces.
 - `codex/gateway/gateway.py`: OpenAI-compatible gateway pro modely a workspace snapshoty.
 - `codex/workspaces.json`: registr workspaces, portů a resource limitů.
 - `codex/opencode-default.json`: výchozí OpenCode konfigurace pro nové workspaces.
+- `docs/codex-local-operating-context.md`: startovní provozní kontext pro budoucí codex-local agenty.
 - `codex/audit/`: lokální provozní logy; nepatří do Gitu.
 - `codex/state/`: runtime stav, hesla a home adresáře agentů; nepatří do Gitu.
 

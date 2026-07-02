@@ -82,6 +82,7 @@ def list_files(root):
         ".gitignore",
         "codex/workspaces.json",
         "codex/opencode-default.json",
+        "docs/codex-local-operating-context.md",
     ]
     force_dirs = [
         "codex/gateway",
@@ -107,6 +108,7 @@ def list_files(root):
 
     priority = (
         "codex/gateway/gateway.py",
+        "docs/codex-local-operating-context.md",
         "codex/bin/start_codex_stack.sh",
         "codex/bin/watch_gateway.sh",
         "codex/bin/add_workspace.py",
@@ -155,7 +157,12 @@ def repo_snapshot(name, cfg):
             or rel.lower().startswith("readme")
             or rel.startswith("codex/gateway/")
             or rel.startswith("codex/bin/")
-            or rel in {"codex/workspaces.json", "codex/opencode-default.json", "start_docker.bat"}
+            or rel in {
+                "codex/workspaces.json",
+                "codex/opencode-default.json",
+                "docs/codex-local-operating-context.md",
+                "start_docker.bat",
+            }
         ):
             txt = read_small(root, rel)
             if txt:
@@ -186,7 +193,8 @@ def direct_messages(payload_messages, workspace_name, snapshot, mode):
         "Use only that snapshot unless the user asks for a general explanation. "
         "Do not output tool calls, task calls, JSON function calls, or subagent markup. "
         "If the snapshot is insufficient, say exactly what extra file or command output is needed. "
-        "Reply in the user's language. For build/edit requests, propose a plan or patch, but do not claim files were edited."
+        "Reply in the user's language. When asked for exact file content, quote it exactly and do not translate it. "
+        "For build/edit requests, propose a plan or patch, but do not claim files were edited."
     )
     msgs = [{"role": "system", "content": system}, {"role": "system", "content": snapshot}]
     for m in payload_messages:
