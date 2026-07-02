@@ -1,5 +1,6 @@
 (function () {
   const POLL_MS = 2500;
+  const DETAILS_SCAN_MS = 1500;
   const TAB_SIGNAL_KEY = "codex_loader_chat_signal_v1";
   const DEBUG = false;
 
@@ -80,6 +81,99 @@
     if (now() - lastRefreshAt < 3000) return;
     lastRefreshAt = now();
     location.reload();
+  }
+
+  function ensureAdminDetailsStyles() {
+    if (document.getElementById("codex-admin-details-style")) return;
+
+    const style = document.createElement("style");
+    style.id = "codex-admin-details-style";
+    style.textContent = [
+      ".codex-admin-output { white-space: pre-wrap; }",
+      ".codex-admin-details { margin: 0.65rem 0; border: 1px solid rgba(120,120,120,.24); border-radius: 8px; overflow: hidden; background: rgba(120,120,120,.06); }",
+      ".codex-admin-details > summary { cursor: pointer; padding: .55rem .75rem; font-weight: 600; user-select: none; list-style: disclosure-closed; }",
+      ".codex-admin-details[open] > summary { border-bottom: 1px solid rgba(120,120,120,.18); list-style: disclosure-open; }",
+      ".codex-admin-details pre { margin: 0; padding: .75rem; overflow: auto; max-height: 34rem; background: transparent; white-space: pre-wrap; }",
+      ".codex-admin-details code { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .86em; }",
+    ].join("\n");
+    document.head.appendChild(style);
+  }
+
+  function decodeEntities(value) {
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = value;
+    return textarea.value;
+  }
+
+  function appendText(container, text) {
+    if (!text) return;
+    const div = document.createElement("div");
+    div.className = "codex-admin-output";
+    div.textContent = decodeEntities(text).replace(/\n{3,}/g, "\n\n").trim();
+    if (div.textContent) container.appendChild(div);
+  }
+
+  function appendDetails(container, title, body) {
+    const details = document.createElement("details");
+    details.className = "codex-admin-details";
+
+    const summary = document.createElement("summary");
+    summary.textContent = decodeEntities(title || "details");
+
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.textContent = decodeEntities(body || "(empty)").trim();
+    pre.appendChild(code);
+
+    details.appendChild(summary);
+    details.appendChild(pre);
+    container.appendChild(details);
+  }
+
+  function renderDetailsText(text) {
+    const pattern = /<details><summary>([\s\S]*?)<\/summary>\s*(?:<pre><code>)?([\s\S]*?)(?:<\/code><\/pre>\s*)?<\/details>/gi;
+    const container = document.createElement("div");
+    let cursor = 0;
+    let matched = false;
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      matched = true;
+      appendText(container, text.slice(cursor, match.index));
+      appendDetails(container, match[1], match[2]);
+      cursor = pattern.lastIndex;
+    }
+
+    if (!matched) return null;
+    appendText(container, text.slice(cursor));
+    return container;
+  }
+
+  function shouldSkipDetailsRoot(el) {
+    if (!el || el.dataset.codexDetailsRendered === "1") return true;
+    if (el.closest("textarea,input,script,style")) return true;
+    if (el.closest(".codex-admin-details")) return true;
+    const text = el.textContent || "";
+    if (!text.includes("<details><summary>") || !text.includes("</details>")) return true;
+    return Array.from(el.children || []).some(function (child) {
+      const childText = child.textContent || "";
+      return childText.includes("<details><summary>") && childText.includes("</details>");
+    });
+  }
+
+  function enhanceAdminDetails() {
+    ensureAdminDetailsStyles();
+
+    const roots = Array.from(document.querySelectorAll("div, p, section, article")).filter(function (el) {
+      return !shouldSkipDetailsRoot(el);
+    });
+
+    roots.forEach(function (el) {
+      const rendered = renderDetailsText(el.textContent || "");
+      if (!rendered) return;
+      el.dataset.codexDetailsRendered = "1";
+      el.replaceChildren.apply(el, Array.from(rendered.childNodes));
+    });
   }
 
   async function tick(reason) {
@@ -167,5 +261,12 @@
     tick("poll");
   }, POLL_MS);
 
+  setInterval(enhanceAdminDetails, DETAILS_SCAN_MS);
+  new MutationObserver(enhanceAdminDetails).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  enhanceAdminDetails();
   tick("init");
 })();
