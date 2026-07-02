@@ -127,26 +127,14 @@ class Filter:
         return body
 
     def outlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
-        text = self._assistant_text(body)
-        if self.valves.marker not in text:
-            return body
-        result = self._apply_from_text(text)
-        self._append_assistant_text(body, "\n\nGateway admin filter result:\n" + result)
         return body
 
     def _instructions(self) -> str:
         return (
-            "You may request safe edits to the ai-stack gateway by outputting exactly this marker, "
-            "followed by one fenced unified diff block:\n\n"
-            "GATEWAY_ADMIN_APPLY\n```diff\n"
-            "diff --git a/codex/gateway/gateway.py b/codex/gateway/gateway.py\n"
-            "--- a/codex/gateway/gateway.py\n"
-            "+++ b/codex/gateway/gateway.py\n"
-            "@@ ...\n"
-            "```\n\n"
-            "The Open WebUI Gateway Admin Filter will apply only whitelisted ai-stack files, "
-            "create backups, and run Python syntax validation. Do not claim success until the "
-            "filter result is shown."
+            "You may propose safe edits as a normal unified diff when asked, but do not include "
+            "internal GATEWAY_ADMIN_* markers in ordinary assistant replies. The Open WebUI "
+            "Gateway Admin Filter applies patches only from explicit user-side technical payloads. "
+            "Do not claim files were edited unless an admin filter result is shown."
         )
 
     def _is_ai_stack_request(self, body: dict) -> bool:
