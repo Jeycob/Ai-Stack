@@ -1,0 +1,23 @@
+{
+  "default": "smoke",
+  "workspaces": {
+    "smoke": {
+      "path": "/mnt/c/Repositories/ai-stack/codex/workspaces/smoke",
+      "port": 4096,
+      "cpus": 8,
+      "memory": "16g"
+    },
+    "Odysseus-Lite": {
+      "path": "/mnt/c/Repositories/Odysseus-Lite",
+      "port": 4097,
+      "cpus": 8,
+      "memory": "16g"
+    },
+    "ai-stack": {
+      "path": "/mnt/c/Repositories/ai-stack",
+      "port": 4098,
+      "cpus": 8,
+      "memory": "16g"
+    }
+  }
+}

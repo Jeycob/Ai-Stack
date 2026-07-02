@@ -1,0 +1,17 @@
+
+# Local Codex runtime state and secrets
+codex/state/
+codex/audit/
+
+# Local environment secrets
+.env
+
+# Local logs and generated runtime artifacts
+logs/
+*.log
+*.bak-*
+__pycache__/
+*.pyc
+
+# Local smoke/test workspaces
+codex/workspaces/
