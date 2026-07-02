@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # Open WebUI - rozhraní pro AI
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: always
+    ports:
+      - "9090:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - OLLAMA_BASE_URL=192.168.0.48:11434
+      - WEBUI_URL=http://192.168.0.48:9090
+    volumes:
+      - open-webui-data:/app/backend/data
+      # Korektní linuxová cesta pro WSL
+      - /mnt/c/Repositories:/data/repositories
+
+  # Aider - AI asistent pro kódování
+  aider:
+    image: paulgauthier/aider:latest
+    container_name: aider
+    restart: always
+    working_dir: /Repositories/
+    environment:
+      - AIDER_MODEL=ollama/qwen2.5-coder:14b
+      - OLLAMA_API_BASE=http://192.168.0.48:11434
+      - OPENAI_API_BASE=http://host.docker.internal:11434/v1
+      - OPENAI_API_KEY=not-needed
+    volumes:
+      # Korektní linuxová cesta pro WSL
+      - /mnt/c/Repositories:/Repositories
+      - /var/run/docker.sock:/var/run/docker.sock
+    tty: true
+    stdin_open: true
+
+volumes:
+  open-webui-data:
