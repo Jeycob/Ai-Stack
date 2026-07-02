@@ -349,6 +349,106 @@ def admin_run_workspace(payload):
     result["runner_exit_code"] = proc.returncode
     return result
 
+def pid_running(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+def tail_text(path, max_bytes=24000):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    if len(data.encode("utf-8", "replace")) >= max_bytes:
+        return "[tail truncated]\n" + data
+    return data
+
+def admin_deploy_stack(payload):
+    branch = str(payload.get("branch") or "main").strip()
+    force = bool(payload.get("force", False))
+    if not re.fullmatch(r"[A-Za-z0-9_.\\/-]{1,120}", branch):
+        raise ValueError("Unsafe branch name")
+
+    script = REPO_ROOT / "codex/bin/deploy_ai_stack.sh"
+    if not script.is_file():
+        raise FileNotFoundError("codex/bin/deploy_ai_stack.sh is missing")
+
+    state_dir = REPO_ROOT / "codex/state"
+    audit_dir = REPO_ROOT / "codex/audit"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = state_dir / "deploy-ai-stack.pid"
+    log_file = audit_dir / "deploy-ai-stack.log"
+
+    old_pid = None
+    if pid_file.is_file():
+        try:
+            old_pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except ValueError:
+            old_pid = None
+    if old_pid and pid_running(old_pid) and not force:
+        return {
+            "ok": False,
+            "action": "deploy_already_running",
+            "pid": old_pid,
+            "log": str(log_file),
+            "tail": tail_text(log_file),
+        }
+
+    env = os.environ.copy()
+    env["AI_STACK_BRANCH"] = branch
+    env.setdefault("AI_STACK_REMOTE", "origin")
+
+    with open(log_file, "ab") as log:
+        log.write(f"\n[{time.strftime('%F %T')}] scheduling deploy branch={branch}\n".encode())
+        proc = subprocess.Popen(
+            [str(script)],
+            cwd=REPO_ROOT,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+    pid_file.write_text(str(proc.pid) + "\n", encoding="utf-8")
+    return {
+        "ok": True,
+        "action": "deploy_scheduled",
+        "pid": proc.pid,
+        "branch": branch,
+        "log": str(log_file),
+    }
+
+def admin_deploy_status(payload):
+    state_dir = REPO_ROOT / "codex/state"
+    audit_dir = REPO_ROOT / "codex/audit"
+    pid_file = state_dir / "deploy-ai-stack.pid"
+    log_file = audit_dir / "deploy-ai-stack.log"
+    pid = None
+    if pid_file.is_file():
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except ValueError:
+            pid = None
+    running = bool(pid and pid_running(pid))
+    head = run_ro(["git", "rev-parse", "--short", "HEAD"], REPO_ROOT, 8)
+    status = run_ro(["git", "status", "--short", "--branch"], REPO_ROOT, 8)
+    return {
+        "ok": True,
+        "action": "deploy_status",
+        "pid": pid,
+        "running": running,
+        "head": head,
+        "git_status": status,
+        "log": str(log_file),
+        "tail": tail_text(log_file),
+    }
+
 def fallback_response_text(payload):
     text = strip_routing(gateway_admin_text(payload)).strip()
     execute_re = re.compile(
@@ -573,6 +673,18 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_run_workspace(payload))
+            if self.path == "/v1/admin/stack/deploy":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_deploy_stack(payload))
+            if self.path == "/v1/admin/stack/deploy/status":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_deploy_status(payload))
             if self.path != "/v1/chat/completions":
                 return self.sendj({"error": "not found"}, 404)
             n = int(self.headers.get("Content-Length", "0"))

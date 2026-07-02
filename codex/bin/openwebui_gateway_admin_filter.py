@@ -115,6 +115,10 @@ class Filter:
             return self._direct_response(body, self._run_workspace_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
             return self._direct_response(body, self._add_workspace_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DEPLOY_STACK"):
+            return self._direct_response(body, self._deploy_stack_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DEPLOY_STATUS"):
+            return self._direct_response(body, self._deploy_status_admin())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_PUSH"):
             return self._direct_response(body, self._git_push(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
@@ -1092,6 +1096,46 @@ class Filter:
                 self._trim(str(result.get("restart_output", "")), 12000).rstrip(),
             ])
         return "\n".join(lines).rstrip()
+
+    def _deploy_stack_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_DEPLOY_STACK(?:\s+(.+?))?\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_DEPLOY_STACK [branch] [--force]")
+        parts = shlex.split(m.group(1) or "")
+        branch = "main"
+        force = False
+        for part in parts:
+            if part == "--force":
+                force = True
+                continue
+            branch = part
+        if not re.fullmatch(r"[A-Za-z0-9_.\\/-]{1,120}", branch):
+            raise ValueError("Unsafe branch name")
+        result = self._gateway_admin_request("/v1/admin/stack/deploy", {"branch": branch, "force": force}, timeout=30)
+        status = "STACK_DEPLOY_SCHEDULED" if result.get("ok") else "STACK_DEPLOY_NOT_SCHEDULED"
+        return (
+            f"{status}\n"
+            f"action={result.get('action')}\n"
+            f"branch={result.get('branch', branch)}\n"
+            f"pid={result.get('pid')}\n"
+            f"log={result.get('log')}\n"
+            "tail:\n"
+            + self._trim(str(result.get("tail", "")), 12000).rstrip()
+        ).rstrip()
+
+    def _deploy_status_admin(self) -> str:
+        result = self._gateway_admin_request("/v1/admin/stack/deploy/status", {}, timeout=30)
+        return (
+            "STACK_DEPLOY_STATUS\n"
+            f"running={result.get('running')}\n"
+            f"pid={result.get('pid')}\n"
+            f"head={result.get('head')}\n"
+            f"log={result.get('log')}\n"
+            "git_status:\n"
+            + str(result.get("git_status", "")).rstrip()
+            + "\nlog_tail:\n"
+            + self._trim(str(result.get("tail", "")), 24000).rstrip()
+        ).rstrip()
 
     def _gateway_admin_request(self, path: str, payload: dict, timeout: int = 90) -> dict:
         base_url = os.getenv("CODEX_GATEWAY_PUBLIC_URL", self.valves.gateway_url).rstrip("/")

@@ -128,6 +128,18 @@ Příklad registrace nového workspace přes gateway admin endpoint:
     repo: ai-stack
     GATEWAY_ADMIN_ADD_WORKSPACE NewRepo /mnt/c/Repositories/NewRepo --port 4099
 
+Příklad natažení poslední verze `ai-stack` z Gitu a nasazení stacku:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_DEPLOY_STACK
+
+Protože nasazení restartuje i gateway, běží asynchronně. Stav sleduj dalším dotazem:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_DEPLOY_STATUS
+
+Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a až potom restartuje Codex stack a OpenWebUI. Pokud `sudo` vyžaduje heslo, pokusí se o restart přes WSL root interop (`wsl.exe -d Ubuntu -u root`), stejně jako Windows startovací `.bat` skript. Když selže i to, vypíše ruční fallback. Pokud má k dispozici `OWUI_API_KEY` nebo ignorovaný soubor `codex/state/openwebui-api.key`, po restartu také sesynchronizuje OpenWebUI admin filter funkci.
+
 Příklad aplikace konkrétního patche:
 
     repo: ai-stack
