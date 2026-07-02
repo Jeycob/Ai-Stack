@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, json, re
+import argparse, json, os, re
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -14,7 +14,7 @@ args = parser.parse_args()
 if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.name):
     raise SystemExit("Invalid workspace name. Use letters, numbers, dot, underscore, dash.")
 
-root = Path("/mnt/c/Repositories/ai-stack/codex/workspaces.json")
+root = Path(os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json"))
 data = json.loads(root.read_text())
 workspaces = data.setdefault("workspaces", {})
 

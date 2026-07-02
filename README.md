@@ -138,6 +138,18 @@ Technické markery typu `GATEWAY_ADMIN_APPLY_NOW` jsou interní bezpečnostní p
 
 Gateway podporuje skutečné streaming SSE pro běžné modelové odpovědi: při `stream=true` proxyuje chunkované odpovědi z Ollamy průběžně do OpenWebUI. Admin a patch odpovědi zůstávají pevné, aby se bezpečnostní flow nechovalo nedeterministicky.
 
+### OpenWebUI live refresh workaround
+
+Pokud je otevřený chat měněný externě přes helper nebo admin API, samotný OpenWebUI frontend ho ne vždy hned překreslí. Proto je v `openwebui/loader.js` lehký polling hook, který na stránce `/c/<chatId>` sleduje změnu `history.currentId` a při změně provede synchronizační reload.
+
+Hook se projeví až po recreate služby `open-webui`, protože je přes `docker-compose.yml` mountovaný do obou runtime cest `/app/backend/open_webui/static/loader.js` a `/app/build/static/loader.js`.
+
+Prakticky to znamená:
+
+- stack startuj z Windows přes `C:\Repositories\ai-stack\start_docker.bat`,
+- po startu rychle ověř `curl -sS http://127.0.0.1:9090/static/loader.js | wc -c`,
+- potom zkontroluj `curl -sS http://127.0.0.1:9101/health` a `curl -sS http://127.0.0.1:9101/v1/workspaces`.
+
 Praktická pravidla pro zadávání úloh:
 
 - Napiš, zda agent smí editovat soubory, nebo má jen analyzovat.

@@ -11,6 +11,8 @@ from pathlib import Path
 
 WORKSPACES_FILE = os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json")
 OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1")
+REPO_ROOT = Path(WORKSPACES_FILE).resolve().parents[1]
+ADMIN_TOKEN = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN", "")
 
 MODELS = {
     "codex-local-plan-qwen14b": {"model": "qwen2.5-coder:14b", "mode": "plan"},
@@ -234,6 +236,113 @@ def gateway_fixed_response_requested(payload):
     has_admin_patch = "diff --git " in admin_text or "\n--- " in admin_text or "\n+++" in admin_text
     return bool(direct_match or (has_admin_marker and has_admin_patch))
 
+def admin_ok(handler):
+    if handler.client_address[0] in {"127.0.0.1", "::1"}:
+        return True
+    if not ADMIN_TOKEN:
+        return False
+    auth = handler.headers.get("Authorization", "")
+    if auth == f"Bearer {ADMIN_TOKEN}":
+        return True
+    return handler.headers.get("X-Codex-Admin-Token", "") == ADMIN_TOKEN
+
+def admin_add_workspace(payload):
+    name = str(payload.get("name") or "").strip()
+    path = str(payload.get("path") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+        raise ValueError("Unsafe workspace name")
+    if not path:
+        raise ValueError("Workspace path is required")
+    port = payload.get("port")
+    cpus = payload.get("cpus", 8)
+    memory = str(payload.get("memory", "16g"))
+    default = bool(payload.get("default", False))
+    restart = bool(payload.get("restart", False))
+
+    script = REPO_ROOT / "codex/bin/add_workspace.py"
+    if not script.is_file():
+        raise FileNotFoundError("codex/bin/add_workspace.py is missing")
+    cmd = [os.environ.get("PYTHON", "python3"), str(script), name, path, "--cpus", str(cpus), "--memory", memory]
+    if port is not None:
+        cmd.extend(["--port", str(int(port))])
+    if default:
+        cmd.append("--default")
+    proc = subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=60,
+    )
+    result = {
+        "ok": proc.returncode == 0,
+        "action": "add_workspace",
+        "name": name,
+        "path": path,
+        "exit_code": proc.returncode,
+        "output": proc.stdout.strip(),
+    }
+
+    if restart:
+        bash = subprocess.run(
+            ["bash", str(REPO_ROOT / "codex/bin/start_codex_stack.sh")],
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=300,
+        )
+        result["restart_exit_code"] = bash.returncode
+        result["restart_output"] = bash.stdout.strip()
+        result["ok"] = result["ok"] and bash.returncode == 0
+    return result
+
+def admin_run_workspace(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    command = payload.get("command") or []
+    timeout = int(payload.get("timeout", 300))
+    env_map = payload.get("env") or {}
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("Unsafe workspace name")
+    if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
+        raise ValueError("command must be a non-empty string list")
+    if not isinstance(env_map, dict):
+        raise ValueError("env must be an object")
+
+    script = REPO_ROOT / "codex/bin/run_check.py"
+    if not script.is_file():
+        raise FileNotFoundError("codex/bin/run_check.py is missing")
+
+    cmd = [os.environ.get("PYTHON", "python3"), str(script), "--timeout", str(timeout), "--json"]
+    for key, value in env_map.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("env keys and values must be strings")
+        cmd.extend(["--env", f"{key}={value}"])
+    cmd.append(workspace)
+    cmd.append("--")
+    cmd.extend(command)
+    proc = subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=max(timeout + 30, 60),
+    )
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        result = {
+            "ok": proc.returncode == 0,
+            "workspace": workspace,
+            "command": command,
+            "exit_code": proc.returncode,
+            "output": proc.stdout,
+        }
+    result["runner_exit_code"] = proc.returncode
+    return result
+
 def fallback_response_text(payload):
     text = strip_routing(gateway_admin_text(payload)).strip()
     execute_re = re.compile(
@@ -445,9 +554,21 @@ class H(BaseHTTPRequestHandler):
         self.sendj({"error": "not found"}, 404)
 
     def do_POST(self):
-        if self.path != "/v1/chat/completions":
-            return self.sendj({"error": "not found"}, 404)
         try:
+            if self.path == "/v1/admin/workspace/add":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_add_workspace(payload))
+            if self.path == "/v1/admin/workspace/run":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_run_workspace(payload))
+            if self.path != "/v1/chat/completions":
+                return self.sendj({"error": "not found"}, 404)
             n = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(n).decode() or "{}")
             if payload.get("stream") and not gateway_fixed_response_requested(payload) and not normal_chat_requires_tool(payload):
