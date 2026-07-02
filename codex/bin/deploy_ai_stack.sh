@@ -17,6 +17,24 @@ tracked_clean() {
   git diff --quiet && git diff --cached --quiet
 }
 
+wait_http() {
+  local label="$1"
+  local url="$2"
+  local attempts="${3:-60}"
+  local delay="${4:-1}"
+
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      echo "${label}=ready attempts=${i}"
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  echo "${label}=not_ready attempts=${attempts} url=${url}"
+  return 1
+}
+
 restart_only() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     echo "DEPLOY_BLOCKED_ROOT_REQUIRED"
@@ -31,10 +49,16 @@ restart_only() {
   docker compose up -d --force-recreate open-webui
 
   section "Post-restart smoke checks"
+  wait_http gateway http://127.0.0.1:9101/health 45 1
+  wait_http openwebui http://127.0.0.1:9090/ 90 1
+  wait_http openwebui_loader http://127.0.0.1:9090/static/loader.js 90 1
   curl -fsS http://127.0.0.1:9101/health
   echo
+  tmp_loader="$(mktemp)"
+  curl -fsS http://127.0.0.1:9090/static/loader.js -o "$tmp_loader"
   printf 'loader_bytes='
-  curl -fsS http://127.0.0.1:9090/static/loader.js | wc -c
+  wc -c < "$tmp_loader" | tr -d ' '
+  rm -f "$tmp_loader"
 }
 
 sync_openwebui_function() {
