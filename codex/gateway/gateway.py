@@ -208,8 +208,9 @@ def completion(payload):
     model_name = payload.get("model") or "codex-local-plan-qwen14b"
     admin_text = "\n".join(content_to_text(m.get("content", "")) for m in payload.get("messages", []) if m.get("role") != "system")
     direct_prefix = "GATEWAY_ADMIN_DIRECT_RESPONSE"
-    if direct_prefix in admin_text:
-        direct_text = admin_text.split(direct_prefix, 1)[1].strip()
+    direct_match = re.search(rf"(?ims)^\s*{re.escape(direct_prefix)}\s*\n(.*)", admin_text)
+    if direct_match:
+        direct_text = direct_match.group(1).strip()
         return {
             "id": "chatcmpl-" + uuid.uuid4().hex,
             "object": "chat.completion",
