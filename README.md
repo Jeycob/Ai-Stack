@@ -24,6 +24,7 @@ Lokální AI stack pro OpenWebUI, Ollama a izolované Codex/OpenCode workspaces.
 - `codex/workspaces.json`: registr workspaces, portů a resource limitů.
 - `codex/opencode-default.json`: výchozí OpenCode konfigurace pro nové workspaces.
 - `docs/codex-local-operating-context.md`: startovní provozní kontext pro budoucí codex-local agenty.
+- `docs/codex-local-model-system-prompt.md`: verzovaný system prompt pro OpenWebUI nastavení modelů `codex-local-*`.
 - `codex/audit/`: lokální provozní logy; nepatří do Gitu.
 - `codex/state/`: runtime stav, hesla a home adresáře agentů; nepatří do Gitu.
 
@@ -139,11 +140,13 @@ Protože nasazení restartuje i gateway, běží asynchronně. Stav sleduj dalš
     repo: ai-stack
     GATEWAY_ADMIN_DEPLOY_STATUS
 
-Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a až potom restartuje Codex stack a OpenWebUI. Po restartu čeká na gateway, OpenWebUI root a `/static/loader.js`, aby krátký náběh služby nevypadal jako chyba. Pokud `sudo` vyžaduje heslo, pokusí se o restart přes WSL root interop (`wsl.exe -d Ubuntu -u root`), stejně jako Windows startovací `.bat` skript. Když selže i to, vypíše ruční fallback. Pokud má k dispozici `OWUI_API_KEY` nebo ignorovaný soubor `codex/state/openwebui-api.key`, po restartu také sesynchronizuje OpenWebUI admin filter funkci.
+Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a až potom restartuje Codex stack a OpenWebUI. Po restartu čeká na gateway, OpenWebUI root a `/static/loader.js`, aby krátký náběh služby nevypadal jako chyba. Pokud `sudo` vyžaduje heslo, pokusí se o restart přes WSL root interop (`wsl.exe -d Ubuntu -u root`), stejně jako Windows startovací `.bat` skript. Když selže i to, vypíše ruční fallback. Pokud má k dispozici `OWUI_API_KEY` nebo ignorovaný soubor `codex/state/openwebui-api.key`, po restartu také sesynchronizuje OpenWebUI admin filter a auto-tools filter funkci.
 
 Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `tail` nebo `log_tail` balí do rozbalovacích `<details>` bloků, aby chat zůstal čitelný. OpenWebUI raw HTML v Markdownu escapuje, proto `openwebui/loader.js` tyto doslovné bloky po vykreslení zprávy převádí na skutečné lokální dropdowny.
 
 `Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat úzké přirozené požadavky nad `ai-stack`. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá explicitní whitelisted admin workflow.
+
+System prompt pro stránku nastavení modelu v OpenWebUI je verzovaný v `docs/codex-local-model-system-prompt.md`. Jeho úloha je naučit model mluvit lidsky a nepodsouvat uživateli interní markery; skutečné provedení akcí má stále zajišťovat filter/tool vrstva.
 
 Příklad aplikace konkrétního patche:
 

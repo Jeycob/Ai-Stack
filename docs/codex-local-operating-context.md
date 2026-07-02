@@ -47,6 +47,15 @@ Pro admin operace pouzivej `--no-live-status`, pokud odpoved ma byt kratka a det
 
 Na RTX 4080 16 GB je 14B prakticky vychozi volba. 32B muze byt pomaly, protoze cast bezi pres CPU.
 
+OpenWebUI model settings prompt pro `codex-local-*` je verzovany v
+`docs/codex-local-model-system-prompt.md`. Prompt ma model smerovat k normalni
+lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
+
+`Codex Auto Tools Filter` ma rozpoznavat uzke prirozene intenty typu "pullni
+ai-stack a nasad" nebo "ukaz deploy status" a prelozit je na auditovatelne
+whitelisted admin flow. Cilem je, aby uzivatel nemusel znat interni
+`GATEWAY_ADMIN_*` markery.
+
 ## Bezpecnostni pravidla
 
 - Nikdy nevypisovat API klice, tokeny, private SSH klice ani obsah `.env`.

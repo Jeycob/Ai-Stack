@@ -91,6 +91,7 @@ def list_files(root):
         "codex/workspaces.json",
         "codex/opencode-default.json",
         "docs/codex-local-operating-context.md",
+        "docs/codex-local-model-system-prompt.md",
     ]
     force_dirs = [
         "codex/gateway",
@@ -117,6 +118,7 @@ def list_files(root):
     priority = (
         "codex/gateway/gateway.py",
         "docs/codex-local-operating-context.md",
+        "docs/codex-local-model-system-prompt.md",
         "codex/bin/start_codex_stack.sh",
         "codex/bin/watch_gateway.sh",
         "codex/bin/add_workspace.py",
