@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--title", default="Codex audit log - OpenWebUI visible history")
     parser.add_argument("--prompt", help="User prompt text")
     parser.add_argument("--prompt-file", help="User prompt file")
+    parser.add_argument("--visible-prompt", help="Human-facing prompt to write into the visible OpenWebUI chat")
+    parser.add_argument("--visible-prompt-file", help="Human-facing prompt file for the visible OpenWebUI chat")
     parser.add_argument("--out", help="Write assistant response text to file")
     parser.add_argument("--response-json-out", help="Write raw completion JSON to file")
     parser.add_argument("--send-history", action="store_true", help="Send the visible chat chain to the model")
@@ -65,6 +67,16 @@ def read_prompt(args: argparse.Namespace) -> str:
     if args.prompt_file:
         return Path(args.prompt_file).read_text(encoding="utf-8")
     return args.prompt or ""
+
+
+def read_visible_prompt(args: argparse.Namespace, technical_prompt: str) -> str:
+    if args.visible_prompt and args.visible_prompt_file:
+        raise SystemExit("Use only one of --visible-prompt or --visible-prompt-file")
+    if args.visible_prompt_file:
+        return Path(args.visible_prompt_file).read_text(encoding="utf-8")
+    if args.visible_prompt:
+        return args.visible_prompt
+    return technical_prompt
 
 
 def opener() -> urllib.request.OpenerDirector:
@@ -243,6 +255,18 @@ def chain_messages(messages: dict, current_id: str | None) -> list[dict[str, str
     return chain
 
 
+def messages_for_model(messages: dict, user_id: str, technical_prompt: str, send_history: bool) -> list[dict[str, str]]:
+    if not send_history:
+        return [{"role": "user", "content": technical_prompt}]
+    chain = chain_messages(messages, user_id)
+    for msg in reversed(chain):
+        if msg.get("role") == "user":
+            msg["content"] = technical_prompt
+            return chain
+    chain.append({"role": "user", "content": technical_prompt})
+    return chain
+
+
 def response_text(completion: dict | list | str) -> str:
     if not isinstance(completion, dict):
         return str(completion)
@@ -284,7 +308,8 @@ def is_expected_admin_detail(completion: dict | list | str) -> bool:
 
 def main() -> int:
     args = parse_args()
-    prompt = read_prompt(args)
+    technical_prompt = read_prompt(args)
+    visible_prompt = read_visible_prompt(args, technical_prompt)
     status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
     if status >= 400 or not isinstance(chat_response, dict):
         raise RuntimeError(f"Unable to load chat {args.chat_id}: {chat_response}")
@@ -295,7 +320,7 @@ def main() -> int:
     messages = history.setdefault("messages", {})
     current_id = history.get("currentId")
     now = int(time.time())
-    user_id = append_message(messages, current_id, "user", prompt, args.model, now)
+    user_id = append_message(messages, current_id, "user", visible_prompt, args.model, now)
     history["currentId"] = user_id
     chat["history"] = history
     chat["messages"] = list(messages.keys())
@@ -327,7 +352,7 @@ def main() -> int:
             http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
             live_stop, live_thread = start_live_status(args, live_message_id, started)
 
-    model_messages = chain_messages(messages, user_id) if args.send_history else [{"role": "user", "content": prompt}]
+    model_messages = messages_for_model(messages, user_id, technical_prompt, args.send_history)
     completion_payload = {"model": args.model, "messages": model_messages, "stream": False}
     completion_status, completion = http_request(args, "POST", "/api/chat/completions", completion_payload, allow_error=True)
     if live_stop is not None:

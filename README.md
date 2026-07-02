@@ -93,6 +93,12 @@ Při dlouhých operacích používej helper `codex/bin/owui_chat_turn.py`; ten z
 
     OWUI_API_KEY=<set locally> codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --prompt-file /tmp/prompt.txt --status-interval 3 --quiet
 
+Pro admin nebo patch operace používej oddělený viditelný a technický prompt. Viditelný prompt je lidský popis práce pro audit chat; technický prompt může obsahovat interní gateway/admin marker a diff, ale do viditelné historie se nezapisuje:
+
+    OWUI_API_KEY=<set locally> codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --visible-prompt-file /tmp/visible.txt --prompt-file /tmp/technical.txt --status-interval 3 --quiet
+
+Technické markery typu `GATEWAY_ADMIN_APPLY_NOW` jsou interní bezpečnostní protokol pro whitelisted zápis souborů. V běžném OpenWebUI chatu mají být schované za helperem a viditelné jen jako lidské shrnutí práce, status a výsledek.
+
 Další technický krok pro opravdu živé tokeny je upravit `codex/gateway/gateway.py` tak, aby uměl skutečné streaming SSE z Ollamy a neposílal OpenWebUI odpověď až po dokončení celé generace.
 
 Praktická pravidla pro zadávání úloh:
