@@ -89,6 +89,8 @@ class Filter:
             return self._direct_response(body, self._git_untrack_ignored())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SMOKE"):
             return self._direct_response(body, self._gateway_smoke(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CHECK_STACK"):
+            return self._direct_response(body, self._check_ai_stack(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_PUSH"):
             return self._direct_response(body, self._git_push(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
@@ -756,6 +758,53 @@ class Filter:
             f"{status}\n"
             f"base_url={base_url}\n"
             f"workspace={workspace}\n"
+            f"exit_code={proc.returncode}\n"
+            "output:\n"
+            + proc.stdout.strip()
+        )
+
+    def _check_ai_stack(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_CHECK_STACK(?:\s+([A-Za-z0-9_.-]+))?(?:\s+([A-Za-z0-9_.:-]+))?\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_CHECK_STACK [workspace] [model]")
+        workspace = (m.group(1) or "ai-stack").strip()
+        model = (m.group(2) or "codex-local-plan-qwen14b").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", model):
+            raise ValueError("Unsafe model name")
+
+        root = self._repo_root()
+        script = root / "codex/bin/check_ai_stack.sh"
+        if not script.is_file():
+            raise FileNotFoundError("AI stack healthcheck script is missing")
+        bash = shutil.which("bash")
+        if not bash:
+            raise FileNotFoundError("bash is required to run check_ai_stack.sh")
+
+        env = os.environ.copy()
+        env.update({
+            "OPENWEBUI_URL": os.getenv("OPENWEBUI_INTERNAL_URL", os.getenv("OPENWEBUI_PUBLIC_URL", "http://127.0.0.1:8080")),
+            "CODEX_GATEWAY_URL": os.getenv("CODEX_GATEWAY_PUBLIC_URL", "http://192.168.0.48:9101"),
+            "OLLAMA_URL": os.getenv("OLLAMA_BASE_URL", "http://192.168.0.48:11434"),
+            "WORKSPACE": workspace,
+            "MODEL": model,
+            "SKIP_OPENWEBUI": "1",
+        })
+        proc = subprocess.run(
+            [bash, str(script)],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=180,
+            env=env,
+        )
+        status = "AI_STACK_CHECK_OK" if proc.returncode == 0 else "AI_STACK_CHECK_FAILED"
+        return (
+            f"{status}\n"
+            f"workspace={workspace}\n"
+            f"model={model}\n"
             f"exit_code={proc.returncode}\n"
             "output:\n"
             + proc.stdout.strip()

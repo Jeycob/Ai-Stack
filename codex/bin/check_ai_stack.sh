@@ -48,7 +48,11 @@ printf 'gateway=%s\n' "$CODEX_GATEWAY_URL"
 printf 'ollama=%s\n' "$OLLAMA_URL"
 printf 'workspace=%s model=%s\n' "$WORKSPACE" "$MODEL"
 
-check_url 'OpenWebUI config endpoint' "$OPENWEBUI_URL/api/config"
+if [ "${SKIP_OPENWEBUI:-0}" = "1" ]; then
+  printf '[check] OpenWebUI config endpoint ... SKIP (self-check disabled)\n'
+else
+  check_url 'OpenWebUI config endpoint' "$OPENWEBUI_URL/api/config"
+fi
 check_url 'Ollama version endpoint' "$OLLAMA_URL/api/version"
 check_json_contains 'Codex gateway health' "$CODEX_GATEWAY_URL/health" '"ok": true'
 check_json_contains 'Codex gateway model alias' "$CODEX_GATEWAY_URL/v1/models" "$MODEL"

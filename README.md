@@ -80,6 +80,11 @@ Příklad vestavěného smoke testu gateway:
     repo: ai-stack
     GATEWAY_ADMIN_SMOKE ai-stack
 
+Příklad celkového healthchecku z OpenWebUI admin filteru:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_CHECK_STACK ai-stack codex-local-plan-qwen14b
+
 Příklad aplikace konkrétního patche:
 
     repo: ai-stack
