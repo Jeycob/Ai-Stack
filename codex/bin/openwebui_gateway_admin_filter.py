@@ -60,6 +60,18 @@ class Filter:
             body.setdefault("messages", []).insert(0, {"role": "system", "content": self._instructions()})
 
         latest_user = self._last_message_text(body, "user")
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
+            normalized = re.sub(
+                r"(?im)^(\s*)GATEWAY_ADMIN_APPLY_NOW(\s*)$",
+                rf"\1{self.valves.marker}\2",
+                latest_user,
+                count=1,
+            )
+            if not self._extract_patches(normalized):
+                raise RuntimeError("NO_PATCH_FOUND: GATEWAY_ADMIN_APPLY_NOW requires a fenced unified diff block.")
+            result = self._apply_from_text(normalized)
+            return self._direct_response(body, result)
+
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DIAG"):
             return self._direct_response(body, self._diag())
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_PROBE"):

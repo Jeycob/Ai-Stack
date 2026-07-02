@@ -139,4 +139,6 @@ Praktická pravidla pro zadávání úloh:
 - Udržuj důležité konfigurace a dokumentaci v tomto repozitáři.
 - Runtime stav, audit logy, hesla a privátní klíče nech v `.gitignore`.
 - Před pushem zkontroluj `git status` a ujisti se, že se necommitují secrets.
+- Před commitem/pushem spusť gateway smoke test a pushuj jen whitelisted zdrojové soubory; `.env`, `codex/state/`, `codex/audit/`, logy ani privátní klíče do commitu nepatří.
+- Assistant v OpenWebUI smí navrhovat diffy, ale odpověď modelu sama nesmí zapisovat do repozitáře; zápis má probíhat pouze přes explicitní skrytý helper/admin payload a whitelisted filtr.
 - Cílový vzdálený repozitář: `github.com/Jeycob/Ai-Stack`.
