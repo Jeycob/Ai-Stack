@@ -115,6 +115,7 @@ Praktická pravidla pro zadávání úloh:
 - Ruční start Codex stacku ve WSL: `sudo /mnt/c/Repositories/ai-stack/codex/bin/start_codex_stack.sh`.
 - Přidání workspace: `python3 codex/bin/add_workspace.py <name> <path> --port <port>`.
 - Kontrola gateway: `curl http://127.0.0.1:9101/health` ve WSL nebo `curl http://192.168.0.48:9101/health` z LAN.
+ - Smoke test gateway: `python3 codex/bin/codex_gateway_smoke.py --base-url http://192.168.0.48:9101 --workspace ai-stack`.
 - Seznam modelů: `curl http://192.168.0.48:9101/v1/models`.
 - Seznam workspaces: `curl http://192.168.0.48:9101/v1/workspaces`.
 

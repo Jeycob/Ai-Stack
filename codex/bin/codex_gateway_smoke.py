@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Smoke-test the local codex gateway without external dependencies."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from typing import Any
+
+
+DEFAULT_BASE_URL = "http://127.0.0.1:9101"
+DEFAULT_MODEL = "codex-local-plan-qwen14b"
+
+
+class SmokeError(RuntimeError):
+    pass
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def request_json(method: str, url: str, timeout: float, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            if resp.status >= 400:
+                raise SmokeError(f"HTTP {resp.status} from {url}: {raw[:500]}")
+            return json.loads(raw or "{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise SmokeError(f"HTTP {exc.code} from {url}: {raw[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise SmokeError(f"Connection failed for {url}: {exc}") from exc
+
+
+def check(condition: bool, message: str) -> None:
+    if not condition:
+        raise SmokeError(message)
+
+
+def test_health(base_url: str, timeout: float) -> None:
+    log("[1/5] GET /health")
+    data = request_json("GET", f"{base_url}/health", timeout)
+    check(data.get("ok") is True, f"health response is not ok: {data}")
+
+
+def test_models(base_url: str, timeout: float, model: str) -> None:
+    log("[2/5] GET /v1/models")
+    data = request_json("GET", f"{base_url}/v1/models", timeout)
+    models = [item.get("id") for item in data.get("data", []) if isinstance(item, dict)]
+    check(model in models, f"model {model!r} not found in {models}")
+
+
+def test_workspaces(base_url: str, timeout: float, workspace: str) -> None:
+    log("[3/5] GET /v1/workspaces")
+    data = request_json("GET", f"{base_url}/v1/workspaces", timeout)
+    workspaces = data.get("workspaces") or {}
+    check(isinstance(workspaces, dict), f"workspaces is not a dict: {data}")
+    check(workspace in workspaces, f"workspace {workspace!r} not found in {sorted(workspaces)}")
+
+
+def chat_payload(model: str, workspace: str, prompt: str, stream: bool) -> dict[str, Any]:
+    return {
+        "model": model,
+        "stream": stream,
+        "messages": [{"role": "user", "content": f"repo: {workspace}\n{prompt}"}],
+    }
+
+
+def test_chat(base_url: str, timeout: float, model: str, workspace: str) -> None:
+    log("[4/5] POST /v1/chat/completions stream=false")
+    payload = chat_payload(model, workspace, "Odpovez jednim slovem: ok", False)
+    data = request_json("POST", f"{base_url}/v1/chat/completions", timeout, payload)
+    choices = data.get("choices") or []
+    content = choices[0].get("message", {}).get("content", "") if choices else ""
+    check(isinstance(content, str) and content.strip(), f"empty non-stream response: {data}")
+
+
+def test_stream(base_url: str, timeout: float, model: str, workspace: str) -> None:
+    log("[5/5] POST /v1/chat/completions stream=true")
+    payload = chat_payload(model, workspace, "Odpovez tremi kratkymi slovy: stream smoke ok", True)
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}/v1/chat/completions",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    started = time.monotonic()
+    chunks = 0
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            check(resp.status < 400, f"stream response returned HTTP {resp.status}")
+            while time.monotonic() - started < timeout:
+                raw = resp.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                if line == "data: [DONE]":
+                    break
+                if line.startswith("data: "):
+                    chunks += 1
+                    if chunks >= 1:
+                        break
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise SmokeError(f"HTTP {exc.code} from stream endpoint: {raw[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise SmokeError(f"Stream connection failed: {exc}") from exc
+    check(chunks >= 1, "stream endpoint did not return any data chunks")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Smoke-test the local codex gateway.")
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--workspace", default="ai-stack")
+    parser.add_argument("--timeout", type=float, default=60.0)
+    args = parser.parse_args()
+
+    base_url = args.base_url.rstrip("/")
+    try:
+        test_health(base_url, args.timeout)
+        test_models(base_url, args.timeout, args.model)
+        test_workspaces(base_url, args.timeout, args.workspace)
+        test_chat(base_url, args.timeout, args.model, args.workspace)
+        test_stream(base_url, args.timeout, args.model, args.workspace)
+    except SmokeError as exc:
+        print(f"SMOKE FAILED: {exc}", file=sys.stderr)
+        return 1
+    log("SMOKE OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+#!/usr/bin/env python3
+import sys
+import json
+import requests
+import argparse
+
+def check_response(response):
+    try:
+        response.raise_for_status()
+    except requests.RequestException as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return False
+    return True
+
+def test_health(base_url, timeout):
+    url = f"{base_url}/health"
+    print(f"Testing {url}...")
+    resp = requests.get(url, timeout=timeout)
+    return check_response(resp)
+
+def test_models(base_url, timeout):
+    url = f"{base_url}/v1/models"
+    print(f"Testing {url}...")
+    resp = requests.get(url, timeout=timeout)
+    return check_response(resp) and isinstance(json.loads(resp.text), list)
+
+def test_workspaces(base_url, timeout):
+    url = f"{base_url}/v1/workspaces"
+    print(f"Testing {url}...")
+    resp = requests.get(url, timeout=timeout)
+    return check_response(resp) and isinstance(json.loads(resp.text), dict)
+
+def test_chat_completions(base_url, stream, timeout):
+    url = f"{base_url}/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "stream": stream
+    }
+    print(f"Testing {url} with streaming={stream}...")
+    resp = requests.post(url, headers=headers, json=data, stream=stream, timeout=timeout)
+    if not check_response(resp):
+        return False
+    if stream:
+        for line in response.iter_lines():
+            if line.startswith(b"data: "):
+                return True
+        print("Stream test failed: no data received", file=sys.stderr)
+        return False
+    return True
+
+def main():
+    parser = argparse.ArgumentParser(description="AI Stack Gateway Smoke Test")
+    parser.add_argument("--base-url", default="http://127.0.0.1:9101", help="Base URL for gateway")
+    parser.add_argument("--timeout", type=float, default=5.0, help="Timeout in seconds")
+    args = parser.parse_args()
+
+    tests = [
+        test_health,
+        test_models,
+        test_workspaces,
+        partial(test_chat_completions, stream=False),
+        partial(test_chat_completions, stream=True)
+    ]
+
+    for test_func in tests:
+        if not test_func(args.base_url, args.timeout):
+            return 1
+
+    print("All tests passed.")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
