@@ -138,6 +138,7 @@ python3 -m py_compile \
   codex/bin/gateway_nested_helper_rescue_smoke.py \
   codex/bin/gateway_runtime_health_smoke.py \
   codex/bin/gateway_runtime_fingerprint_check.py \
+  codex/bin/docker_runner.py \
   codex/bin/container_runner_guard.py \
   codex/bin/container_runner_guard_smoke.py \
   codex/bin/mentor_capability_routing_smoke.py \

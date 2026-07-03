@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+from docker_runner import run_docker
 from container_runner_guard import inspect_container_state
 from workspace_scan import collect, load_workspace
 
@@ -262,14 +263,29 @@ def run_dev_command(
                 output=str(state.get("diagnostic_output") or ""),
             )
         executed = docker_exec_command(workspace, command, env)
-        proc = subprocess.run(
-            executed,
-            cwd=root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
+        docker_result = run_docker(executed[1:], timeout=timeout, cwd=root)
+        if docker_result.error and docker_result.error.startswith("docker_permission_denied"):
+            raise RunnerBoundaryError(
+                workspace=workspace,
+                runner=runner,
+                container=container_name(workspace),
+                cwd="/workspace",
+                command=command,
+                executed_command=docker_result.command,
+                marker="WORKSPACE_CONTAINER_DOCKER_PERMISSION_DENIED",
+                error="docker_permission_denied",
+                recovery=(
+                    "Gateway runner nemá přístup k Docker socketu pro docker exec. "
+                    "Přidej gateway user do docker group nebo povol passwordless sudo pro docker a znovu spusť start/deploy stacku."
+                ),
+                output=docker_result.output,
+            )
+        proc = subprocess.CompletedProcess(
+            docker_result.command,
+            0 if docker_result.ok else (docker_result.returncode if docker_result.returncode is not None else 1),
+            stdout=docker_result.output,
         )
+        executed = docker_result.command
         return proc, executed, "/workspace", container_name(workspace)
     raise ActionError(f"Unsupported runner: {runner}")
 

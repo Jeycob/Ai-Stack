@@ -79,6 +79,12 @@ PY
 mkdir -p "$STATE_ROOT" "$AUDIT_ROOT"
 chown -R "$AI_USER:$AI_USER" "$STATE_ROOT" "$AUDIT_ROOT" || true
 
+if getent group docker >/dev/null 2>&1; then
+  if ! id -nG "$AI_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    usermod -aG docker "$AI_USER" >/dev/null 2>&1 || true
+  fi
+fi
+
 if [ ! -f "$PASS_FILE" ]; then
   openssl rand -hex 24 > "$PASS_FILE"
 fi

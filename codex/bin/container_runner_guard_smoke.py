@@ -28,6 +28,7 @@ def load_module(name: str, path: Path):
 guard = load_module("container_runner_guard_smoke_mod", BIN / "container_runner_guard.py")
 run_check = load_module("run_check_container_boundary_smoke_mod", BIN / "run_check.py")
 workspace_action = load_module("workspace_action_container_boundary_smoke_mod", BIN / "workspace_action.py")
+docker_runner = load_module("docker_runner_container_boundary_smoke_mod", BIN / "docker_runner.py")
 
 
 def assert_contains(value: str, needle: str, label: str) -> None:
@@ -36,23 +37,91 @@ def assert_contains(value: str, needle: str, label: str) -> None:
 
 
 def assert_guard_markers() -> None:
-    with patch.object(guard.subprocess, "run", side_effect=FileNotFoundError("docker")):
+    with patch.object(
+        guard,
+        "run_docker",
+        return_value=docker_runner.DockerCommandResult(
+            ok=False,
+            command=["docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+            output="docker",
+            returncode=None,
+            error="docker_unavailable",
+        ),
+    ):
         result = guard.inspect_container_state("Test2")
     if result.get("marker") != "WORKSPACE_CONTAINER_DOCKER_UNAVAILABLE":
         raise SystemExit(f"unexpected docker-unavailable marker: {result!r}")
 
-    missing_proc = subprocess.CompletedProcess(
+    denied_proc = subprocess.CompletedProcess(
         ["docker", "inspect"],
         1,
-        stdout="Error: No such object: codex-opencode-Test2\n",
+        stdout="permission denied while trying to connect to the Docker API at unix:///var/run/docker.sock\n",
     )
-    with patch.object(guard.subprocess, "run", return_value=missing_proc):
+    denied_sudo_proc = subprocess.CompletedProcess(
+        ["sudo", "-n", "docker", "inspect"],
+        1,
+        stdout="sudo: a password is required\n",
+    )
+    with patch.object(
+        guard,
+        "run_docker",
+        return_value=docker_runner.DockerCommandResult(
+            ok=False,
+            command=["sudo", "-n", "docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+            output=denied_proc.stdout,
+            returncode=1,
+            used_sudo=True,
+            error="docker_permission_denied_sudo_password_required",
+            attempts=[
+                docker_runner.DockerCommandAttempt(
+                    command=["docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+                    returncode=denied_proc.returncode,
+                    output=denied_proc.stdout,
+                ),
+                docker_runner.DockerCommandAttempt(
+                    command=["sudo", "-n", "docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+                    returncode=denied_sudo_proc.returncode,
+                    output=denied_sudo_proc.stdout,
+                ),
+            ],
+        ),
+    ):
+        result = guard.inspect_container_state("Test2")
+    if result.get("marker") != "WORKSPACE_CONTAINER_DOCKER_PERMISSION_DENIED":
+        raise SystemExit(f"unexpected docker-permission marker: {result!r}")
+
+    missing_proc = docker_runner.DockerCommandResult(
+        ok=False,
+        command=["docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+        output="Error: No such object: codex-opencode-Test2\n",
+        returncode=1,
+        attempts=[
+            docker_runner.DockerCommandAttempt(
+                command=["docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+                returncode=1,
+                output="Error: No such object: codex-opencode-Test2\n",
+            )
+        ],
+    )
+    with patch.object(guard, "run_docker", return_value=missing_proc):
         result = guard.inspect_container_state("Test2")
     if result.get("marker") != "WORKSPACE_CONTAINER_MISSING":
         raise SystemExit(f"unexpected container-missing marker: {result!r}")
 
-    stopped_proc = subprocess.CompletedProcess(["docker", "inspect"], 0, stdout="false\n")
-    with patch.object(guard.subprocess, "run", return_value=stopped_proc):
+    stopped_proc = docker_runner.DockerCommandResult(
+        ok=True,
+        command=["docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+        output="false\n",
+        returncode=0,
+        attempts=[
+            docker_runner.DockerCommandAttempt(
+                command=["docker", "inspect", "--format", "{{.State.Running}}", "codex-opencode-Test2"],
+                returncode=0,
+                output="false\n",
+            )
+        ],
+    )
+    with patch.object(guard, "run_docker", return_value=stopped_proc):
         result = guard.inspect_container_state("Test2")
     if result.get("marker") != "WORKSPACE_CONTAINER_NOT_RUNNING":
         raise SystemExit(f"unexpected container-not-running marker: {result!r}")
@@ -75,6 +144,31 @@ def assert_run_check_boundary_result() -> None:
     print("RUN_CHECK_CONTAINER_BOUNDARY_OK")
 
 
+def assert_run_check_exec_permission_result() -> None:
+    tmpdir = Path(tempfile.mkdtemp(prefix="run-check-exec-permission-"))
+    with patch.object(
+        run_check,
+        "inspect_container_state",
+        return_value={"ok": True, "workspace": "Test2", "container": "codex-opencode-Test2"},
+    ), patch.object(
+        run_check,
+        "run_docker",
+        return_value=docker_runner.DockerCommandResult(
+            ok=False,
+            command=["sudo", "-n", "docker", "exec", "--workdir", "/workspace", "codex-opencode-Test2", "pwd"],
+            output="sudo: a password is required\n",
+            returncode=1,
+            used_sudo=True,
+            error="docker_permission_denied_sudo_password_required",
+        ),
+    ):
+        result = run_check.run_checked_command("Test2", tmpdir, ["pwd"], 30, {}, "container")
+    if result.get("marker") != "WORKSPACE_CONTAINER_DOCKER_PERMISSION_DENIED":
+        raise SystemExit(f"run_check should surface docker exec permission marker, got {result!r}")
+    assert_contains(str(result.get("recovery") or ""), "Docker socket", "run-check-exec-permission-recovery")
+    print("RUN_CHECK_EXEC_PERMISSION_BOUNDARY_OK")
+
+
 def assert_workspace_action_smoke_boundary() -> None:
     tmpdir = Path(tempfile.mkdtemp(prefix="workspace-action-boundary-"))
     with patch.object(workspace_action, "resolve_smoke", return_value=(["npm", "run", "dev"], "node-smoke-script")), patch.object(
@@ -95,6 +189,31 @@ def assert_workspace_action_smoke_boundary() -> None:
     print("WORKSPACE_ACTION_CONTAINER_BOUNDARY_OK")
 
 
+def assert_workspace_action_exec_permission_boundary() -> None:
+    tmpdir = Path(tempfile.mkdtemp(prefix="workspace-action-exec-permission-"))
+    with patch.object(workspace_action, "resolve_smoke", return_value=(["npm", "run", "dev"], "node-smoke-script")), patch.object(
+        workspace_action,
+        "inspect_container_state",
+        return_value={"ok": True, "workspace": "Test2", "container": "codex-opencode-Test2"},
+    ), patch.object(
+        workspace_action,
+        "run_docker",
+        return_value=docker_runner.DockerCommandResult(
+            ok=False,
+            command=["sudo", "-n", "docker", "exec", "--workdir", "/workspace", "codex-opencode-Test2", "npm", "run", "dev"],
+            output="sudo: a password is required\n",
+            returncode=1,
+            used_sudo=True,
+            error="docker_permission_denied_sudo_password_required",
+        ),
+    ):
+        result = workspace_action.run_smoke(tmpdir, 30, {}, False, "container", "Test2")
+    if result.get("marker") != "WORKSPACE_CONTAINER_DOCKER_PERMISSION_DENIED":
+        raise SystemExit(f"workspace_action.run_smoke should surface docker exec permission marker, got {result!r}")
+    assert_contains(str(result.get("recovery") or ""), "Docker socket", "workspace-action-exec-permission-recovery")
+    print("WORKSPACE_ACTION_EXEC_PERMISSION_BOUNDARY_OK")
+
+
 def main() -> int:
     assert_guard_markers()
     with patch.object(
@@ -109,7 +228,9 @@ def main() -> int:
         },
     ):
         assert_run_check_boundary_result()
+    assert_run_check_exec_permission_result()
     assert_workspace_action_smoke_boundary()
+    assert_workspace_action_exec_permission_boundary()
     print("CONTAINER_RUNNER_GUARD_SMOKE_OK")
     return 0
 
