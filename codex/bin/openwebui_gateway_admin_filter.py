@@ -1366,6 +1366,7 @@ class Filter:
             raise ValueError("Timeout must be between 1 and 1800 seconds")
         if any("mentor_codex_local.py" in item or "owui_chat_turn.py" in item for item in command):
             background = True
+            env_map.setdefault("OWUI_STATELESS", "1")
 
         rescue = self._workspace_run_rescue_command(workspace, command)
         if rescue:

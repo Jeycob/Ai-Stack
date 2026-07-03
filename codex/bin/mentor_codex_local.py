@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -300,6 +302,99 @@ def parse_key_values(text: str) -> dict[str, str]:
         if key:
             result[key] = value
     return result
+
+
+def extract_prefixed_value(text: str, prefix: str) -> str:
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def join_sections(*parts: str) -> str:
+    return "\n\n".join(part.strip() for part in parts if part and part.strip())
+
+
+def capture_mode_output(args: argparse.Namespace) -> tuple[int, str]:
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rc = build_and_invoke_mode(args)
+    return rc, buffer.getvalue()
+
+
+def summarize_delegate_outcome(decision: dict[str, str], workspace: str, task: str, routed_mode: str) -> str:
+    return "\n".join(
+        [
+            "DELEGATE_OUTCOME",
+            "DELEGATE_OUTCOME_STATUS=routed",
+            f"DELEGATE_OUTCOME_WORKFLOW={decision['workflow']}",
+            f"DELEGATE_OUTCOME_MODE={routed_mode}",
+            f"DELEGATE_OUTCOME_CONFIDENCE={decision['confidence']}",
+            f"DELEGATE_OUTCOME_CAPABILITY={decision['capability_id']}",
+            f"DELEGATE_OUTCOME_NEXT_HELPER={recommended_next_step(decision, workspace, task)}",
+        ]
+    )
+
+
+def summarize_improve_outcome(
+    raw_output: str,
+    *,
+    bootstrap_status: str,
+    improve_focus: str,
+    allow_actions_value: str,
+    recovery_cycles: int,
+) -> str:
+    upper = raw_output.upper()
+    meta = parse_key_values(raw_output)
+    status = "completed"
+    if "IMPROVE_RECOVERY_LIMIT_REACHED" in upper:
+        status = "recovery_limit_reached"
+    elif "IMPROVE_BLOCKED_CYCLE_" in upper or "APPLY_SAFE_BLOCKED" in upper:
+        status = "blocked"
+    elif "IMPROVE_READY_CYCLE_" in upper or "APPLY_SAFE_READY" in upper:
+        status = "patched_and_reverified"
+    elif "WORKSPACE_AUTOPILOT_OK" in upper or "WORKSPACE_ACTION_OK" in upper:
+        status = "capability_progress"
+
+    recommendation = (
+        meta.get("recommendation", "").strip()
+        or meta.get("next_recommendation", "").strip()
+        or meta.get("patch_hint", "").strip()
+    )
+    patch_target = meta.get("patch_target", "").strip() or "none"
+    read_command = meta.get("read_command", "").strip() or "none"
+    return "\n".join(
+        [
+            "IMPROVE_OUTCOME",
+            f"IMPROVE_OUTCOME_STATUS={status}",
+            f"IMPROVE_OUTCOME_FOCUS={improve_focus}",
+            f"IMPROVE_OUTCOME_BOOTSTRAP_STATUS={bootstrap_status or 'none'}",
+            f"IMPROVE_OUTCOME_ALLOW_ACTIONS={allow_actions_value}",
+            f"IMPROVE_OUTCOME_RECOVERY_CYCLES={recovery_cycles}",
+            f"IMPROVE_OUTCOME_PATCH_TARGET={patch_target}",
+            f"IMPROVE_OUTCOME_READ_COMMAND={read_command}",
+            f"IMPROVE_OUTCOME_NEXT={recommendation or 'none'}",
+        ]
+    )
+
+
+def summarize_bootstrap_improve_outcome(
+    repo_name: str,
+    dispatch_summary: dict[str, str],
+    improve_output: str,
+) -> str:
+    improve_status = extract_prefixed_value(improve_output, "IMPROVE_OUTCOME_STATUS=") or "unknown"
+    return "\n".join(
+        [
+            "BOOTSTRAP_IMPROVE_OUTCOME",
+            f"BOOTSTRAP_IMPROVE_OUTCOME_REPO={repo_name}",
+            f"BOOTSTRAP_IMPROVE_OUTCOME_DISPATCH_STATUS={dispatch_summary.get('BOOTSTRAP_DISPATCH_FINAL_STATUS', 'unknown')}",
+            f"BOOTSTRAP_IMPROVE_OUTCOME_IMPROVE_STATUS={improve_status}",
+            f"BOOTSTRAP_IMPROVE_OUTCOME_SUCCESS={dispatch_summary.get('BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS', 'none') or 'none'}",
+            f"BOOTSTRAP_IMPROVE_OUTCOME_FAILED={dispatch_summary.get('BOOTSTRAP_DISPATCH_FAILED_ACTIONS', 'none') or 'none'}",
+            f"BOOTSTRAP_IMPROVE_OUTCOME_NEXT={dispatch_summary.get('BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION', 'none') or 'none'}",
+        ]
+    )
 
 
 def parse_csv_actions(text: str) -> list[str]:
@@ -1668,29 +1763,44 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
         print("If autopilot returns read_command or patch guidance, the helper will continue into the apply-safe flow automatically and then re-run one safe capability verification step.")
         return 0
 
-    print(f"IMPROVE_CONTEXT_BOOTSTRAP_STATUS={bootstrap_status or 'none'}")
-    print(f"IMPROVE_CONTEXT_BOOTSTRAP_SUCCESS={','.join(bootstrap_success) or 'none'}")
-    print(f"IMPROVE_CONTEXT_BOOTSTRAP_FAILED={','.join(bootstrap_failed) or 'none'}")
-    print(f"IMPROVE_FOCUS={improve_focus}")
-    print(f"IMPROVE_ALLOW_ACTIONS={allow_actions_value}")
     recovery_cycles = max(1, min(getattr(args, "recovery_cycles", 2), 3))
-    print(f"IMPROVE_RECOVERY_CYCLES={recovery_cycles}")
+    raw_prefix = "\n".join(
+        [
+            f"IMPROVE_CONTEXT_BOOTSTRAP_STATUS={bootstrap_status or 'none'}",
+            f"IMPROVE_CONTEXT_BOOTSTRAP_SUCCESS={','.join(bootstrap_success) or 'none'}",
+            f"IMPROVE_CONTEXT_BOOTSTRAP_FAILED={','.join(bootstrap_failed) or 'none'}",
+            f"IMPROVE_FOCUS={improve_focus}",
+            f"IMPROVE_ALLOW_ACTIONS={allow_actions_value}",
+            f"IMPROVE_RECOVERY_CYCLES={recovery_cycles}",
+        ]
+    )
 
     rc, autopilot_output = invoke_turn(args, visible, technical, send_history=False, capture_output=True)
     if rc != 0:
         return rc
     current_output = autopilot_output
     current_recommendation = parse_key_values(current_output).get("recommendation", "").strip()
-    last_final_output = current_output.strip()
+    last_final_output = join_sections(raw_prefix, current_output.strip())
 
     for cycle in range(1, recovery_cycles + 1):
         meta = parse_key_values(current_output)
         if not has_patch_guidance(meta):
-            if last_final_output.strip():
-                print(last_final_output.strip())
+            final_output = last_final_output.strip()
+            if final_output:
+                print(
+                    join_sections(
+                        summarize_improve_outcome(
+                            final_output,
+                            bootstrap_status=bootstrap_status,
+                            improve_focus=improve_focus,
+                            allow_actions_value=allow_actions_value,
+                            recovery_cycles=recovery_cycles,
+                        ),
+                        final_output,
+                    )
+                )
             return 0
 
-        print(f"IMPROVE_RECOVERY_CYCLE={cycle}")
         rc, recovery = run_patch_recovery_once(
             args,
             args.workspace,
@@ -1703,14 +1813,41 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
         if rc != 0:
             return rc
 
-        last_final_output = str(recovery.get("final_output", "") or "").strip()
+        last_final_output = join_sections(
+            raw_prefix,
+            f"IMPROVE_RECOVERY_CYCLE={cycle}",
+            str(recovery.get("final_output", "") or "").strip(),
+        )
         if not recovery.get("handled"):
-            if current_output.strip():
-                print(current_output.strip())
+            final_output = join_sections(raw_prefix, current_output.strip())
+            if final_output:
+                print(
+                    join_sections(
+                        summarize_improve_outcome(
+                            final_output,
+                            bootstrap_status=bootstrap_status,
+                            improve_focus=improve_focus,
+                            allow_actions_value=allow_actions_value,
+                            recovery_cycles=recovery_cycles,
+                        ),
+                        final_output,
+                    )
+                )
             return 0
         if not recovery.get("applied"):
             if last_final_output:
-                print(last_final_output)
+                print(
+                    join_sections(
+                        summarize_improve_outcome(
+                            last_final_output,
+                            bootstrap_status=bootstrap_status,
+                            improve_focus=improve_focus,
+                            allow_actions_value=allow_actions_value,
+                            recovery_cycles=recovery_cycles,
+                        ),
+                        last_final_output,
+                    )
+                )
             return 0
 
         verify_output = str(recovery.get("verify_output", "") or "")
@@ -1719,47 +1856,85 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
         current_output = verify_output
         if not has_patch_guidance(verify_meta):
             if last_final_output:
-                print(last_final_output)
+                print(
+                    join_sections(
+                        summarize_improve_outcome(
+                            last_final_output,
+                            bootstrap_status=bootstrap_status,
+                            improve_focus=improve_focus,
+                            allow_actions_value=allow_actions_value,
+                            recovery_cycles=recovery_cycles,
+                        ),
+                        last_final_output,
+                    )
+                )
             return 0
 
-    final_parts = []
-    if last_final_output:
-        final_parts.append(last_final_output)
-    final_parts.append("IMPROVE_RECOVERY_LIMIT_REACHED")
-    final_parts.append("reason=patch guidance persisted after the configured recovery cycles")
-    print("\n\n".join(final_parts))
+    final_output = join_sections(
+        last_final_output,
+        "IMPROVE_RECOVERY_LIMIT_REACHED",
+        "reason=patch guidance persisted after the configured recovery cycles",
+    )
+    print(
+        join_sections(
+            summarize_improve_outcome(
+                final_output,
+                bootstrap_status=bootstrap_status,
+                improve_focus=improve_focus,
+                allow_actions_value=allow_actions_value,
+                recovery_cycles=recovery_cycles,
+            ),
+            final_output,
+        )
+    )
     return 0
 
 
 def run_delegate_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     workflow = decision["workflow"]
-    print(f"DELEGATE_RUNTIME_PROFILE={decision['runtime_profile']}")
-    print(f"DELEGATE_WORKFLOW={workflow}")
-    print(f"DELEGATE_CONFIDENCE={decision['confidence']}")
-    print(f"DELEGATE_REASON={decision['reason']}")
-    print(f"DELEGATE_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
-    print(f"DELEGATE_CAPABILITY_ID={decision['capability_id']}")
-    print(f"DELEGATE_CAPABILITY_SCOPE={decision['capability_scope']}")
-    print(f"DELEGATE_CAPABILITY_SUMMARY={decision['capability_summary']}")
-    print(f"DELEGATE_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
-    print_execution_brief("DELEGATE", decision, args.workspace, args.task)
+    delegate_detail = join_sections(
+        "\n".join(
+            [
+                f"DELEGATE_RUNTIME_PROFILE={decision['runtime_profile']}",
+                f"DELEGATE_WORKFLOW={workflow}",
+                f"DELEGATE_CONFIDENCE={decision['confidence']}",
+                f"DELEGATE_REASON={decision['reason']}",
+                f"DELEGATE_GUARDRAIL_SUMMARY={decision['guardrail_summary']}",
+                f"DELEGATE_CAPABILITY_ID={decision['capability_id']}",
+                f"DELEGATE_CAPABILITY_SCOPE={decision['capability_scope']}",
+                f"DELEGATE_CAPABILITY_SUMMARY={decision['capability_summary']}",
+                f"DELEGATE_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}",
+            ]
+        ),
+        "DELEGATE_EXECUTION_BRIEF<<EOF\n" + execution_brief_block(decision, args.workspace, args.task) + "\nEOF",
+    )
 
     if workflow == "run":
         command_text = extract_run_command(args.task)
         if not command_text:
-            print("DELEGATE_BLOCKED\nreason=run workflow was selected but no explicit command was found")
+            print(
+                join_sections(
+                    summarize_delegate_outcome(decision, args.workspace, args.task, "run"),
+                    delegate_detail,
+                    "DELEGATE_BLOCKED\nreason=run workflow was selected but no explicit command was found",
+                )
+            )
             return 0
         command = shlex.split(command_text)
         run_args = argparse.Namespace(**vars(args))
         run_args.mode = "run"
         run_args.command = command
-        return build_and_invoke_mode(run_args)
+        rc, routed_output = capture_mode_output(run_args)
+        print(join_sections(summarize_delegate_outcome(decision, args.workspace, args.task, "run"), delegate_detail, routed_output))
+        return rc
 
     if workflow == "bootstrap-improve":
         bootstrap_args = argparse.Namespace(**vars(args))
         bootstrap_args.mode = "bootstrap-improve"
-        return build_and_invoke_mode(bootstrap_args)
+        rc, routed_output = capture_mode_output(bootstrap_args)
+        print(join_sections(summarize_delegate_outcome(decision, args.workspace, args.task, "bootstrap-improve"), delegate_detail, routed_output))
+        return rc
 
     routed = argparse.Namespace(**vars(args))
     if workflow == "action":
@@ -1774,7 +1949,9 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
         routed.mode = workflow
     routed.mentor_visible_context = visible_brief_block(decision, args.workspace, args.task)
     routed.mentor_technical_context = "MENTOR_EXECUTION_BRIEF_COMPACT\n" + compact_execution_brief_block(decision, args.workspace, args.task)
-    return build_and_invoke_mode(routed)
+    rc, routed_output = capture_mode_output(routed)
+    print(join_sections(summarize_delegate_outcome(decision, args.workspace, args.task, routed.mode), delegate_detail, routed_output))
+    return rc
 
 
 def run_profile_sequence(args: argparse.Namespace) -> int:

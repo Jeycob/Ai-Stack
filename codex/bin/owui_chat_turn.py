@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-follow-scheduled", action="store_true", help="Do not poll scheduled admin jobs to completion")
     parser.add_argument("--no-live-status", action="store_true", help="Do not maintain a visible running assistant message")
     parser.add_argument("--status-interval", type=float, default=8.0, help="Seconds between visible running-status updates")
+    parser.add_argument(
+        "--stateless",
+        action="store_true",
+        default=os.getenv("OWUI_STATELESS", "").strip().lower() in {"1", "true", "yes", "on"},
+        help="Skip visible chat GET/POST mutations and call only /api/chat/completions.",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -473,9 +479,34 @@ def follow_scheduled_admin_job(
     return last_text
 
 
+def run_stateless_completion(args: argparse.Namespace, technical_prompt: str) -> int:
+    payload = {"model": args.model, "messages": [{"role": "user", "content": technical_prompt}], "stream": False}
+    completion_status, completion = http_request(args, "POST", "/api/chat/completions", payload, allow_error=True)
+    text = response_text(completion)
+    if not args.no_follow_scheduled:
+        follow = parse_scheduled_followup(text)
+        if follow:
+            try:
+                text = follow_scheduled_admin_job(args, follow[0], None, time.monotonic(), text)
+                completion_status = 200
+            except Exception as exc:
+                text = text.rstrip() + f"\n\nFOLLOW_JOB_FAILED {type(exc).__name__}: {exc}"
+
+    if args.response_json_out:
+        Path(args.response_json_out).write_text(json.dumps(completion, ensure_ascii=False, indent=2), encoding="utf-8")
+    if completion_status >= 400 and not is_expected_admin_detail(completion):
+        text = f"OpenWebUI/model call failed with HTTP {completion_status}:\n{text}"
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+    print(text)
+    return 0 if completion_status < 400 or is_expected_admin_detail(completion) else 22
+
+
 def main() -> int:
     args = parse_args()
     technical_prompt = read_prompt(args)
+    if args.stateless:
+        return run_stateless_completion(args, technical_prompt)
     visible_prompt = read_visible_prompt(args, technical_prompt)
     turn_key = effective_turn_key(args, visible_prompt, technical_prompt)
     status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
