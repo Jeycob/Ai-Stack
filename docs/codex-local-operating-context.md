@@ -70,7 +70,8 @@ lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
 
 `Codex Auto Tools Filter` ma rozpoznavat prirozene intenty typu "pullni
 ai-stack a nasad", "ukaz deploy status", preflight push dotazy jako
-"je to ready na push?" nebo "co blokuje push", jednoduche publish zadani jako
+"je to ready na push?" nebo "co blokuje push", release-prep dotazy jako
+"zkontroluj release readiness" nebo "co blokuje release", jednoduche publish zadani jako
 "pushni zmeny do GitHubu" nebo "commitni a pushni", bootstrap zadani jako
 "vytvor nove repository Test2 a vygeneruj ssh klic", "zaloz projekt Test2 na GitHubu" nebo
 "priprav workspace Test2 s deploy key", bezne repo kontroly typu "zkontroluj git status",
@@ -81,8 +82,8 @@ workspace-run, workspace-action, workspace-autopilot, create-repo recipe a pozde
 profile-based schopnosti.
 Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
-Zaroven ma umet rozlisit `push-check`, jednoduchy audited push a sirsi release automation
-scope. Pro "je to ready na push?" je spravna capability `GATEWAY_ADMIN_GIT_STATUS`; pro "pushni zmeny" je spravna capability `GATEWAY_ADMIN_GIT_PUSH`; pro
+Zaroven ma umet rozlisit `release-prep`, `push-check`, jednoduchy audited push a sirsi release automation
+scope. Pro "zkontroluj release readiness" je spravny helper `mentor_codex_local.py release-prep`; pro "je to ready na push?" je spravna capability `GATEWAY_ADMIN_GIT_STATUS`; pro "pushni zmeny" je spravna capability `GATEWAY_ADMIN_GIT_PUSH`; pro
 "vytvor release", "publish package" nebo GitHub Actions release workflow ma
 radsi vratit mentor `boundary` vysvetleni a roadmap hint, nez predstirat, ze
 to je jen dalsi obycejny push.

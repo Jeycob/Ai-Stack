@@ -128,6 +128,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_dispatch_command(text)
         if not command:
+            command = self._natural_workspace_release_prep_command(text)
+        if not command:
             command = self._natural_workspace_release_boundary_command(text)
         if not command:
             command = self._natural_capability_roadmap_command(text)
@@ -831,6 +833,46 @@ class Filter:
         if not task:
             task = "Vytvoř release a pushni to na GitHub"
         return self._boundary_helper_command(workspace, task)
+
+    def _natural_workspace_release_prep_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        if not any(
+            token in lower
+            for token in (
+                "release readiness",
+                "release ready",
+                "priprav release",
+                "připrav release",
+                "zkontroluj release",
+                "co blokuje release",
+                "what blocks release",
+                "prepare release",
+                "release prep",
+            )
+        ):
+            return None
+        if any(
+            token in lower
+            for token in (
+                "vytvor release",
+                "vytvoř release",
+                "create release",
+                "publish package",
+                "github actions",
+                "tag release",
+            )
+        ):
+            return None
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "release-prep",
+            workspace,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 240 -- {shlex.join(command)}"
 
     def _mentions_ai_stack(self, text: str) -> bool:
         return re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*ai-stack\s*$", text) is not None or "ai-stack" in text.lower()

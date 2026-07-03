@@ -42,6 +42,7 @@ UNSAFE_PATCH_SEGMENTS = (
 WORKFLOW_PRIORITY = {
     "improve": 95,
     "deploy": 90,
+    "release-prep": 89,
     "push-check": 89,
     "push": 88,
     "autopilot": 85,
@@ -156,6 +157,14 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
     if args.mode == "deploy-status":
         visible = "repo: ai-stack\nUkaž stručný stav posledního nasazení."
         technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_DEPLOY_STATUS"
+        return visible, technical
+
+    if args.mode == "release-prep":
+        visible = (
+            f"repo: {args.workspace}\n"
+            "Zkontroluj release readiness, shrň blokery a navrhni další krok před publikací. Nic neměň."
+        )
+        technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_REPO_GUARD {args.workspace} main"
         return visible, technical
 
     if args.mode == "push-check":
@@ -456,6 +465,39 @@ def classify_task(task: str) -> dict[str, str]:
             "Stack restart is broader than repo-safe editing, but we already have a named deploy flow with preflight, restart, and smoke checks.",
             "stack_deploy",
             "If deployment later needs host package changes or wider infra orchestration, add a dedicated stack-runtime capability instead of widening deploy blindly.",
+        )
+    if any(
+        token in lower
+        for token in (
+            "release readiness",
+            "release ready",
+            "priprav release",
+            "připrav release",
+            "zkontroluj release",
+            "co blokuje release",
+            "what blocks release",
+            "prepare release",
+            "release prep",
+        )
+    ) and not any(
+        token in lower
+        for token in (
+            "vytvor release",
+            "vytvoř release",
+            "create release",
+            "publish package",
+            "github actions",
+            "tag release",
+        )
+    ):
+        return result(
+            "capability",
+            "release-prep",
+            "The task asks for release readiness or preparation, which fits a read-only preflight workflow before any remote mutation.",
+            "high",
+            "Release preparation should inspect status, remote, recent commits, and workspace metadata before escalating into tags or release publication.",
+            "",
+            "If release-prep finds only remote publication work left, switch to the GitHub/release capability boundary instead of pretending a full release already exists.",
         )
     if any(
         token in lower
@@ -1176,6 +1218,8 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
         return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
     if workflow == "deploy":
         return "python3 codex/bin/mentor_codex_local.py deploy"
+    if workflow == "release-prep":
+        return f"python3 codex/bin/mentor_codex_local.py release-prep {workspace}"
     if workflow == "push-check":
         return "python3 codex/bin/mentor_codex_local.py push-check"
     if workflow == "push":
@@ -1212,6 +1256,8 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
             return f"repo: ai-stack\nVytvoř nové repository {repo_name}{suffix}"
     if workflow == "deploy":
         return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
+    if workflow == "release-prep":
+        return f"repo: {workspace}\nZkontroluj release readiness, shrň blokery a navrhni další krok před publikací."
     if workflow == "push-check":
         return "repo: ai-stack\nZkontroluj, jestli jsou změny připravené na push, a stručně řekni co případně blokuje publish."
     if workflow == "push":
@@ -1259,6 +1305,9 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
     elif workflow == "deploy":
         lines.append("goal=run the audited ai-stack deploy flow with pull, restart, and smoke checks")
         lines.append("guardrail=prefer named deploy flow over ad-hoc docker or root commands")
+    elif workflow == "release-prep":
+        lines.append("goal=inspect release readiness from repo status, remotes, recent commits, and workspace metadata before any publish step")
+        lines.append("guardrail=stay read-only and escalate to the release capability boundary only if publication or tag mutation is the remaining step")
     elif workflow == "push-check":
         lines.append("goal=inspect ai-stack git safety before publish and summarize blocked or allowed paths")
         lines.append("guardrail=stay read-only and use the named git-status safety check before any remote mutation")
@@ -1468,6 +1517,11 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
         steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
         return steps
 
+    if workflow == "release-prep":
+        steps.append(("release-prep", f"python3 codex/bin/mentor_codex_local.py release-prep {workspace}"))
+        steps.append(("if-publish-remains", "if only remote publication remains, review the GitHub/release capability boundary"))
+        return steps
+
     if workflow == "push-check":
         steps.append(("push-check", "python3 codex/bin/mentor_codex_local.py push-check"))
         steps.append(("if-clean", "if only allowed source paths remain, continue with python3 codex/bin/mentor_codex_local.py push"))
@@ -1617,6 +1671,77 @@ def run_next_helper_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_release_prep_sequence(args: argparse.Namespace) -> int:
+    repo_guard_visible = (
+        f"repo: {args.workspace}\n"
+        "Nejdřív udělej read-only repo guard pro release přípravu. Nic neměň."
+    )
+    repo_guard_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_REPO_GUARD {args.workspace} main"
+
+    scan_visible = (
+        f"repo: {args.workspace}\n"
+        "Teď si technicky zmapuj workspace kvůli release přípravě. Nic nespouštěj ani neměň."
+    )
+    scan_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_SCAN {args.workspace}"
+
+    remote_visible = (
+        f"repo: {args.workspace}\n"
+        "Zkontroluj git remote konfiguraci kvůli release přípravě. Jen read-only výstup."
+    )
+    remote_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_RUN_WORKSPACE {args.workspace} --timeout 120 -- git remote -v"
+
+    log_visible = (
+        f"repo: {args.workspace}\n"
+        "Zkontroluj poslední commity kvůli release přípravě. Jen read-only výstup."
+    )
+    log_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_RUN_WORKSPACE {args.workspace} --timeout 120 -- git log -5 --oneline"
+
+    summary_visible = (
+        f"repo: {args.workspace}\n"
+        "Na základě celé dosavadní historie zhodnoť release readiness jako senior engineer. "
+        "Řekni, jestli je workspace připravený na další release krok, co ho blokuje a jaký je nejlepší další auditovaný krok. "
+        "Nic neměň."
+    )
+    summary_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        "Na základě celé dosavadní historie proveď release-prep verdict. "
+        "Odpověz stručně a strukturovaně v těchto řádcích:\n"
+        "RELEASE_READY: <yes-or-no>\n"
+        "BLOCKERS: <one sentence or none>\n"
+        "NEXT_STEP: <one audited helper or capability step>\n"
+        "NOTES: <short sentence>"
+    )
+
+    if args.dry_run:
+        for visible, technical in [
+            (repo_guard_visible, repo_guard_technical),
+            (scan_visible, scan_technical),
+            (remote_visible, remote_technical),
+            (log_visible, log_technical),
+            (summary_visible, summary_technical),
+        ]:
+            print_prompt_preview(args, *apply_mentor_context(args, visible, technical))
+            print()
+        return 0
+
+    for visible, technical, send_history in [
+        (repo_guard_visible, repo_guard_technical, False),
+        (scan_visible, scan_technical, True),
+        (remote_visible, remote_technical, True),
+        (log_visible, log_technical, True),
+    ]:
+        rc, _ = invoke_turn(args, visible, technical, send_history=send_history)
+        if rc != 0:
+            return rc
+
+    rc, verdict = invoke_turn(args, summary_visible, summary_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+    if verdict.strip():
+        print(verdict.strip())
+    return 0
+
+
 def run_boundary_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"MENTOR_BOUNDARY_WORKSPACE={args.workspace}")
@@ -1654,6 +1779,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return rc
     if args.mode == "autopilot":
         return run_autopilot_sequence(args)
+    if args.mode == "release-prep":
+        return run_release_prep_sequence(args)
     if args.mode == "push-check":
         visible, technical = build_prompts(args)
         rc, _ = invoke_turn(args, visible, technical)
@@ -1739,6 +1866,11 @@ def parse_args() -> argparse.Namespace:
     deploy_status = sub.add_parser("deploy-status", help="Ask codex-local for deploy status")
     deploy_status.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     deploy_status.set_defaults()
+
+    release_prep = sub.add_parser("release-prep", help="Ask codex-local for a read-only release readiness preflight over a workspace")
+    release_prep.add_argument("workspace")
+    release_prep.add_argument("--timeout", type=int, default=120)
+    release_prep.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
     push_check = sub.add_parser("push-check", help="Ask codex-local for an audited ai-stack pre-push readiness summary")
     push_check.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
