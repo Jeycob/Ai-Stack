@@ -111,6 +111,10 @@ class Filter:
             return self._direct_response(body, self._gateway_smoke(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CHECK_STACK"):
             return self._direct_response(body, self._check_ai_stack(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WEB_ANSWER"):
+            return self._direct_response(body, self._web_answer_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WEB_FETCH"):
+            return self._direct_response(body, self._web_fetch_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
             return self._direct_response(body, self._workspace_action_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT"):
@@ -1433,6 +1437,76 @@ class Filter:
             + self._details("git_status", str(result.get("git_status", "")))
             + "\n"
             + self._details("log_tail", self._trim(str(result.get("tail", "")), 24000))
+        ).rstrip()
+
+    def _parse_web_command(self, text: str, command: str) -> tuple[str, dict, str]:
+        match = re.search(rf"(?im)^\s*{re.escape(command)}\s+(.+?)\s*$", text)
+        if not match:
+            raise ValueError(f"Usage: {command} <url> [--max-bytes N] [--timeout N] [--text-limit N] [-- question]")
+        parts = shlex.split(match.group(1))
+        if not parts:
+            raise ValueError(f"Usage: {command} <url> [--max-bytes N] [--timeout N] [--text-limit N] [-- question]")
+
+        url = parts.pop(0)
+        payload: dict[str, object] = {"url": url}
+        question_parts: list[str] = []
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            if part == "--":
+                question_parts = parts[i + 1 :]
+                break
+            if part in {"--max-bytes", "--timeout", "--text-limit"}:
+                if i + 1 >= len(parts):
+                    raise ValueError(f"{part} requires a value")
+                key = part[2:].replace("-", "_")
+                payload[key] = int(parts[i + 1])
+                i += 2
+                continue
+            if command == "GATEWAY_ADMIN_WEB_ANSWER":
+                question_parts = parts[i:]
+                break
+            raise ValueError(f"Unknown {command} option: {part}")
+        question = " ".join(question_parts).strip()
+        return url, payload, question
+
+    def _web_fetch_admin(self, text: str) -> str:
+        url, payload, _ = self._parse_web_command(text, "GATEWAY_ADMIN_WEB_FETCH")
+        result = self._gateway_admin_request("/v1/admin/web/fetch", payload, timeout=90)
+        status = "WEB_FETCH_OK" if result.get("ok") else "WEB_FETCH_FAILED"
+        return (
+            f"{status}\n"
+            f"url={url}\n"
+            f"final_url={result.get('final_url')}\n"
+            f"status={result.get('status')}\n"
+            f"content_type={result.get('content_type')}\n"
+            f"bytes_read={result.get('bytes_read')}\n"
+            f"truncated={result.get('truncated')}\n"
+            f"text_truncated={result.get('text_truncated')}\n"
+            f"title={result.get('title') or ''}"
+            + self._details("text_preview", self._trim(str(result.get("text", "")), 12000))
+        ).rstrip()
+
+    def _web_answer_admin(self, text: str) -> str:
+        url, payload, question = self._parse_web_command(text, "GATEWAY_ADMIN_WEB_ANSWER")
+        if not question:
+            raise ValueError("Usage: GATEWAY_ADMIN_WEB_ANSWER <url> [--max-bytes N] [--timeout N] -- <question>")
+        payload["question"] = question
+        result = self._gateway_admin_request("/v1/admin/web/answer", payload, timeout=240)
+        status = "WEB_ANSWER_OK" if result.get("ok") else "WEB_ANSWER_FAILED"
+        return (
+            f"{status}\n"
+            f"url={url}\n"
+            f"final_url={result.get('final_url')}\n"
+            f"status={result.get('status')}\n"
+            f"content_type={result.get('content_type')}\n"
+            f"bytes_read={result.get('bytes_read')}\n"
+            f"truncated={result.get('truncated')}\n"
+            f"text_truncated={result.get('text_truncated')}\n"
+            f"title={result.get('title') or ''}\n"
+            "answer:\n"
+            f"{str(result.get('answer', '')).strip()}"
+            + self._details("source_preview", self._trim(str(result.get("text", "")), 8000))
         ).rstrip()
 
     def _gateway_admin_request(self, path: str, payload: dict, timeout: int = 90) -> dict:

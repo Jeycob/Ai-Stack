@@ -235,6 +235,8 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_APPLY_NOW`: aplikuje prilozeny unified diff na whitelisted soubory a provede validaci Python souboru.
 - `GATEWAY_ADMIN_CHECK_STACK [workspace] [model]`: spusti celkovy healthcheck stacku a gateway smoke test.
 - `GATEWAY_ADMIN_SMOKE [workspace]`: spusti gateway smoke test.
+- `GATEWAY_ADMIN_WEB_FETCH <url> [--max-bytes N] [--timeout N]`: stahne verejny HTTP/HTTPS zdroj pres gateway, bez cookies/secrets a s blokovanim lokalnich, privatnich a internich adres. Z HTML vraci cisty textovy nahled.
+- `GATEWAY_ADMIN_WEB_ANSWER <url> [--max-bytes N] [--timeout N] -- <dotaz>`: nejdriv provede guarded web fetch a potom necha lokalni model odpovedet pouze z nacteneho zdroje. Pouzivat pro prirozene dotazy typu `kdo ma dneska svatek? stahni mi to z seznam.cz`.
 - `GATEWAY_ADMIN_GIT_PUSH <branch> <message>`: commitne a pushne pouze allowed cesty.
 - `GATEWAY_ADMIN_SSH_KEYGEN`: vygeneruje SSH klic do ignorovane runtime cesty.
 - `GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--github] [--github-owner OWNER] [--private|--public] [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]`: vytvori lokalni repo pod `/mnt/c/Repositories`, inicializuje Git, prida README, vygeneruje ignorovany deploy SSH klic, vrati public key a zaregistruje workspace. S `--github` pouzije `GITHUB_TOKEN`, `GITHUB_TOKEN_FILE`, nebo ignorovany `codex/state/github-api.token`, zalozi GitHub repo, prida deploy key a nastavi `origin`. Bez tokenu vraci `GITHUB_TOKEN_MISSING`.
@@ -259,6 +261,8 @@ auditovanych capabilities. Prakticky to znamena:
 
 - pouzivat `workspace-run` pro read-only a explicitni prikazy uvnitr
   registrovaneho workspace,
+- pouzivat `web-answer` pro verejne webove dotazy misto omluvy, ze snapshot
+  chat nema pristup k internetu,
 - pouzivat `workspace-action` pro install/test/build/lint/verify/smoke,
 - pro vicekrokovou praci pouzivat `mentor_codex_local.py audit` nebo
   `mentor_codex_local.py autopilot`,

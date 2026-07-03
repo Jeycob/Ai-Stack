@@ -152,6 +152,8 @@ class Filter:
         if not command:
             command = self._natural_capability_roadmap_command(text)
         if not command:
+            command = self._natural_web_command(text)
+        if not command:
             command = self._natural_workspace_run_command(text)
         if not command:
             command = self._natural_workspace_common_command(text)
@@ -1079,6 +1081,95 @@ class Filter:
         ]
         return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 300 -- {shlex.join(command)}"
 
+    def _extract_public_url(self, text: str) -> str | None:
+        match = re.search(r"https?://[^\s<>'\")]+", text)
+        if match:
+            return match.group(0).rstrip(".,;:!?)]}")
+
+        lower = text.lower()
+        known_domains = {
+            "seznam.cz": "https://www.seznam.cz/",
+            "novinky.cz": "https://www.novinky.cz/",
+            "idnes.cz": "https://www.idnes.cz/",
+            "github.com": "https://github.com/",
+            "example.com": "https://example.com/",
+        }
+        for domain, url in known_domains.items():
+            if domain in lower:
+                return url
+
+        domain_match = re.search(r"\b([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(/[^\s<>'\")]+)?", text)
+        if domain_match:
+            domain = domain_match.group(1).lower()
+            if domain in {"localhost", "host.docker.internal"} or domain.endswith((".local", ".localhost", ".internal")):
+                return None
+            suffix = domain_match.group(2) or "/"
+            return "https://" + domain + suffix.rstrip(".,;:!?)]}")
+        return None
+
+    def _looks_like_web_intent(self, text: str) -> bool:
+        lower = text.lower()
+        cues = (
+            "http://",
+            "https://",
+            "stahni",
+            "stáhni",
+            "nacti",
+            "načti",
+            "fetch",
+            "download",
+            "precti",
+            "přečti",
+            "podivej se",
+            "podívej se",
+            "z webu",
+            "z internetu",
+            "na webu",
+            "internet",
+            "url",
+            "seznam.cz",
+        )
+        return any(cue in lower for cue in cues)
+
+    def _looks_like_web_question(self, text: str) -> bool:
+        lower = text.lower()
+        question_cues = (
+            "?",
+            "kdo ",
+            "co ",
+            "jaky ",
+            "jaký ",
+            "jaka ",
+            "jaká ",
+            "jake ",
+            "jaké ",
+            "kdy ",
+            "kde ",
+            "proc ",
+            "proč ",
+            "who ",
+            "what ",
+            "when ",
+            "where ",
+            "why ",
+            "dneska",
+            "dnes ",
+            "svatek",
+            "svátek",
+        )
+        return any(cue in lower for cue in question_cues)
+
+    def _natural_web_command(self, text: str) -> str | None:
+        if not self._looks_like_web_intent(text):
+            return None
+        url = self._extract_public_url(text)
+        if not url:
+            return None
+        if self._looks_like_web_question(text):
+            question = " ".join(self._non_repo_lines(text)).strip() or text.strip()
+            return f"GATEWAY_ADMIN_WEB_ANSWER {shlex.quote(url)} -- {shlex.quote(question[:1200])}"
+        return f"GATEWAY_ADMIN_WEB_FETCH {shlex.quote(url)} --max-bytes 300000"
+
     def _mentions_ai_stack(self, text: str) -> bool:
         return re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*ai-stack\s*$", text) is not None or "ai-stack" in text.lower()
 
@@ -1193,10 +1284,20 @@ class Filter:
             "doinstaluj",
             "nainstaluj",
             "install",
+            "stahni co je treba",
+            "stáhni co je třeba",
+            "stahnout co je treba",
+            "stáhnout co je třeba",
+            "stahnout co potrebuje",
+            "stáhnout co potřebuje",
             "zavislost",
             "závislost",
             "napis kod",
             "napiš kód",
+            "vytvor kod",
+            "vytvoř kód",
+            "vytvorit kod",
+            "vytvořit kód",
             "napis zaklad",
             "napiš základ",
             "zaklad appky",
@@ -1218,6 +1319,10 @@ class Filter:
             "rozběhni",
             "spust to",
             "spusť to",
+            "pust to",
+            "pusť to",
+            "pustit",
+            "pusit",
             "build",
             "testy",
             "dotahni",

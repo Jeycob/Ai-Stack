@@ -145,6 +145,19 @@ def parse_args() -> argparse.Namespace:
     add_common_options(deploy, defaults=False)
     deploy.add_argument("--branch", default="main")
     deploy.add_argument("--force", action="store_true")
+
+    web_fetch = sub.add_parser("web-fetch")
+    add_common_options(web_fetch, defaults=False)
+    web_fetch.add_argument("url")
+    web_fetch.add_argument("--max-bytes", type=int, default=300_000)
+    web_fetch.add_argument("--timeout-seconds", type=int, default=20)
+
+    web_answer = sub.add_parser("web-answer")
+    add_common_options(web_answer, defaults=False)
+    web_answer.add_argument("url")
+    web_answer.add_argument("question", nargs="+")
+    web_answer.add_argument("--max-bytes", type=int, default=300_000)
+    web_answer.add_argument("--timeout-seconds", type=int, default=20)
     return parser.parse_args()
 
 
@@ -188,6 +201,23 @@ def main() -> int:
         elif args.command == "deploy-status":
             path = "/v1/admin/stack/deploy/status"
             payload = {}
+            result = request_preview(args, path, payload, "POST") if args.dry_run else admin_request(args, path, payload)
+        elif args.command == "web-fetch":
+            path = "/v1/admin/web/fetch"
+            payload = {
+                "url": args.url,
+                "max_bytes": args.max_bytes,
+                "timeout": args.timeout_seconds,
+            }
+            result = request_preview(args, path, payload, "POST") if args.dry_run else admin_request(args, path, payload)
+        elif args.command == "web-answer":
+            path = "/v1/admin/web/answer"
+            payload = {
+                "url": args.url,
+                "question": " ".join(args.question),
+                "max_bytes": args.max_bytes,
+                "timeout": args.timeout_seconds,
+            }
             result = request_preview(args, path, payload, "POST") if args.dry_run else admin_request(args, path, payload)
         else:
             raise GatewayAdminError(f"Unknown command: {args.command}")

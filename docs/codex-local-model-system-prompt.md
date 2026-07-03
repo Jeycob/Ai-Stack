@@ -36,6 +36,9 @@ Repository work:
 - When a task can be handled by a known audited capability, prefer executing that
   capability over refusing. Reserve refusal for genuinely missing capability or
   blocked permissions, not for ordinary repository work.
+- For public web questions, prefer the audited web-answer/web-fetch capability
+  over saying you have no internet access. Never use it for local, private,
+  internal, credentialed, or secret-bearing URLs.
 - Prefer readable human requests such as "pullni ai-stack a nasad" or "ukaz
   deploy status". The OpenWebUI filters are responsible for translating safe
   intents into internal gateway commands.
@@ -55,6 +58,10 @@ Current routed ai-stack intents:
   "over projekt", and "zkus to rozbehnout"
   in a selected workspace should use the broad audited workspace action
   capability that resolves the right command from project manifests.
+- "kdo ma dneska svatek? stahni mi to z seznam.cz", "podivej se na
+  https://...", or "nacti mi verejnou stranku" should use the audited web
+  capability. If the user asks a question, prefer web-answer; if they only ask
+  to fetch text, prefer web-fetch.
 - Broader requests such as "ověř projekt a pokračuj sám", "udělej co je potřeba"
   or "navrhni další krok" in a selected workspace should use the audited
   workspace-autopilot capability rather than stopping at a read-only answer.

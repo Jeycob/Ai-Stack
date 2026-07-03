@@ -5,8 +5,9 @@
 # gateway-scheduled-chat-patch: ok
 # gateway-chat-no-error-patch: ok
 # gateway-chat-fast-ack-patch: ok
-import json, os, re, subprocess, sys, time, uuid, urllib.error, urllib.request
+import html, ipaddress, json, os, re, socket, subprocess, sys, time, uuid, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from html.parser import HTMLParser
 from pathlib import Path
 
 BIN_DIR = Path(__file__).resolve().parents[1] / "bin"
@@ -259,6 +260,237 @@ def admin_ok(handler):
     if auth == f"Bearer {ADMIN_TOKEN}":
         return True
     return handler.headers.get("X-Codex-Admin-Token", "") == ADMIN_TOKEN
+
+WEB_FETCH_DEFAULT_MAX_BYTES = 300_000
+WEB_FETCH_HARD_MAX_BYTES = 2_000_000
+WEB_FETCH_DEFAULT_TIMEOUT = 20
+WEB_FETCH_HARD_TIMEOUT = 60
+WEB_FETCH_TEXT_LIMIT = 30_000
+
+BLOCKED_WEB_HOSTS = {
+    "localhost",
+    "localhost.localdomain",
+    "host.docker.internal",
+    "docker.internal",
+}
+
+
+class HTMLTextExtractor(HTMLParser):
+    skip_tags = {"script", "style", "noscript", "svg", "canvas"}
+    break_tags = {
+        "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt", "footer",
+        "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav",
+        "ol", "p", "pre", "section", "table", "td", "th", "tr", "ul",
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag in self.skip_tags:
+            self.skip_depth += 1
+            return
+        if self.skip_depth:
+            return
+        if tag in self.break_tags:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in self.skip_tags and self.skip_depth:
+            self.skip_depth -= 1
+            return
+        if self.skip_depth:
+            return
+        if tag in self.break_tags:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if self.skip_depth:
+            return
+        text = html.unescape(data or "").strip()
+        if text:
+            self.parts.append(text)
+
+    def text(self):
+        raw = " ".join(self.parts)
+        raw = re.sub(r"[ \t\r\f\v]+", " ", raw)
+        raw = re.sub(r" *\n *", "\n", raw)
+        raw = re.sub(r"\n{3,}", "\n\n", raw)
+        lines = [line.strip() for line in raw.splitlines()]
+        return "\n".join(line for line in lines if line).strip()
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        assert_public_web_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def clamp_int(value, default, lower, upper):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(lower, min(upper, number))
+
+
+def blocked_public_ip(ip):
+    return (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    )
+
+
+def assert_public_web_url(url):
+    parsed = urllib.parse.urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("WEB_FETCH_UNSAFE_URL: only http and https are allowed")
+    if parsed.username or parsed.password:
+        raise ValueError("WEB_FETCH_UNSAFE_URL: credentials in URL are not allowed")
+    host = (parsed.hostname or "").strip(".").lower()
+    if not host:
+        raise ValueError("WEB_FETCH_UNSAFE_URL: hostname is required")
+    if host in BLOCKED_WEB_HOSTS or host.endswith((".local", ".localhost", ".internal")):
+        raise ValueError("WEB_FETCH_BLOCKED_HOST: local/internal hostnames are not allowed")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"WEB_FETCH_DNS_FAILED: {host}: {exc}") from exc
+    if not infos:
+        raise ValueError(f"WEB_FETCH_DNS_FAILED: {host}: no addresses")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if blocked_public_ip(ip):
+            raise ValueError(f"WEB_FETCH_BLOCKED_HOST: {host} resolved to non-public address {ip}")
+    return parsed
+
+
+def html_title(source):
+    match = re.search(r"(?is)<title[^>]*>(.*?)</title>", source or "")
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", html.unescape(match.group(1))).strip()
+
+
+def html_to_text(source):
+    parser = HTMLTextExtractor()
+    try:
+        parser.feed(source)
+        parser.close()
+        text = parser.text()
+    except Exception:
+        text = re.sub(r"(?is)<(script|style|noscript|svg|canvas)\b.*?</\1>", " ", source)
+        text = re.sub(r"(?s)<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+    return text
+
+
+def decode_web_text(raw, content_type):
+    charset = "utf-8"
+    ctype = content_type or ""
+    match = re.search(r"(?i)\bcharset=([A-Za-z0-9_.:-]+)", ctype)
+    if match:
+        charset = match.group(1)
+    decoded = raw.decode(charset, "replace")
+    is_html = "html" in ctype.lower() or "<html" in decoded[:2048].lower()
+    if is_html:
+        return html_to_text(decoded), html_title(decoded)
+    if re.search(r"(?i)\b(text/|json|xml|javascript|yaml|csv|markdown)", ctype):
+        return decoded.strip(), ""
+    return "", ""
+
+
+def admin_web_fetch(payload):
+    url = str(payload.get("url") or "").strip()
+    method = str(payload.get("method") or "GET").strip().upper()
+    if method not in {"GET", "HEAD"}:
+        raise ValueError("WEB_FETCH_UNSAFE_METHOD: only GET and HEAD are allowed")
+    max_bytes = clamp_int(payload.get("max_bytes"), WEB_FETCH_DEFAULT_MAX_BYTES, 1_000, WEB_FETCH_HARD_MAX_BYTES)
+    timeout = clamp_int(payload.get("timeout"), WEB_FETCH_DEFAULT_TIMEOUT, 1, WEB_FETCH_HARD_TIMEOUT)
+    text_limit = clamp_int(payload.get("text_limit"), WEB_FETCH_TEXT_LIMIT, 1_000, WEB_FETCH_TEXT_LIMIT)
+
+    assert_public_web_url(url)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; CodexLocalGateway/1.0; +https://github.com/Jeycob/Ai-Stack)",
+        "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.2",
+        "Accept-Language": "cs,en;q=0.8",
+    }
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirectHandler)
+    req = urllib.request.Request(url, headers=headers, method=method)
+    with opener.open(req, timeout=timeout) as resp:
+        final_url = resp.geturl()
+        assert_public_web_url(final_url)
+        status = getattr(resp, "status", resp.getcode())
+        content_type = resp.headers.get("Content-Type", "")
+        raw = b"" if method == "HEAD" else resp.read(max_bytes + 1)
+
+    truncated = len(raw) > max_bytes
+    if truncated:
+        raw = raw[:max_bytes]
+    text, title = decode_web_text(raw, content_type)
+    text_truncated = len(text) > text_limit
+    if text_truncated:
+        text = text[:text_limit].rstrip()
+    return {
+        "ok": True,
+        "url": url,
+        "final_url": final_url,
+        "method": method,
+        "status": status,
+        "content_type": content_type,
+        "bytes_read": len(raw),
+        "truncated": truncated,
+        "title": title,
+        "text": text,
+        "text_truncated": text_truncated,
+    }
+
+
+def admin_web_answer(payload):
+    question = str(payload.get("question") or "").strip()
+    if not question:
+        raise ValueError("WEB_ANSWER_QUESTION_REQUIRED")
+    fetch = admin_web_fetch(payload)
+    source = fetch.get("text") or ""
+    if not source.strip():
+        answer = "Načtený veřejný zdroj neobsahoval čitelný text pro zodpovězení dotazu."
+    else:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Odpovídej česky. Použij pouze přiložený veřejně stažený text ze zdroje. "
+                    "Když odpověď ve zdroji není, řekni to stručně a nehádej."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Dotaz:\n{question}\n\n"
+                    f"Zdroj: {fetch.get('final_url') or fetch.get('url')}\n"
+                    f"Název: {fetch.get('title') or '(bez titulku)'}\n\n"
+                    f"Text zdroje:\n{source[:18_000]}"
+                ),
+            },
+        ]
+        response = ollama_chat(MODELS["codex-local-plan-qwen14b"]["model"], messages, timeout=180)
+        answer = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if not answer:
+            answer = "Model nevrátil odpověď nad načteným zdrojem."
+    result = dict(fetch)
+    result["question"] = question
+    result["answer"] = answer
+    return result
 
 def admin_add_workspace(payload):
     name = str(payload.get("name") or "").strip()
@@ -1276,6 +1508,18 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if self.path == "/v1/admin/web/fetch":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_web_fetch(payload))
+            if self.path == "/v1/admin/web/answer":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_web_answer(payload))
             if self.path == "/v1/admin/workspace/add":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)

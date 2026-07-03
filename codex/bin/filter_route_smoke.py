@@ -66,6 +66,18 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         prompt="repo: ai-stack\nPullni ai-stack a nasad.",
         expected=("GATEWAY_ADMIN_DEPLOY_STACK",),
     ),
+    RouteScenario(
+        name="web-answer-seznam-svatek",
+        prompt="kdo ma dneska svatek? stahni mi to z seznam.cz",
+        expected=("GATEWAY_ADMIN_WEB_ANSWER https://www.seznam.cz/", "kdo ma dneska svatek"),
+        unexpected=("nemám přístup", "read-only"),
+    ),
+    RouteScenario(
+        name="web-fetch-url",
+        prompt="Podivej se na https://example.com a stahni mi text.",
+        expected=("GATEWAY_ADMIN_WEB_FETCH https://example.com", "--max-bytes 300000"),
+        unexpected=("GATEWAY_ADMIN_WEB_ANSWER",),
+    ),
 )
 
 
