@@ -1995,40 +1995,51 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
 
 
 def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -> str:
+    def helper(mode: str, *parts: str, nested: bool = True) -> str:
+        cmd = ["python3", "codex/bin/mentor_codex_local.py", mode]
+        if nested:
+            cmd.append("--stateless-turns")
+        cmd.extend(parts)
+        return shlex.join(cmd)
+
     workflow = decision["workflow"]
     task = task.strip()
-    nested = "--stateless-turns "
     if workflow == "run":
         command = extract_run_command(task)
-        return f"python3 codex/bin/mentor_codex_local.py delegate {nested}{workspace} $'repo: {workspace}\\nspusť příkaz: {command}'" if command else f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
+        return helper("delegate", workspace, f"repo: {workspace}\nspusť příkaz: {command}") if command else helper("audit", workspace)
     if workflow == "action":
         action_name = decision.get("action_name", "")
-        return f"python3 codex/bin/mentor_codex_local.py action {nested}{workspace} {action_name}" if action_name else f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
+        return helper("action", workspace, action_name) if action_name else helper("audit", workspace)
     if workflow == "create-repo":
         repo_name = decision.get("repo_name", "")
-        github_flag = " --github" if decision.get("repo_github") == "yes" else ""
-        return f"python3 codex/bin/mentor_codex_local.py create-repo {nested}{repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
+        if repo_name:
+            parts = [repo_name]
+            if decision.get("repo_github") == "yes":
+                parts.append("--github")
+            parts.append("--restart")
+            return helper("create-repo", *parts)
+        return helper("audit", workspace)
     if workflow == "bootstrap-improve":
-        return f"python3 codex/bin/mentor_codex_local.py bootstrap-dispatch {workspace} {shlex.quote(task)} --execute"
+        return helper("bootstrap-dispatch", workspace, task, "--execute")
     if workflow == "deploy":
-        return "python3 codex/bin/mentor_codex_local.py deploy"
+        return helper("deploy")
     if workflow == "publish-plan":
-        return f"python3 codex/bin/mentor_codex_local.py publish-plan {nested}{workspace}"
+        return helper("publish-plan", workspace)
     if workflow == "release-prep":
-        return f"python3 codex/bin/mentor_codex_local.py release-prep {nested}{workspace}"
+        return helper("release-prep", workspace)
     if workflow == "push-check":
-        return "python3 codex/bin/mentor_codex_local.py push-check"
+        return helper("push-check")
     if workflow == "push":
-        return "python3 codex/bin/mentor_codex_local.py push"
+        return helper("push")
     if workflow == "review":
-        return f"python3 codex/bin/mentor_codex_local.py review {nested}{workspace}"
+        return helper("review", workspace)
     if workflow == "apply-safe":
-        return f"python3 codex/bin/mentor_codex_local.py apply-safe {nested}{workspace}"
+        return helper("apply-safe", workspace)
     if workflow == "improve":
-        return f"python3 codex/bin/mentor_codex_local.py improve {nested}{workspace}"
+        return helper("improve", workspace)
     if workflow == "autopilot":
-        return f"python3 codex/bin/mentor_codex_local.py autopilot {nested}{workspace}"
-    return f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
+        return helper("autopilot", workspace)
+    return helper("audit", workspace)
 
 
 def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task: str) -> str:
@@ -2676,6 +2687,11 @@ def build_backlog_entries(workspace: str, tasks: list[str]) -> list[BacklogEntry
 
 
 def print_backlog(entries: list[BacklogEntry], workspace: str) -> None:
+    def helper(mode: str, *parts: str) -> str:
+        cmd = ["python3", "codex/bin/mentor_codex_local.py", mode, "--stateless-turns"]
+        cmd.extend(parts)
+        return shlex.join(cmd)
+
     print(f"MENTOR_BACKLOG_WORKSPACE={workspace}")
     print(f"MENTOR_BACKLOG_COUNT={len(entries)}")
     if entries:
@@ -2696,8 +2712,8 @@ def print_backlog(entries: list[BacklogEntry], workspace: str) -> None:
         print(f"BACKLOG_ITEM_{idx}_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
         print(f"BACKLOG_ITEM_{idx}_NEXT_HELPER={entry.next_helper}")
         print(f"BACKLOG_ITEM_{idx}_REASON={decision['reason']}")
-        print(f"BACKLOG_ITEM_{idx}_PLAN_CMD=python3 codex/bin/mentor_codex_local.py plan {workspace} {shlex.quote(entry.task)}")
-        print(f"BACKLOG_ITEM_{idx}_REPORT_CMD=python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(entry.task)}")
+        print(f"BACKLOG_ITEM_{idx}_PLAN_CMD={helper('plan', workspace, entry.task)}")
+        print(f"BACKLOG_ITEM_{idx}_REPORT_CMD={helper('report', workspace, entry.task)}")
         print(f"BACKLOG_ITEM_{idx}_AUDIT_CHAT_PROMPT<<EOF")
         print(entry.audit_prompt)
         print("EOF")
@@ -2751,12 +2767,19 @@ def run_scaffold_plan_sequence(args: argparse.Namespace) -> int:
 
 
 def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> list[tuple[str, str]]:
+    def helper(mode: str, *parts: str, nested: bool = True) -> str:
+        cmd = ["python3", "codex/bin/mentor_codex_local.py", mode]
+        if nested:
+            cmd.append("--stateless-turns")
+        cmd.extend(parts)
+        return shlex.join(cmd)
+
     workflow = decision["workflow"]
     capability_id = decision["capability_id"]
     steps: list[tuple[str, str]] = []
 
     if workflow != "review":
-        steps.append(("report", f"python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(task)}"))
+        steps.append(("report", helper("report", workspace, task)))
 
     if workflow == "run":
         steps.append(("delegate", recommended_next_step(decision, workspace, task)))
@@ -2781,62 +2804,62 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
         github_hint = " with GitHub remote" if decision.get("repo_github") == "yes" else ""
         profile_hint = f" using starter profile {decision.get('solution_profile')}" if decision.get("solution_profile") else ""
         steps.append(("bootstrap", f"create and register repository {repo_name or '(unspecified)'}{github_hint}{profile_hint}"))
-        steps.append(("scaffold-plan", f"python3 codex/bin/mentor_codex_local.py scaffold-plan {workspace} {shlex.quote(task)}"))
-        steps.append(("bootstrap-dispatch", f"python3 codex/bin/mentor_codex_local.py bootstrap-dispatch {workspace} {shlex.quote(task)} --execute"))
-        steps.append(("improve", f"python3 codex/bin/mentor_codex_local.py improve {repo_name or '(unspecified)'}"))
+        steps.append(("scaffold-plan", helper("scaffold-plan", workspace, task)))
+        steps.append(("bootstrap-dispatch", helper("bootstrap-dispatch", workspace, task, "--execute")))
+        steps.append(("improve", helper("improve", repo_name or "(unspecified)")))
         steps.append(("post-bootstrap-check", f"verify new workspace {repo_name or '(unspecified)'} status, then continue with install/test/build or a minimal patch"))
         return steps
 
     if workflow == "deploy":
-        steps.append(("deploy", "python3 codex/bin/mentor_codex_local.py deploy"))
-        steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        steps.append(("deploy", helper("deploy")))
+        steps.append(("deploy-status", helper("deploy-status")))
         return steps
 
     if workflow == "publish-plan":
-        steps.append(("publish-plan", f"python3 codex/bin/mentor_codex_local.py publish-plan {workspace}"))
+        steps.append(("publish-plan", helper("publish-plan", workspace)))
         steps.append(("if-publication-remains", "if the final step still needs remote mutation, review the GitHub/release capability boundary"))
         return steps
 
     if workflow == "release-prep":
-        steps.append(("release-prep", f"python3 codex/bin/mentor_codex_local.py release-prep {workspace}"))
+        steps.append(("release-prep", helper("release-prep", workspace)))
         steps.append(("if-publish-remains", "if only remote publication remains, review the GitHub/release capability boundary"))
         return steps
 
     if workflow == "push-check":
-        steps.append(("push-check", "python3 codex/bin/mentor_codex_local.py push-check"))
-        steps.append(("if-clean", "if only allowed source paths remain, continue with python3 codex/bin/mentor_codex_local.py push"))
+        steps.append(("push-check", helper("push-check")))
+        steps.append(("if-clean", f"if only allowed source paths remain, continue with {helper('push')}"))
         return steps
 
     if workflow == "push":
-        steps.append(("push", "python3 codex/bin/mentor_codex_local.py push"))
+        steps.append(("push", helper("push")))
         steps.append(("post-push", "verify clean git status and remote head"))
         return steps
 
     if workflow == "review":
-        steps.append(("review", f"python3 codex/bin/mentor_codex_local.py review {workspace}"))
-        steps.append(("report", f"python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(task)}"))
+        steps.append(("review", helper("review", workspace)))
+        steps.append(("report", helper("report", workspace, task)))
         return steps
 
     if workflow == "apply-safe":
-        steps.append(("apply-safe", f"python3 codex/bin/mentor_codex_local.py apply-safe {workspace}"))
-        steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        steps.append(("apply-safe", helper("apply-safe", workspace)))
+        steps.append(("deploy-status", helper("deploy-status")))
         return steps
 
     if workflow == "improve":
-        steps.append(("improve", f"python3 codex/bin/mentor_codex_local.py improve {workspace}"))
-        steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        steps.append(("improve", helper("improve", workspace)))
+        steps.append(("deploy-status", helper("deploy-status")))
         if capability_id:
             steps.append(("capability-watch", f"watch for capability boundary: {capability_id}"))
         return steps
 
     if workflow == "autopilot":
-        steps.append(("autopilot", f"python3 codex/bin/mentor_codex_local.py autopilot {workspace}"))
+        steps.append(("autopilot", helper("autopilot", workspace)))
         if capability_id:
             steps.append(("capability-watch", f"if autopilot stalls, consider capability: {capability_id}"))
         return steps
 
     # audit/review path
-    steps.append(("audit", f"python3 codex/bin/mentor_codex_local.py audit {workspace}"))
+    steps.append(("audit", helper("audit", workspace)))
     if capability_id:
         steps.append(("capability-review", f"review capability roadmap item: {capability_id}"))
     if decision.get("missing_capability_hint"):
