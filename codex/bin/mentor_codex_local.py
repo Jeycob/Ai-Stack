@@ -1250,6 +1250,31 @@ def run_dispatch_sequence(args: argparse.Namespace) -> int:
     return run_delegate_sequence(delegate_args)
 
 
+def run_top_sequence(args: argparse.Namespace) -> int:
+    tasks = collect_backlog_tasks(args)
+    if not tasks:
+        raise SystemExit("top mode requires at least one task via --task, --task-file, or stdin")
+
+    entries = build_backlog_entries(args.workspace, tasks)
+    top = entries[0]
+    decision = top.decision
+    print(f"MENTOR_TOP_WORKSPACE={args.workspace}")
+    print(f"MENTOR_TOP_COUNT={len(entries)}")
+    print(f"MENTOR_TOP_TASK={top.task}")
+    print(f"MENTOR_TOP_PRIORITY={top.priority}")
+    print(f"MENTOR_TOP_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_TOP_RUNTIME_PROFILE={decision['runtime_profile']}")
+    print(f"MENTOR_TOP_CONFIDENCE={decision['confidence']}")
+    print(f"MENTOR_TOP_REASON={decision['reason']}")
+    print(f"MENTOR_TOP_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"MENTOR_TOP_NEXT_HELPER={top.next_helper}")
+    print(f"MENTOR_TOP_AUDIT_CHAT_PROMPT<<EOF")
+    print(top.audit_prompt)
+    print("EOF")
+    print_execution_brief("MENTOR_TOP", decision, args.workspace, top.task)
+    return 0
+
+
 def run_brief_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"MENTOR_BRIEF_WORKSPACE={args.workspace}")
@@ -1283,6 +1308,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_plan_sequence(args)
     if args.mode == "brief":
         return run_brief_sequence(args)
+    if args.mode == "top":
+        return run_top_sequence(args)
     if args.mode == "backlog":
         return run_backlog_sequence(args)
     if args.mode == "dispatch":
@@ -1398,6 +1425,12 @@ def parse_args() -> argparse.Namespace:
     brief.add_argument("workspace")
     brief.add_argument("task")
     brief.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; brief mode never calls OpenWebUI")
+
+    top = sub.add_parser("top", help="Return only the current top-priority task from a multi-task set, with reason and execution brief")
+    top.add_argument("workspace")
+    top.add_argument("--tasks", action="append", default=[], help="Task text; can be repeated")
+    top.add_argument("--task-file", help="Path to a newline-delimited task file")
+    top.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; top mode never calls OpenWebUI")
 
     backlog = sub.add_parser("backlog", help="Classify and prioritize multiple tasks into a mentor-ready queue with next helper commands")
     backlog.add_argument("workspace")

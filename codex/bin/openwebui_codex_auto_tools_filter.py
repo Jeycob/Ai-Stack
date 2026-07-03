@@ -108,6 +108,8 @@ class Filter:
 
         command = self._natural_workspace_brief_command(text)
         if not command:
+            command = self._natural_workspace_top_command(text)
+        if not command:
             command = self._natural_workspace_backlog_command(text)
         if not command:
             command = self._natural_workspace_dispatch_command(text)
@@ -234,7 +236,7 @@ class Filter:
             return None
         return self._brief_helper_command(workspace, task)
 
-    def _backlog_helper_command(self, mode: str, workspace: str, tasks: list[str], recommend_only: bool = False) -> str:
+    def _mentor_tasks_helper_command(self, mode: str, workspace: str, tasks: list[str], recommend_only: bool = False) -> str:
         command = [
             "python3",
             "codex/bin/mentor_codex_local.py",
@@ -243,10 +245,43 @@ class Filter:
         ]
         if recommend_only:
             command.append("--recommend-only")
-        task_flag = "--tasks" if mode == "dispatch" else "--task"
+        task_flag = "--tasks" if mode in {"dispatch", "top"} else "--task"
         for task in tasks:
             command.extend([task_flag, task])
         return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 180 -- {shlex.join(command)}"
+
+    def _natural_workspace_top_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        tasks = self._extract_task_list(text)
+        if len(tasks) < 2:
+            return None
+        if not any(
+            needle in lower
+            for needle in (
+                "co ma delat jako prvni",
+                "co má dělat jako první",
+                "ktery ukol je prvni",
+                "který úkol je první",
+                "jaky je top task",
+                "jaký je top task",
+                "co je top task",
+                "co je prvni ukol",
+                "co je první úkol",
+                "proc je to prvni",
+                "proč je to první",
+                "proc je prvni",
+                "proč je první",
+                "proc zrovna tenhle",
+                "proč zrovna tenhle",
+                "why this first",
+                "why first",
+            )
+        ):
+            return None
+        return self._mentor_tasks_helper_command("top", workspace, tasks)
 
     def _natural_workspace_backlog_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -275,7 +310,7 @@ class Filter:
             )
         ):
             return None
-        return self._backlog_helper_command("backlog", workspace, tasks)
+        return self._mentor_tasks_helper_command("backlog", workspace, tasks)
 
     def _natural_workspace_dispatch_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -309,28 +344,20 @@ class Filter:
                 "co je top task",
                 "co je prvni ukol",
                 "co je první úkol",
+                "jen doporuc prvni krok",
+                "jen doporuč první krok",
+                "prvni krok bez spusteni",
+                "první krok bez spuštění",
             )
         ):
             return None
         recommend_only = any(
             needle in lower
             for needle in (
-                "co ma delat jako prvni",
-                "co má dělat jako první",
-                "ktery ukol je prvni",
-                "který úkol je první",
-                "jaky je top task",
-                "jaký je top task",
-                "co je top task",
-                "co je prvni ukol",
-                "co je první úkol",
                 "jen doporuc",
                 "jen doporuč",
                 "bez spusteni",
                 "bez spuštění",
-                "why first",
-                "proc prvni",
-                "proč první",
             )
         ) or not any(
             needle in lower
@@ -345,7 +372,7 @@ class Filter:
                 "pokračuj",
             )
         )
-        return self._backlog_helper_command("dispatch", workspace, tasks, recommend_only=recommend_only)
+        return self._mentor_tasks_helper_command("dispatch", workspace, tasks, recommend_only=recommend_only)
 
     def _load_capability_roadmap(self) -> dict[str, dict]:
         module_file = globals().get("__file__")
