@@ -334,7 +334,7 @@ Ten nevolá živé OpenWebUI, ale importuje `owui_chat_turn.py` a ověří, že 
 
 Podobně je tu i `codex/bin/gateway_recovery_smoke.py`. Ten bez živého Dockeru nebo OpenWebUI ověří, že `workspace_action_failure_recommendation()` umí z dat v `docs/codex-local-capability-roadmap.json` odvodit konkrétnější patch guidance pro časté fail signatury jako `missing script: test`, `vite: not found`, `missing script: dev` nebo neplatnou Python dependency při install kroku. Je to malý guard proti návratu k příliš obecnému “zkontroluj manifest” recovery textu.
 
-Stejná recovery metadata už dnes nenesou jen patch guidance, ale i retry záměr: gateway k failnutému kroku vrací `retry_action`, `retry_runner` a `retry_timeout`. Díky tomu `mentor_codex_local.py improve` po úspěšném safe patchi neudělá jen obecné `verify`, ale zkusí znovu právě ten capability krok, který předtím selhal, typicky `test`, `smoke`, `build` nebo `install`.
+Stejná recovery metadata už dnes nenesou jen patch guidance, ale i retry záměr: gateway k failnutému kroku vrací `retry_action`, `retry_runner` a `retry_timeout`. Díky tomu `mentor_codex_local.py improve` po úspěšném safe patchi neudělá jen obecné `verify`, ale zkusí znovu právě ten capability krok, který předtím selhal, typicky `test`, `smoke`, `build` nebo `install`. Když ten retry uspěje, helper ještě jednou krátce přepočítá autopilot a zkusí další bezpečný krok, takže recovery loop nekončí hned v momentě, kdy se odblokuje první symptom.
 
 Na to je navázaný i malý offline guard `codex/bin/mentor_recovery_followup_smoke.py`. Ten ověří, že mentor helper po patchi opravdu skládá `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <retry_action> ...` a jen při chybějícím retry hintu spadne zpět na generický jednokrokový autopilot verify.
 

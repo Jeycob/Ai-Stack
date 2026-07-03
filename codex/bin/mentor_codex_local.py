@@ -569,6 +569,76 @@ def request_followup_verify(
     return invoke_turn(args, verify_visible, verify_technical, send_history=True, capture_output=True)
 
 
+def request_post_recovery_continue(
+    args: argparse.Namespace,
+    workspace: str,
+    allow_actions_value: str,
+    retry_action: str = "",
+) -> tuple[int, str]:
+    retry_action = retry_action.strip().lower()
+    visible = (
+        f"repo: {workspace}\n"
+        "Původní blocker se posunul správným směrem. Teď zkus právě jeden další bezpečný capability krok, "
+        "aby ses posunul blíž k hotovému stavu, a vrať stručný výsledek."
+    )
+    if retry_action:
+        visible += f"\nNeopakuj bezdůvodně právě opravený krok `{retry_action}`, pokud verify/autopilot neukáže nový důvod."
+    technical = (
+        f"{repo_prefix(args.repo)}\n"
+        f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --timeout {args.timeout} "
+        f"--max-steps 1 --allow-actions {allow_actions_value}"
+    )
+    return invoke_turn(args, visible, technical, send_history=True, capture_output=True)
+
+
+def should_continue_after_recovery_verify(retry_action: str, verify_output: str) -> bool:
+    retry_action = retry_action.strip().lower()
+    if retry_action not in {"install", "verify", "smoke", "test", "build", "lint"}:
+        return False
+    upper = verify_output.upper()
+    return "WORKSPACE_ACTION_OK" in upper or "WORKSPACE_AUTOPILOT_OK" in upper
+
+
+def request_recovery_followup(
+    args: argparse.Namespace,
+    workspace: str,
+    allow_actions_value: str,
+    retry_action: str = "",
+    retry_runner: str = "",
+    retry_timeout: str = "",
+) -> tuple[int, dict[str, str]]:
+    rc, verify_output = request_followup_verify(
+        args,
+        workspace,
+        allow_actions_value,
+        retry_action=retry_action,
+        retry_runner=retry_runner,
+        retry_timeout=retry_timeout,
+    )
+    if rc != 0:
+        return rc, {}
+
+    continuation_output = ""
+    next_output = verify_output
+    if should_continue_after_recovery_verify(retry_action, verify_output):
+        rc, continuation_output = request_post_recovery_continue(
+            args,
+            workspace,
+            allow_actions_value,
+            retry_action=retry_action,
+        )
+        if rc != 0:
+            return rc, {}
+        if continuation_output.strip():
+            next_output = continuation_output
+
+    return 0, {
+        "verify_output": verify_output,
+        "continuation_output": continuation_output,
+        "next_output": next_output,
+    }
+
+
 def run_patch_recovery_once(
     args: argparse.Namespace,
     workspace: str,
@@ -650,7 +720,7 @@ def run_patch_recovery_once(
     if rc != 0:
         return rc, {}
 
-    rc, verify_output = request_followup_verify(
+    rc, followup = request_recovery_followup(
         args,
         workspace,
         allow_actions_value,
@@ -660,6 +730,9 @@ def run_patch_recovery_once(
     )
     if rc != 0:
         return rc, {}
+    verify_output = str(followup.get("verify_output", "") or "")
+    continuation_output = str(followup.get("continuation_output", "") or "")
+    next_output = str(followup.get("next_output", "") or verify_output)
 
     final_parts = []
     if seed_output.strip():
@@ -671,11 +744,15 @@ def run_patch_recovery_once(
         final_parts.append(apply_output.strip())
     if verify_output.strip():
         final_parts.append(verify_output.strip())
+    if continuation_output.strip():
+        final_parts.append(continuation_output.strip())
     return 0, {
         "handled": True,
         "applied": True,
         "final_output": "\n\n".join(final_parts),
         "verify_output": verify_output,
+        "continuation_output": continuation_output,
+        "next_output": next_output,
     }
 
 
@@ -1905,11 +1982,11 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
                 )
             return 0
 
-        verify_output = str(recovery.get("verify_output", "") or "")
-        verify_meta = parse_key_values(verify_output)
-        current_recommendation = verify_meta.get("recommendation", "").strip()
-        current_output = verify_output
-        if not has_patch_guidance(verify_meta):
+        next_output = str(recovery.get("next_output", "") or recovery.get("verify_output", "") or "")
+        next_meta = parse_key_values(next_output)
+        current_recommendation = next_meta.get("recommendation", "").strip()
+        current_output = next_output
+        if not has_patch_guidance(next_meta):
             if last_final_output:
                 print(
                     join_sections(
