@@ -7,8 +7,23 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BRANCH="${AI_STACK_BRANCH:-main}"
 REMOTE="${AI_STACK_REMOTE:-origin}"
 RUNTIME_METADATA_STASH_REF=""
+OPENWEBUI_URL="${OPENWEBUI_URL:-}"
 
 cd "$REPO_ROOT"
+
+resolve_openwebui_url() {
+  if [ -n "${OPENWEBUI_URL:-}" ]; then
+    printf '%s\n' "$OPENWEBUI_URL"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1 && [ -f "$REPO_ROOT/codex/bin/openwebui_runtime.py" ]; then
+    OPENWEBUI_URL="$(python3 "$REPO_ROOT/codex/bin/openwebui_runtime.py" | head -n 1)"
+  fi
+  if [ -z "${OPENWEBUI_URL:-}" ]; then
+    OPENWEBUI_URL="http://127.0.0.1:9090"
+  fi
+  printf '%s\n' "$OPENWEBUI_URL"
+}
 
 section() {
   printf '\n[%s] %s\n' "$(date -Is)" "$*"
@@ -118,13 +133,15 @@ restart_only() {
   docker compose up -d --force-recreate open-webui
 
   section "Post-restart smoke checks"
+  local openwebui_base
+  openwebui_base="$(resolve_openwebui_url)"
   wait_http gateway http://127.0.0.1:9101/health 45 1
-  wait_http openwebui http://127.0.0.1:9090/ 90 1
-  wait_http openwebui_loader http://127.0.0.1:9090/static/loader.js 90 1
+  wait_http openwebui "${openwebui_base%/}/" 90 1
+  wait_http openwebui_loader "${openwebui_base%/}/static/loader.js" 90 1
   curl -fsS http://127.0.0.1:9101/health
   echo
   tmp_loader="$(mktemp)"
-  curl -fsS http://127.0.0.1:9090/static/loader.js -o "$tmp_loader"
+  curl -fsS "${openwebui_base%/}/static/loader.js" -o "$tmp_loader"
   printf 'loader_bytes='
   wc -c < "$tmp_loader" | tr -d ' '
   rm -f "$tmp_loader"
@@ -133,7 +150,7 @@ restart_only() {
 full_stack_healthcheck() {
   if [ -f "$REPO_ROOT/codex/bin/check_ai_stack.sh" ]; then
     section "Full stack healthcheck"
-    OPENWEBUI_URL="${OPENWEBUI_URL:-http://127.0.0.1:9090}" \
+    OPENWEBUI_URL="${OPENWEBUI_URL:-$(resolve_openwebui_url)}" \
     CODEX_GATEWAY_URL="${CODEX_GATEWAY_URL:-http://127.0.0.1:9101}" \
     OLLAMA_URL="${OLLAMA_URL:-http://192.168.0.48:11434}" \
     WORKSPACE="${WORKSPACE:-ai-stack}" \
@@ -229,6 +246,8 @@ python3 -m py_compile \
   codex/bin/sync_openwebui_function_test.py \
   codex/bin/reconcile_openwebui_functions.py \
   codex/bin/reconcile_openwebui_functions_test.py \
+  codex/bin/openwebui_runtime.py \
+  codex/bin/openwebui_runtime_smoke.py \
   codex/bin/mentor_capability_routing_smoke.py \
   codex/bin/gateway_admin_run_workspace_smoke.py
 
@@ -239,6 +258,7 @@ python3 codex/bin/gateway_recovery_smoke.py
 python3 codex/bin/gateway_admin_run_workspace_smoke.py
 python3 codex/bin/gateway_nested_helper_rescue_smoke.py
 python3 codex/bin/gateway_runtime_health_smoke.py
+python3 codex/bin/openwebui_runtime_smoke.py
 python3 codex/bin/container_runner_guard_smoke.py
 python3 codex/bin/mentor_capability_routing_smoke.py
 python3 codex/bin/sync_openwebui_function_test.py

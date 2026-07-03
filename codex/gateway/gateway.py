@@ -23,6 +23,7 @@ from workspace_context import (
     resolve_workspace_context,
     strip_workspace_routing,
 )
+from openwebui_runtime import discover_openwebui_base_urls
 from workspace_scan import collect, load_workspace
 
 OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1")
@@ -482,9 +483,57 @@ def http_probe(url, timeout=2, max_bytes=8192):
             "duration_ms": int((time.time() - started) * 1000),
         }
 
-def runtime_health():
+
+def openwebui_probe_candidates():
+    env_candidates = discover_openwebui_base_urls(REPO_ROOT)
+    explicit_root = urllib.parse.urlparse(str(OPENWEBUI_HEALTH_URL or "").strip())
+    explicit_loader = urllib.parse.urlparse(str(OPENWEBUI_LOADER_URL or "").strip())
+    if explicit_root.scheme and explicit_root.netloc:
+        base = f"{explicit_root.scheme}://{explicit_root.netloc}"
+        if base not in env_candidates:
+            env_candidates.insert(0, base)
+    if explicit_loader.scheme and explicit_loader.netloc:
+        base = f"{explicit_loader.scheme}://{explicit_loader.netloc}"
+        if base not in env_candidates:
+            env_candidates.insert(0, base)
+    return env_candidates
+
+
+def probe_openwebui_runtime():
+    tried = []
+    for base_url in openwebui_probe_candidates():
+        base = str(base_url or "").rstrip("/")
+        root = http_probe(base + "/", timeout=2, max_bytes=4096)
+        loader = http_probe(base + "/static/loader.js", timeout=2, max_bytes=8192)
+        tried.append(
+            {
+                "base_url": base,
+                "root_ok": bool(root.get("ok")),
+                "loader_ok": bool(loader.get("ok")),
+            }
+        )
+        if root.get("ok") and loader.get("ok"):
+            return {
+                "ok": True,
+                "base_url": base,
+                "root": root,
+                "loader": loader,
+                "tried": tried,
+            }
     root = http_probe(OPENWEBUI_HEALTH_URL, timeout=2, max_bytes=4096)
     loader = http_probe(OPENWEBUI_LOADER_URL, timeout=2, max_bytes=8192)
+    return {
+        "ok": bool(root.get("ok")) and bool(loader.get("ok")),
+        "base_url": "",
+        "root": root,
+        "loader": loader,
+        "tried": tried,
+    }
+
+def runtime_health():
+    openwebui = probe_openwebui_runtime()
+    root = openwebui["root"]
+    loader = openwebui["loader"]
     workspaces_file_exists = Path(WORKSPACES_FILE).is_file()
     roadmap_exists = CAPABILITY_ROADMAP_FILE.is_file()
     git_head = run_ro(["git", "rev-parse", "--short", "HEAD"], REPO_ROOT, 8)
@@ -526,6 +575,9 @@ def runtime_health():
         "readiness_issues": readiness_issues,
         "openwebui": {
             "ok": bool(root.get("ok")) and bool(loader.get("ok")),
+            "base_url": str(openwebui.get("base_url") or "").strip(),
+            "candidates": openwebui_probe_candidates(),
+            "tried": openwebui.get("tried") or [],
             "root": root,
             "loader": loader,
         },

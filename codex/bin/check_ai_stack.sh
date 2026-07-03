@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
+if [ -z "${OPENWEBUI_URL:-}" ] && command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/openwebui_runtime.py" ]; then
+  OPENWEBUI_URL="$(python3 "$SCRIPT_DIR/openwebui_runtime.py" | head -n 1)"
+fi
 OPENWEBUI_URL="${OPENWEBUI_URL:-http://127.0.0.1:9090}"
 CODEX_GATEWAY_URL="${CODEX_GATEWAY_URL:-http://127.0.0.1:9101}"
 OLLAMA_URL="${OLLAMA_URL:-http://192.168.0.48:11434}"
