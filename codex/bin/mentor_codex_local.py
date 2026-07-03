@@ -956,6 +956,62 @@ def run_report_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> list[tuple[str, str]]:
+    workflow = decision["workflow"]
+    capability_id = decision["capability_id"]
+    steps: list[tuple[str, str]] = []
+
+    steps.append(("report", f"python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(task)}"))
+
+    if workflow == "run":
+        steps.append(("delegate", recommended_next_step(decision, workspace, task)))
+        return steps
+
+    if workflow == "apply-safe":
+        steps.append(("apply-safe", f"python3 codex/bin/mentor_codex_local.py apply-safe {workspace}"))
+        steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        return steps
+
+    if workflow == "improve":
+        steps.append(("improve", f"python3 codex/bin/mentor_codex_local.py improve {workspace}"))
+        steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        if capability_id:
+            steps.append(("capability-watch", f"watch for capability boundary: {capability_id}"))
+        return steps
+
+    if workflow == "autopilot":
+        steps.append(("autopilot", f"python3 codex/bin/mentor_codex_local.py autopilot {workspace}"))
+        if capability_id:
+            steps.append(("capability-watch", f"if autopilot stalls, consider capability: {capability_id}"))
+        return steps
+
+    # audit/review path
+    steps.append(("audit", f"python3 codex/bin/mentor_codex_local.py audit {workspace}"))
+    if capability_id:
+        steps.append(("capability-review", f"review capability roadmap item: {capability_id}"))
+    if decision.get("missing_capability_hint"):
+        steps.append(("next-scope", decision["missing_capability_hint"]))
+    return steps
+
+
+def run_plan_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    steps = mentor_plan_steps(decision, args.workspace, args.task)
+    print(f"MENTOR_PLAN_WORKSPACE={args.workspace}")
+    print(f"MENTOR_PLAN_TASK={args.task}")
+    print(f"MENTOR_PLAN_RUNTIME_PROFILE={decision['runtime_profile']}")
+    print(f"MENTOR_PLAN_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_PLAN_CAPABILITY_ID={decision['capability_id']}")
+    print(f"MENTOR_PLAN_CONFIDENCE={decision['confidence']}")
+    print(f"MENTOR_PLAN_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"MENTOR_PLAN_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+    for idx, (label, value) in enumerate(steps, start=1):
+        print(f"PLAN_STEP_{idx}_LABEL={label}")
+        print(f"PLAN_STEP_{idx}_VALUE={value}")
+    print(f"PLAN_STEP_COUNT={len(steps)}")
+    return 0
+
+
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
     if args.mode == "audit":
         return run_audit_sequence(args)
@@ -975,6 +1031,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_profile_sequence(args)
     if args.mode == "report":
         return run_report_sequence(args)
+    if args.mode == "plan":
+        return run_plan_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)
@@ -1076,6 +1134,11 @@ def parse_args() -> argparse.Namespace:
     report.add_argument("workspace")
     report.add_argument("task")
     report.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; report mode never calls OpenWebUI")
+
+    plan = sub.add_parser("plan", help="Produce a short sequenced mentor plan for a task: report plus the next 2-4 helper/capability steps")
+    plan.add_argument("workspace")
+    plan.add_argument("task")
+    plan.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; plan mode never calls OpenWebUI")
 
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")

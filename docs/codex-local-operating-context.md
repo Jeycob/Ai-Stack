@@ -138,6 +138,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pro bezne mentor orchestracni volani bez rucni volby modu pouzivat `mentor_codex_local.py delegate`,
 - pro rychle rozhodnuti o sirce pravomoci pouzivat `mentor_codex_local.py profile`,
 - pro kompaktní mentoring souhrn nad jednim taskem pouzivat `mentor_codex_local.py report`,
+- pro kratky sequenced mentoring plan nad jednim taskem pouzivat `mentor_codex_local.py plan`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
 Priklad doporucovaciho autopilota:
@@ -198,6 +199,12 @@ Priklad mentor reportu, ktery vrati workflow, capability metadata, guardraily i 
 python3 codex/bin/mentor_codex_local.py report ai-stack "Fixni to a dotahni co zvladnes."
 ```
 
+Priklad mentor planu, ktery z jednoho tasku vrati kratkou 2-4 krokovou posloupnost:
+
+```bash
+python3 codex/bin/mentor_codex_local.py plan ai-stack "Fixni to a dotahni co zvladnes."
+```
+
 Profilove rozhodnuti vraci i:
 
 - `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
@@ -211,6 +218,12 @@ Report navic vraci:
 
 - `MENTOR_REPORT_NEXT_HELPER`: doporuceny dalsi helper command.
 - `MENTOR_REPORT_AUDIT_CHAT_PROMPT`: navrh viditelneho promptu pro OpenWebUI audit chat.
+
+Plan navic vraci:
+
+- `PLAN_STEP_<N>_LABEL`: typ dalsiho kroku.
+- `PLAN_STEP_<N>_VALUE`: konkretni helper command nebo capability review krok.
+- `PLAN_STEP_COUNT`: pocet kroku v navrhu.
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 

@@ -306,6 +306,10 @@ Pro levné mentoring rozhodnutí nad jedním úkolem je tam i `report`: vrátí 
 
     python3 codex/bin/mentor_codex_local.py report ai-stack "Fixni to a dotáhni co zvládneš."
 
+Když chceš ještě o krok praktičtější dohled nad delším úkolem, použij `plan`: vrátí krátký sequenced mentor plán 2–4 kroků nad daným taskem, typicky kombinaci `report`, `audit`, `improve`, `deploy-status` nebo capability review:
+
+    python3 codex/bin/mentor_codex_local.py plan ai-stack "Fixni to a dotáhni co zvládneš."
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh
