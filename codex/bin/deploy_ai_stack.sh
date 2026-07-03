@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BRANCH="${AI_STACK_BRANCH:-main}"
 REMOTE="${AI_STACK_REMOTE:-origin}"
+RUNTIME_METADATA_STASH_REF=""
 
 cd "$REPO_ROOT"
 
@@ -15,6 +16,74 @@ section() {
 
 tracked_clean() {
   git diff --quiet && git diff --cached --quiet
+}
+
+tracked_dirty_files() {
+  {
+    git diff --name-only
+    git diff --cached --name-only
+  } | awk 'NF {print}' | sort -u
+}
+
+is_runtime_local_metadata_path() {
+  case "${1:-}" in
+    codex/workspaces.json)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prepare_runtime_local_metadata_stash() {
+  local dirty
+  mapfile -t dirty < <(tracked_dirty_files)
+  if [ "${#dirty[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  local blocked=()
+  local path=""
+  for path in "${dirty[@]}"; do
+    if ! is_runtime_local_metadata_path "$path"; then
+      blocked+=("$path")
+    fi
+  done
+
+  if [ "${#blocked[@]}" -ne 0 ]; then
+    echo "DEPLOY_BLOCKED_DIRTY_TRACKED_FILES"
+    echo "Commit, stash, or discard tracked local changes before automated deploy."
+    git status --short
+    exit 20
+  fi
+
+  section "Stashing runtime-local metadata overrides"
+  printf 'stashing_paths=%s\n' "${dirty[*]}"
+  git stash push -m "ai-stack deploy runtime-local-metadata $(date +%s)" -- "${dirty[@]}" >/dev/null
+  RUNTIME_METADATA_STASH_REF="$(git stash list -1 --format=%gd)"
+  printf 'stash_ref=%s\n' "${RUNTIME_METADATA_STASH_REF:-none}"
+}
+
+restore_runtime_local_metadata_stash() {
+  if [ -z "${RUNTIME_METADATA_STASH_REF:-}" ]; then
+    return 0
+  fi
+
+  section "Restoring runtime-local metadata overrides"
+  set +e
+  git stash pop --index "$RUNTIME_METADATA_STASH_REF"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    echo "DEPLOY_BLOCKED_RUNTIME_METADATA_CONFLICT"
+    echo "The repo updated, but restoring local runtime metadata caused a merge conflict."
+    echo "Resolve and rerun:"
+    echo "  git status --short"
+    echo "  git stash show -p $RUNTIME_METADATA_STASH_REF"
+    exit 21
+  fi
+  RUNTIME_METADATA_STASH_REF=""
 }
 
 wait_http() {
@@ -112,10 +181,7 @@ section "Preflight git status"
 git status --short --branch
 
 if ! tracked_clean; then
-  echo "DEPLOY_BLOCKED_DIRTY_TRACKED_FILES"
-  echo "Commit, stash, or discard tracked local changes before automated deploy."
-  git status --short
-  exit 20
+  prepare_runtime_local_metadata_stash
 fi
 
 before="$(git rev-parse --short HEAD)"
@@ -123,6 +189,7 @@ before="$(git rev-parse --short HEAD)"
 section "Pulling latest git revision"
 git fetch "$REMOTE" "$BRANCH"
 git pull --ff-only "$REMOTE" "$BRANCH"
+restore_runtime_local_metadata_stash
 after="$(git rev-parse --short HEAD)"
 echo "before=$before"
 echo "after=$after"
