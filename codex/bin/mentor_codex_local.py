@@ -461,6 +461,49 @@ def wants_repo_followthrough(task: str) -> bool:
     return any(cue in lower for cue in cues)
 
 
+def wants_agentic_followthrough(task: str) -> bool:
+    lower = task.lower()
+    read_only_cues = (
+        "nic needituj",
+        "nic nemen",
+        "nic neměň",
+        "nic nespoustej",
+        "nic nespouštěj",
+        "bez spusteni",
+        "bez spuštění",
+        "jen navrhni",
+        "pouze navrhni",
+        "jen analyzuj",
+        "pouze analyzuj",
+    )
+    if any(cue in lower for cue in read_only_cues):
+        return False
+    followthrough_cues = (
+        "dotahni",
+        "dotáhni",
+        "co pujde",
+        "co půjde",
+        "co zvladnes",
+        "co zvládneš",
+        "udelej maximum",
+        "udělej maximum",
+        "udelej co je potreba",
+        "udělej co je potřeba",
+        "proved co je potreba",
+        "proveď co je potřeba",
+        "pokracuj sam",
+        "pokračuj sam",
+        "pokračuj sám",
+        "postarej se",
+        "fixni to",
+        "rozbehni to",
+        "rozběhni to",
+        "dokonci to",
+        "dokonči to",
+    )
+    return any(cue in lower for cue in followthrough_cues)
+
+
 def infer_solution_profile(task: str) -> tuple[str, str]:
     lower = task.lower()
     profiles = [
@@ -968,6 +1011,16 @@ def classify_task(task: str) -> dict[str, str]:
             "high",
             "This is a read-only senior review task, so we should stay in a narrow review scope and avoid execution until findings are clear.",
             "",
+        )
+    if wants_agentic_followthrough(task):
+        return result(
+            "runtime",
+            "improve",
+            "The task asks for autonomous follow-through, so it should try audited capability steps and then a guarded patch flow if needed.",
+            "high",
+            "Follow-through should be agentic, but still bounded: start with workspace capabilities and only escalate into safe patching when capability progress runs out.",
+            "wider_workspace_runtime",
+            "If capability execution and safe patching still do not unblock progress, request a dedicated wider runtime capability rather than falling back to generic unrestricted shell.",
         )
     if any(token in lower for token in ("navrhni další krok", "navrhni dalsi krok", "co dál", "co dal", "audit", "analyzuj")):
         return result(

@@ -146,6 +146,13 @@ nasledne reasoning navrh dalsiho kroku pres `--send-history`. Rezim
 jeden dalsi bezpecny capability krok z povolene mnoziny a muze ho rovnou
 spustit.
 
+Rozlisuj ciste planovani od follow-through. Prompt typu "jen navrhni dalsi
+krok", "pouze analyzuj" nebo "nic needituj" patri do read-only audit/review
+vrstvy. Prompt typu "navrhni dalsi krok a dotahni co pujde", "udelej maximum",
+"postarej se o to" nebo "pokracuj sam" je naopak aktivni improve zadani:
+nejdriv pouzij capability kroky a teprve kdyz dojdou, prejdi do guarded
+patch/recommendation workflow.
+
 Podobne se lehce rozsiril i safe patch scope. `apply-safe` uz neni zbytecne
 svazany jen tremi soubory a uplne miniaturnim diffem: porad zustava v
 auditovanem source/config prostoru, ale umi vzit o neco sirsi maly patch pres
