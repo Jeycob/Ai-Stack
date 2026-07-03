@@ -131,6 +131,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pouzivat `workspace-action` pro install/test/build/lint/verify,
 - pro vicekrokovou praci pouzivat `mentor_codex_local.py audit` nebo
   `mentor_codex_local.py autopilot`,
+- pro review-to-patch mentoring loop pouzivat `mentor_codex_local.py patch-plan`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
 Priklad doporucovaciho autopilota:
@@ -143,6 +144,12 @@ Priklad provedeni jednoho dalsiho bezpecneho kroku:
 
 ```bash
 python3 codex/bin/mentor_codex_local.py autopilot Odysseus-Lite
+```
+
+Priklad recommendation-driven patch planning loopu:
+
+```bash
+python3 codex/bin/mentor_codex_local.py patch-plan Odysseus-Lite
 ```
 
 ## Pro nove nastroje

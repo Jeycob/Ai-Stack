@@ -272,6 +272,10 @@ Pouze pro doporučení bez spuštění:
 
     python3 codex/bin/mentor_codex_local.py autopilot Odysseus-Lite --recommend-only
 
+Pro recommendation-driven mentoring loop je tam i mód `patch-plan`: helper nejdřív vyžádá autopilot recommendation, když dostane `read_command`, sám provede follow-up read přes audit chat a pak nechá codex-local navrhnout minimální patch plan:
+
+    python3 codex/bin/mentor_codex_local.py patch-plan Odysseus-Lite
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

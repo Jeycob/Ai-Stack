@@ -115,6 +115,19 @@ def parse_next_action(text: str, allowed_actions: set[str]) -> tuple[str, str]:
     return action, reason
 
 
+def parse_key_values(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key:
+            result[key] = value
+    return result
+
+
 def invoke_turn(
     args: argparse.Namespace,
     visible: str,
@@ -261,6 +274,68 @@ def run_autopilot_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_patch_plan_sequence(args: argparse.Namespace) -> int:
+    visible = (
+        f"repo: {args.workspace}\n"
+        "Ověř workspace, zjisti nejbližší bezpečný další směr a pokud nic nepůjde rovnou spustit, "
+        "připrav podklad pro další patch. Zatím nic needituj."
+    )
+    technical = (
+        f"{repo_prefix(args.repo)}\n"
+        f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {args.workspace} --recommend-only --timeout {args.timeout}"
+    )
+
+    if args.dry_run:
+        print("VISIBLE_PROMPT")
+        print(visible)
+        print("\nTECHNICAL_PROMPT")
+        print(technical)
+        print()
+        print("FOLLOW_UP")
+        print("If the response contains read_command, the helper will execute it and then ask codex-local for a minimal patch plan.")
+        return 0
+
+    rc, first_output = invoke_turn(args, visible, technical, send_history=False, capture_output=True)
+    if rc != 0:
+        return rc
+    meta = parse_key_values(first_output)
+    read_command = meta.get("read_command", "").strip()
+    if not read_command:
+        if first_output.strip():
+            print(first_output.strip())
+        return 0
+
+    read_visible = (
+        f"repo: {args.workspace}\n"
+        "Přečti teď nejrelevantnější soubor pro další patch směr a vrať ho s čísly řádků. Nic needituj."
+    )
+    read_technical = f"{repo_prefix(args.repo)}\n{read_command}"
+    rc, _ = invoke_turn(args, read_visible, read_technical, send_history=True)
+    if rc != 0:
+        return rc
+
+    plan_visible = (
+        f"repo: {args.workspace}\n"
+        "Na základě předchozího auditu a přečteného souboru navrhni minimální patch plan. "
+        "Zůstaň u malého bezpečného zásahu a nic ještě needituj."
+    )
+    plan_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        "Na základě celé dosavadní historie navrhni minimální další patch plan. "
+        "Odpověz stručně a strukturovaně v těchto řádcích:\n"
+        "PATCH_TARGET: <path or none>\n"
+        "PATCH_SUMMARY: <one sentence>\n"
+        "PATCH_HINT: <one sentence>\n"
+        "NEXT_ADMIN_COMMAND: <GATEWAY_ADMIN_READ_NUMBERED ... or GATEWAY_ADMIN_APPLY_NOW or none>"
+    )
+    rc, plan_output = invoke_turn(args, plan_visible, plan_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+    if plan_output.strip():
+        print(plan_output.strip())
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Send structured mentor tasks to codex-local via the OpenWebUI audit chat.",
@@ -317,6 +392,11 @@ def parse_args() -> argparse.Namespace:
     autopilot.add_argument("--recommend-only", action="store_true", help="Only print the chosen next action, do not execute it")
     autopilot.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
+    patch_plan = sub.add_parser("patch-plan", help="Use autopilot recommendation, follow read_command, and ask codex-local for a minimal patch plan")
+    patch_plan.add_argument("workspace")
+    patch_plan.add_argument("--timeout", type=int, default=2400)
+    patch_plan.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
@@ -341,6 +421,8 @@ def main() -> int:
         return run_audit_sequence(args)
     if args.mode == "autopilot":
         return run_autopilot_sequence(args)
+    if args.mode == "patch-plan":
+        return run_patch_plan_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)
