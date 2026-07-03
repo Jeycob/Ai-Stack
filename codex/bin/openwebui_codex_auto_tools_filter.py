@@ -5,6 +5,8 @@ version: 0.1.8
 description: Dynamically attaches Codex toolsets and routes broader codex-local natural-language admin intents.
 """
 
+import json
+from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional
 import re
@@ -28,6 +30,7 @@ class Filter:
         self.extra = ["codex_extra_workspace_tools"]
         self.ssh = ["codex_ssh_key_tools"]
         self.aider = ["aider_container_access"]
+        self.capability_roadmap = self._load_capability_roadmap()
 
     def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
         model = body.get("model")
@@ -102,7 +105,9 @@ class Filter:
         if "GATEWAY_ADMIN_" in text:
             return None
 
-        command = self._natural_workspace_run_command(text)
+        command = self._natural_capability_roadmap_command(text)
+        if not command:
+            command = self._natural_workspace_run_command(text)
         if not command:
             command = self._natural_workspace_common_command(text)
         if not command:
@@ -119,6 +124,44 @@ class Filter:
         self._set_message_text(latest, "repo: ai-stack\n" + command)
         body["stream"] = False
         return body
+
+    def _load_capability_roadmap(self) -> dict[str, dict]:
+        module_file = globals().get("__file__")
+        if module_file:
+            path = Path(module_file).resolve().parents[2] / "docs" / "codex-local-capability-roadmap.json"
+        else:
+            path = Path.cwd() / "docs" / "codex-local-capability-roadmap.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+        capabilities = payload.get("capabilities")
+        return capabilities if isinstance(capabilities, dict) else {}
+
+    def _capability_block(self, capability_id: str) -> str:
+        item = self.capability_roadmap.get(capability_id) or {}
+        scope = str(item.get("scope", ""))
+        summary = str(item.get("summary", ""))
+        parts = [f"CAPABILITY_ROADMAP_ID {capability_id}"]
+        if scope:
+            parts.append(f"CAPABILITY_ROADMAP_SCOPE {scope}")
+        if summary:
+            parts.append(f"CAPABILITY_ROADMAP_SUMMARY {summary}")
+        return "\n".join(parts)
+
+    def _natural_capability_roadmap_command(self, text: str) -> str | None:
+        lower = text.lower()
+        if any(token in lower for token in ("github actions", "create github repo", "vytvor github", "pushni do githubu", "release", "publish package")):
+            return (
+                "GATEWAY_ADMIN_WORKSPACE_SCAN ai-stack\n"
+                + self._capability_block("github_release")
+            )
+        if any(token in lower for token in ("nainstaluj systemovy balik", "nainstaluj systémový balík", "apt install", "sudo ", "docker compose", "restartni service", "restartuj service")):
+            return (
+                "GATEWAY_ADMIN_WORKSPACE_SCAN ai-stack\n"
+                + self._capability_block("host_runtime_package_install")
+            )
+        return None
 
     def _mentions_ai_stack(self, text: str) -> bool:
         return re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*ai-stack\s*$", text) is not None or "ai-stack" in text.lower()
