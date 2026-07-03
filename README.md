@@ -326,6 +326,12 @@ Výchozí scénáře dnes pokrývají:
 
 To je záměrně levnější než plný browser E2E. Neověřuje vzhled UI, ale přímo to, že běžná lidská formulace v audit chatu projde route -> filter -> gateway -> capability -> zpět do viditelné odpovědi.
 
+Pro nested helper flow je navíc k dispozici čistě offline regression smoke:
+
+    python3 codex/bin/owui_chat_turn_stateless_smoke.py
+
+Ten nevolá živé OpenWebUI, ale importuje `owui_chat_turn.py` a ověří, že `--stateless` režim sahá pouze na `/api/chat/completions` a vůbec nečte ani nepřepisuje `/api/v1/chats/...`. Je to pojistka proti návratu re-entrant deadlocku, kdy helper spuštěný přes OpenWebUI zkoušel znovu mutovat stejný audit chat uvnitř jednoho requestu.
+
 Stejnou věc jde teď spouštět i přes hlavní mentor helper, aby scénářový smoke nebyl další izolovaný nástroj bokem:
 
     python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --list
@@ -339,6 +345,7 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 - `mentor_scenario_runner.py` pro levný helper-orchestration smoke,
 - helper-only `bootstrap-probe` pro ověření bootstrap/create-repo reasoning bez mutací,
 - `filter_route_smoke.py` pro offline ověření, že přirozené OpenWebUI prompty routeují na správné admin/capability workflow,
+- `owui_chat_turn_stateless_smoke.py` pro regression guard nad nested OpenWebUI helper flow,
 - `chat-scenarios` pro user-like OpenWebUI audit chat flow, včetně širší autonomy/profile vrstvy,
 - `check_ai_stack.sh` pro stack summary.
 
@@ -600,6 +607,7 @@ Praktická pravidla pro zadávání úloh:
 - `GATEWAY_ADMIN_CHECK_STACK` už v OpenWebUI nevrací celý syrový healthcheck log. Gateway filter pouští `check_ai_stack.sh` v `CHECK_AI_STACK_SUMMARY_ONLY=1` režimu a vrací stručný verdict se souhrnem checků. Dlouhé admin výstupy jako deploy tail, workspace output nebo smoke logy se nově vrací jako kompaktní preview bloky místo doslovného HTML `<details>`, protože tenhle renderer je v běžném OpenWebUI chatu nevykresloval spolehlivě.
 - Spuštění kontrolního příkazu v registrovaném workspace přes gateway: `curl -sS http://127.0.0.1:9101/v1/admin/workspace/run -H "Content-Type: application/json" -d '{"workspace":"ai-stack","timeout":30,"command":["git","status","--short","--branch"]}'`.
 - Dlouhé mentor/OpenWebUI helper běhy se z admin filtru nespouští synchronně. Když `GATEWAY_ADMIN_RUN_WORKSPACE` obsahuje `mentor_codex_local.py` nebo `owui_chat_turn.py`, filtr ho pošle gateway jako background job a v chatu hned vrátí PID a log cestu, aby request nezamrzal v OpenWebUI UI.
+- Aby se při těchto nested helper bězích neroztočila rekurze `OpenWebUI chat -> mentor helper -> owui_chat_turn.py -> stejný OpenWebUI chat`, používá helper vrstva explicitní `--stateless-turns`, který se při volání child `owui_chat_turn.py` překládá na `--stateless`. Takový vnitřní krok pak nepíše zpět do `/api/v1/chats/<id>`, ale jde přímo přes jednorázové `/api/chat/completions`, takže se nesnaží editovat právě ten chat, který ho spustil.
 - Background workspace run teď vrací i `job_id`. Stav jde kdykoli zkontrolovat přes `GATEWAY_ADMIN_RUN_WORKSPACE_STATUS <job_id>` nebo přirozeně dotazem typu `repo: Test2` + `stav jobu`. Gateway vrátí `running`, poslední `tail` a pokud už doběhl `run_check.py`, i `exit_code`, `duration_ms` a parsovaný `result`.
 - Přímý fallback pro deploy přes gateway admin endpoint: `python3 codex/bin/gateway_admin.py --base-url http://127.0.0.1:9101 deploy` na runtime hostu, nebo z jiné stanice s `CODEX_GATEWAY_ADMIN_TOKEN` / `codex/state/codex-gateway-admin.token`. Stav zjistíš přes `python3 codex/bin/gateway_admin.py --base-url http://127.0.0.1:9101 deploy-status`.
 - Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `python3 codex/bin/sync_openwebui_function.py --dry-run`.

@@ -1367,6 +1367,7 @@ class Filter:
             "python3",
             "codex/bin/mentor_codex_local.py",
             "bootstrap-improve",
+            "--stateless-turns",
             "ai-stack",
             task,
         ]
@@ -1641,6 +1642,7 @@ class Filter:
             "python3",
             "codex/bin/mentor_codex_local.py",
             "delegate",
+            "--stateless-turns",
             workspace,
             task,
         ]

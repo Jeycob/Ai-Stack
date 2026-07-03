@@ -109,6 +109,23 @@ def write_temp(text: str) -> str:
         handle.close()
 
 
+def env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def stateless_turns_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "stateless_turns", False)) or env_truthy("OWUI_STATELESS")
+
+
+def add_stateless_turns_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--stateless-turns",
+        action="store_true",
+        default=env_truthy("OWUI_STATELESS"),
+        help="Force nested OpenWebUI turns into stateless /api/chat/completions mode to avoid recursive chat deadlocks.",
+    )
+
+
 def repo_prefix(repo: str) -> str:
     return f"repo: {repo.strip()}"
 
@@ -1370,6 +1387,8 @@ def invoke_turn(
         cmd.append("--no-live-status")
     if args.send_history or send_history:
         cmd.append("--send-history")
+    if stateless_turns_enabled(args):
+        cmd.append("--stateless")
 
     proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE if capture_output else None, stderr=subprocess.STDOUT if capture_output else None)
     return proc.returncode, proc.stdout or ""
@@ -1978,37 +1997,38 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
 def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -> str:
     workflow = decision["workflow"]
     task = task.strip()
+    nested = "--stateless-turns "
     if workflow == "run":
         command = extract_run_command(task)
-        return f"python3 codex/bin/mentor_codex_local.py delegate {workspace} $'repo: {workspace}\\nspusť příkaz: {command}'" if command else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py delegate {nested}{workspace} $'repo: {workspace}\\nspusť příkaz: {command}'" if command else f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
     if workflow == "action":
         action_name = decision.get("action_name", "")
-        return f"python3 codex/bin/mentor_codex_local.py action {workspace} {action_name}" if action_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py action {nested}{workspace} {action_name}" if action_name else f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
     if workflow == "create-repo":
         repo_name = decision.get("repo_name", "")
         github_flag = " --github" if decision.get("repo_github") == "yes" else ""
-        return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py create-repo {nested}{repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
     if workflow == "bootstrap-improve":
         return f"python3 codex/bin/mentor_codex_local.py bootstrap-dispatch {workspace} {shlex.quote(task)} --execute"
     if workflow == "deploy":
         return "python3 codex/bin/mentor_codex_local.py deploy"
     if workflow == "publish-plan":
-        return f"python3 codex/bin/mentor_codex_local.py publish-plan {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py publish-plan {nested}{workspace}"
     if workflow == "release-prep":
-        return f"python3 codex/bin/mentor_codex_local.py release-prep {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py release-prep {nested}{workspace}"
     if workflow == "push-check":
         return "python3 codex/bin/mentor_codex_local.py push-check"
     if workflow == "push":
         return "python3 codex/bin/mentor_codex_local.py push"
     if workflow == "review":
-        return f"python3 codex/bin/mentor_codex_local.py review {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py review {nested}{workspace}"
     if workflow == "apply-safe":
-        return f"python3 codex/bin/mentor_codex_local.py apply-safe {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py apply-safe {nested}{workspace}"
     if workflow == "improve":
-        return f"python3 codex/bin/mentor_codex_local.py improve {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py improve {nested}{workspace}"
     if workflow == "autopilot":
-        return f"python3 codex/bin/mentor_codex_local.py autopilot {workspace}"
-    return f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+        return f"python3 codex/bin/mentor_codex_local.py autopilot {nested}{workspace}"
+    return f"python3 codex/bin/mentor_codex_local.py audit {nested}{workspace}"
 
 
 def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task: str) -> str:
@@ -3104,9 +3124,9 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
         stderr=subprocess.STDOUT,
     )
     dispatch_output = dispatch_proc.stdout or ""
-    if dispatch_output.strip():
-        print(dispatch_output.strip())
     if dispatch_proc.returncode != 0:
+        if dispatch_output.strip():
+            print(dispatch_output.strip())
         return dispatch_proc.returncode
     dispatch_summary = extract_bootstrap_dispatch_summary(dispatch_output)
 
@@ -3161,7 +3181,23 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             else ""
         )
     )
-    return run_improve_sequence(improve_args)
+    rc, improve_output = capture_mode_output(improve_args)
+    if improve_output.strip():
+        print(
+            join_sections(
+                summarize_bootstrap_improve_outcome(repo_name, dispatch_summary, improve_output),
+                dispatch_output.strip(),
+                improve_output.strip(),
+            )
+        )
+    elif dispatch_output.strip():
+        print(
+            join_sections(
+                summarize_bootstrap_improve_outcome(repo_name, dispatch_summary, ""),
+                dispatch_output.strip(),
+            )
+        )
+    return rc
 
 
 def run_boundary_sequence(args: argparse.Namespace) -> int:
@@ -3268,6 +3304,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
     filter_route_smoke = Path(__file__).resolve().parent / "filter_route_smoke.py"
     gateway_admin = Path(__file__).resolve().parent / "gateway_admin.py"
     chat_scenarios = Path(__file__).resolve().parent / "owui_chat_scenarios.py"
+    stateless_chat_smoke = Path(__file__).resolve().parent / "owui_chat_turn_stateless_smoke.py"
     stack_check = Path(__file__).resolve().parent / "check_ai_stack.sh"
     api_key_file = Path(getattr(args, "api_key_file", str(Path(__file__).resolve().parents[1] / "state/openwebui-api.key")))
     has_owui_key = bool(os.getenv(getattr(args, "api_key_env", "OWUI_API_KEY"), "").strip()) or api_key_file.is_file()
@@ -3308,6 +3345,14 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
             sys.executable,
             str(filter_route_smoke),
             "--json",
+        ],
+        {},
+    ))
+    checks.append((
+        "stateless-chat-smoke",
+        [
+            sys.executable,
+            str(stateless_chat_smoke),
         ],
         {},
     ))
@@ -3558,10 +3603,12 @@ def parse_args() -> argparse.Namespace:
     ask.add_argument("repo")
     ask.add_argument("prompt")
     ask.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(ask)
 
     scan = sub.add_parser("scan", help="Ask codex-local to scan a workspace")
     scan.add_argument("workspace")
     scan.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(scan)
 
     action = sub.add_parser("action", help="Ask codex-local to run a broad workspace action")
     action.add_argument("workspace")
@@ -3569,49 +3616,59 @@ def parse_args() -> argparse.Namespace:
     action.add_argument("--timeout", type=int, default=1800)
     action.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     action.add_argument("--dry-run-action", action="store_true")
+    add_stateless_turns_argument(action)
 
     run = sub.add_parser("run", help="Ask codex-local to run an explicit command in a workspace")
     run.add_argument("workspace")
     run.add_argument("--timeout", type=int, default=300)
     run.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     run.add_argument("command", nargs=argparse.REMAINDER)
+    add_stateless_turns_argument(run)
 
     deploy = sub.add_parser("deploy", help="Ask codex-local to deploy ai-stack")
     deploy.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     deploy.set_defaults()
+    add_stateless_turns_argument(deploy)
 
     deploy_status = sub.add_parser("deploy-status", help="Ask codex-local for deploy status")
     deploy_status.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     deploy_status.set_defaults()
+    add_stateless_turns_argument(deploy_status)
 
     publish_plan = sub.add_parser("publish-plan", help="Ask codex-local for a short audited publish plan built on release-prep evidence")
     publish_plan.add_argument("workspace")
     publish_plan.add_argument("--timeout", type=int, default=120)
     publish_plan.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(publish_plan)
 
     release_prep = sub.add_parser("release-prep", help="Ask codex-local for a read-only release readiness preflight over a workspace")
     release_prep.add_argument("workspace")
     release_prep.add_argument("--timeout", type=int, default=120)
     release_prep.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(release_prep)
 
     push_check = sub.add_parser("push-check", help="Ask codex-local for an audited ai-stack pre-push readiness summary")
     push_check.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     push_check.set_defaults()
+    add_stateless_turns_argument(push_check)
 
     push = sub.add_parser("push", help="Ask codex-local to commit allowed ai-stack changes and push them to GitHub")
     push.add_argument("--branch", default="main")
     push.add_argument("--message", default="Update ai-stack via codex-local")
     push.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     push.set_defaults()
+    add_stateless_turns_argument(push)
 
     audit = sub.add_parser("audit", help="Run scan + verify plan + next-step recommendation for a workspace")
     audit.add_argument("workspace")
     audit.add_argument("--timeout", type=int, default=2400)
     audit.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(audit)
 
     review = sub.add_parser("review", help="Ask codex-local for a senior read-only review over a workspace")
     review.add_argument("workspace")
     review.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(review)
 
     autopilot = sub.add_parser("autopilot", help="Run scan + verify + choose and optionally execute one safe next action")
     autopilot.add_argument("workspace")
@@ -3619,21 +3676,25 @@ def parse_args() -> argparse.Namespace:
     autopilot.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     autopilot.add_argument("--recommend-only", action="store_true", help="Only print the chosen next action, do not execute it")
     autopilot.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(autopilot)
 
     patch_plan = sub.add_parser("patch-plan", help="Use autopilot recommendation, follow read_command, and ask codex-local for a minimal patch plan")
     patch_plan.add_argument("workspace")
     patch_plan.add_argument("--timeout", type=int, default=2400)
     patch_plan.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(patch_plan)
 
     apply_ready = sub.add_parser("apply-ready", help="Use autopilot recommendation, follow read guidance, and ask codex-local for a diff proposal only")
     apply_ready.add_argument("workspace")
     apply_ready.add_argument("--timeout", type=int, default=2400)
     apply_ready.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(apply_ready)
 
     apply_safe = sub.add_parser("apply-safe", help="Prepare a small diff through codex-local, validate it locally, and apply it through the gateway when it stays in a safe scope")
     apply_safe.add_argument("workspace")
     apply_safe.add_argument("--timeout", type=int, default=2400)
     apply_safe.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(apply_safe)
 
     improve = sub.add_parser("improve", help="Run broader agentic workspace improvement: capability steps first, then safe patch workflow if needed")
     improve.add_argument("workspace")
@@ -3642,6 +3703,7 @@ def parse_args() -> argparse.Namespace:
     improve.add_argument("--recovery-cycles", type=int, default=2, help="Maximum number of diagnose-fix-verify recovery loops after autopilot returns patch guidance")
     improve.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(improve)
 
     delegate = sub.add_parser("delegate", help="Choose the most suitable orchestration workflow for a workspace task and run it")
     delegate.add_argument("workspace")
@@ -3650,6 +3712,7 @@ def parse_args() -> argparse.Namespace:
     delegate.add_argument("--max-steps", type=int, default=3)
     delegate.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     delegate.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(delegate)
 
     profile = sub.add_parser("profile", help="Classify a workspace task into a runtime profile and recommended workflow without executing it")
     profile.add_argument("workspace")
@@ -3743,12 +3806,14 @@ def parse_args() -> argparse.Namespace:
     dispatch.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     dispatch.add_argument("--recommend-only", action="store_true", help="Only select and print the top task/workflow, do not execute it")
     dispatch.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI when execution is reached")
+    add_stateless_turns_argument(dispatch)
 
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
     create_repo.add_argument("--restart", action="store_true")
     create_repo.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(create_repo)
 
     bootstrap_improve = sub.add_parser("bootstrap-improve", help="Bootstrap a new repository/workspace and then continue with audited improve flow")
     bootstrap_improve.add_argument("workspace", help="Controller workspace, typically ai-stack")
@@ -3759,6 +3824,7 @@ def parse_args() -> argparse.Namespace:
     bootstrap_improve.add_argument("--recovery-cycles", type=int, default=2, help="Maximum number of diagnose-fix-verify recovery loops after autopilot returns patch guidance")
     bootstrap_improve.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     bootstrap_improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(bootstrap_improve)
 
     return parser.parse_args()
 
