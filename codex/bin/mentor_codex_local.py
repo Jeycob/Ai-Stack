@@ -45,6 +45,7 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
             "test": "Spusť testy v pracovním prostoru a vrať stručný výsledek.",
             "build": "Spusť build pracovního prostoru a vrať stručný výsledek.",
             "lint": "Spusť lint pracovního prostoru a vrať stručný výsledek.",
+            "verify": "Ověř pracovní prostor jako senior developer: pokud dává smysl, proveď lint, test a build a vrať stručný audit výsledků.",
         }
         visible = f"repo: {args.workspace}\n{action_labels[args.action]}"
         technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_ACTION {args.workspace} {args.action} --timeout {args.timeout}"
@@ -105,7 +106,7 @@ def parse_args() -> argparse.Namespace:
 
     action = sub.add_parser("action", help="Ask codex-local to run a broad workspace action")
     action.add_argument("workspace")
-    action.add_argument("action", choices=["install", "test", "build", "lint"])
+    action.add_argument("action", choices=["install", "test", "build", "lint", "verify"])
     action.add_argument("--timeout", type=int, default=1800)
     action.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     action.add_argument("--dry-run-action", action="store_true")

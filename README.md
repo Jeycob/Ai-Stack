@@ -143,6 +143,11 @@ nebo:
 
 Resolver se dívá na manifesty workspace a volí přirozený příkaz pro daný stack, například `npm install`, `python -m pip install -r requirements.txt`, `cargo test`, `go test ./...` nebo `./gradlew test`. Když vhodný příkaz nenašel, vrátí auditovatelný `unsupported` výsledek místo předstírání úspěchu.
 
+Ještě výš je capability `verify`, která se chová víc agenticky: pokusí se z workspace odvodit a v pořadí provést `lint -> test -> build`, přeskakuje nepodporované kroky a vrací stručný audit celého ověření. Příklad:
+
+    repo: Test2
+    ověř projekt
+
 Příklad čtení whitelisted souboru:
 
     repo: ai-stack
@@ -178,6 +183,11 @@ Příklad capability-based akce nad workspace:
     repo: ai-stack
     GATEWAY_ADMIN_WORKSPACE_ACTION ai-stack lint --dry-run
 
+Příklad vyššího ověřovacího workflow:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_WORKSPACE_ACTION ai-stack verify --dry-run
+
 Příklad registrace nového workspace přes gateway admin endpoint:
 
     repo: ai-stack
@@ -197,7 +207,7 @@ Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a 
 
 Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `tail` nebo `log_tail` balí do rozbalovacích `<details>` bloků, aby chat zůstal čitelný. OpenWebUI raw HTML v Markdownu escapuje, proto `openwebui/loader.js` tyto doslovné bloky po vykreslení zprávy převádí na skutečné lokální dropdowny.
 
-`Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat přirozené požadavky a mapovat je na několik širších capability workflow. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`; “vytvoř nové repository Test2 a vygeneruj ssh klíč” přepíše na `GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart`; běžné repo kontroly jako git status/remote/log nebo explicitní “spusť příkaz:” v registrovaném workspace přepíše na `GATEWAY_ADMIN_RUN_WORKSPACE`; běžné developerské akce jako install/test/build/lint přepíše na `GATEWAY_ADMIN_WORKSPACE_ACTION`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá auditovatelný admin workflow.
+`Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat přirozené požadavky a mapovat je na několik širších capability workflow. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`; “vytvoř nové repository Test2 a vygeneruj ssh klíč” přepíše na `GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart`; běžné repo kontroly jako git status/remote/log nebo explicitní “spusť příkaz:” v registrovaném workspace přepíše na `GATEWAY_ADMIN_RUN_WORKSPACE`; běžné developerské akce jako install/test/build/lint/verify přepíše na `GATEWAY_ADMIN_WORKSPACE_ACTION`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá auditovatelný admin workflow.
 
 System prompt pro stránku nastavení modelu v OpenWebUI je verzovaný v `docs/codex-local-model-system-prompt.md`. Jeho úloha je naučit model mluvit lidsky a nepodsouvat uživateli interní markery; skutečné provedení akcí má stále zajišťovat filter/tool vrstva.
 

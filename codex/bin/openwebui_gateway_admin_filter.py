@@ -1053,17 +1053,17 @@ class Filter:
     def _workspace_action_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_ACTION\s+(.+?)\s*$", text)
         if not m:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
         parts = shlex.split(m.group(1))
         if len(parts) < 2:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
 
         workspace = parts.pop(0)
         action = parts.pop(0)
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
             raise ValueError("Unsafe workspace name")
-        if action not in {"install", "test", "build", "lint"}:
-            raise ValueError("Action must be one of install, test, build, lint")
+        if action not in {"install", "test", "build", "lint", "verify"}:
+            raise ValueError("Action must be one of install, test, build, lint, verify")
 
         timeout = 900
         env_map = {}
@@ -1095,6 +1095,28 @@ class Filter:
             payload["env"] = env_map
         result = self._gateway_admin_request("/v1/admin/workspace/action", payload, timeout=max(timeout + 45, 90))
         output = self._trim(str(result.get("output", "")), 24000)
+        steps = result.get("verify_steps") or []
+        step_lines = []
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                action_name = str(step.get("action", "(unknown)"))
+                if not step.get("supported", True):
+                    step_lines.append(f"- {action_name}: skipped")
+                    continue
+                if step.get("ok") is True:
+                    state = "ok"
+                elif step.get("ok") is False:
+                    state = f"failed ({step.get('error') or step.get('exit_code')})"
+                else:
+                    state = "planned"
+                command = step.get("command") or []
+                command_text = self._shell_join(command) if command else ""
+                if command_text:
+                    step_lines.append(f"- {action_name}: {state} command={command_text}")
+                else:
+                    step_lines.append(f"- {action_name}: {state}")
         status = "WORKSPACE_ACTION_OK" if result.get("ok") else "WORKSPACE_ACTION_FAILED"
         return (
             f"{status}\n"
@@ -1106,6 +1128,7 @@ class Filter:
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
+            + ("verify_steps:\n" + "\n".join(step_lines) + "\n" if step_lines else "")
             + self._details("output", output)
         )
 

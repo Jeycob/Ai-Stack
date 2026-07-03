@@ -1,7 +1,7 @@
 """
 title: Codex Auto Tools Filter
 author: OpenAI Codex
-version: 0.1.6
+version: 0.1.7
 description: Dynamically attaches Codex toolsets and routes safe codex-local natural-language admin intents.
 """
 
@@ -226,6 +226,7 @@ class Filter:
             (["spust testy", "spusť testy", "run tests", "otestuj projekt"], "test", 1800),
             (["postav projekt", "build project", "udělej build", "udelej build", "spust build", "spusť build"], "build", 1800),
             (["spust lint", "spusť lint", "run lint", "zkontroluj lint", "lint projekt"], "lint", 1200),
+            (["over projekt", "ověř projekt", "zkontroluj projekt", "verify project", "proveď ověření", "proveď overeni"], "verify", 2400),
         ]
         for needles, action, timeout in actions:
             if any(needle in lower for needle in needles):

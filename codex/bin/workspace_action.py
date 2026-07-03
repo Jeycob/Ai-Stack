@@ -16,7 +16,7 @@ from workspace_scan import collect, load_workspace
 
 
 DEFAULT_WORKSPACES_FILE = "codex/workspaces.json"
-ALLOWED_ACTIONS = {"install", "test", "build", "lint"}
+ALLOWED_ACTIONS = {"install", "test", "build", "lint", "verify"}
 
 
 class ActionError(RuntimeError):
@@ -146,6 +146,131 @@ def resolve_action(root: Path, action: str) -> tuple[list[str], str]:
     )
 
 
+def verify_plan(root: Path) -> list[dict[str, object]]:
+    steps = []
+    for action in ["lint", "test", "build"]:
+        try:
+            command, resolved_from = resolve_action(root, action)
+            steps.append(
+                {
+                    "action": action,
+                    "command": command,
+                    "resolved_from": resolved_from,
+                    "supported": True,
+                }
+            )
+        except ActionError as exc:
+            steps.append(
+                {
+                    "action": action,
+                    "supported": False,
+                    "reason": str(exc),
+                }
+            )
+    return steps
+
+
+def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> dict[str, object]:
+    started = time.time()
+    steps = verify_plan(root)
+    runnable = [step for step in steps if step.get("supported")]
+    if not runnable:
+        return {
+            "ok": False,
+            "planned_only": True,
+            "action": "verify",
+            "root": str(root),
+            "duration_ms": int((time.time() - started) * 1000),
+            "error": "unsupported",
+            "verify_steps": steps,
+            "output": "No supported verify steps were found for this workspace.",
+        }
+
+    if dry_run:
+        return {
+            "ok": True,
+            "planned_only": True,
+            "action": "verify",
+            "root": str(root),
+            "duration_ms": int((time.time() - started) * 1000),
+            "verify_steps": steps,
+            "output": "",
+        }
+
+    deadline = time.time() + timeout
+    executed_steps = []
+    ok = True
+    for step in steps:
+        if not step.get("supported"):
+            executed_steps.append(step)
+            continue
+        remaining = max(1, int(deadline - time.time()))
+        if remaining <= 0:
+            executed_steps.append(
+                {
+                    **step,
+                    "ok": False,
+                    "exit_code": None,
+                    "error": "timeout_budget_exhausted",
+                    "output": "",
+                }
+            )
+            ok = False
+            break
+        try:
+            proc = subprocess.run(
+                step["command"],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=remaining,
+                env=env,
+            )
+            step_result = {
+                **step,
+                "ok": proc.returncode == 0,
+                "exit_code": proc.returncode,
+                "output": proc.stdout,
+            }
+            executed_steps.append(step_result)
+            if proc.returncode != 0:
+                ok = False
+                break
+        except subprocess.TimeoutExpired as exc:
+            executed_steps.append(
+                {
+                    **step,
+                    "ok": False,
+                    "exit_code": None,
+                    "error": "timeout",
+                    "output": (exc.stdout or "") + (exc.stderr or ""),
+                }
+            )
+            ok = False
+            break
+
+    summary_lines = []
+    for step in executed_steps:
+        if not step.get("supported"):
+            summary_lines.append(f"{step['action']}: skipped")
+        elif step.get("ok"):
+            summary_lines.append(f"{step['action']}: ok")
+        else:
+            reason = step.get("error") or f"exit {step.get('exit_code')}"
+            summary_lines.append(f"{step['action']}: failed ({reason})")
+
+    return {
+        "ok": ok,
+        "planned_only": False,
+        "action": "verify",
+        "root": str(root),
+        "duration_ms": int((time.time() - started) * 1000),
+        "verify_steps": executed_steps,
+        "output": "\n".join(summary_lines),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Resolve and run a common developer action in a workspace.")
     parser.add_argument("action", choices=sorted(ALLOWED_ACTIONS))
@@ -171,39 +296,42 @@ def main() -> int:
 
     started = time.time()
     try:
-        command, resolved_from = resolve_action(root, args.action)
-        if args.dry_run:
-            result = {
-                "ok": True,
-                "planned_only": True,
-                "action": args.action,
-                "root": str(root),
-                "command": command,
-                "resolved_from": resolved_from,
-                "duration_ms": int((time.time() - started) * 1000),
-                "output": "",
-            }
+        if args.action == "verify":
+            result = run_verify(root, args.timeout, env, args.dry_run)
         else:
-            proc = subprocess.run(
-                command,
-                cwd=root,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=args.timeout,
-                env=env,
-            )
-            result = {
-                "ok": proc.returncode == 0,
-                "planned_only": False,
-                "action": args.action,
-                "root": str(root),
-                "command": command,
-                "resolved_from": resolved_from,
-                "duration_ms": int((time.time() - started) * 1000),
-                "exit_code": proc.returncode,
-                "output": proc.stdout,
-            }
+            command, resolved_from = resolve_action(root, args.action)
+            if args.dry_run:
+                result = {
+                    "ok": True,
+                    "planned_only": True,
+                    "action": args.action,
+                    "root": str(root),
+                    "command": command,
+                    "resolved_from": resolved_from,
+                    "duration_ms": int((time.time() - started) * 1000),
+                    "output": "",
+                }
+            else:
+                proc = subprocess.run(
+                    command,
+                    cwd=root,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=args.timeout,
+                    env=env,
+                )
+                result = {
+                    "ok": proc.returncode == 0,
+                    "planned_only": False,
+                    "action": args.action,
+                    "root": str(root),
+                    "command": command,
+                    "resolved_from": resolved_from,
+                    "duration_ms": int((time.time() - started) * 1000),
+                    "exit_code": proc.returncode,
+                    "output": proc.stdout,
+                }
     except subprocess.TimeoutExpired as exc:
         result = {
             "ok": False,
@@ -238,6 +366,22 @@ def main() -> int:
             print(f"resolved_from={result['resolved_from']}")
         if "command" in result:
             print(f"command={' '.join(result['command'])}")
+        if "verify_steps" in result:
+            print("verify_steps:")
+            for step in result["verify_steps"]:
+                if not step.get("supported"):
+                    print(f"- {step['action']}: skipped")
+                    continue
+                line = f"- {step['action']}: "
+                if step.get("ok") is True:
+                    line += "ok"
+                elif step.get("ok") is False:
+                    line += f"failed ({step.get('error') or step.get('exit_code')})"
+                else:
+                    line += "planned"
+                if step.get("command"):
+                    line += f" command={' '.join(step['command'])}"
+                print(line)
         print(f"planned_only={result.get('planned_only', False)}")
         print(f"duration_ms={result['duration_ms']}")
         if "exit_code" in result:
