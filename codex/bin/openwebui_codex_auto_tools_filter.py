@@ -120,6 +120,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_plan_command(text)
         if not command:
+            command = self._natural_workspace_fix_plan_command(text)
+        if not command:
             command = self._natural_workspace_top_command(text)
         if not command:
             command = self._natural_workspace_backlog_command(text)
@@ -511,6 +513,38 @@ class Filter:
         )
         if not task:
             return None
+        return self._plan_helper_command(workspace, task)
+
+    def _natural_workspace_fix_plan_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        cue_needles = (
+            "najdi bug a navrhni opravu",
+            "najdi bug a oprav plan",
+            "najdi problém a navrhni opravu",
+            "najdi problem a navrhni opravu",
+            "navrhni opravu",
+            "repair plan",
+            "fix plan",
+            "bugfix plan",
+            "plan opravy",
+            "plán opravy",
+        )
+        if not any(needle in lower for needle in cue_needles):
+            return None
+        task = self._extract_single_task(
+            text,
+            [
+                r"(?is)\b(?:najdi\s+bug\s+a\s+navrhni\s+opravu)\b\s*(?:pro)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:najdi\s+probl[eé]m\s+a\s+navrhni\s+opravu)\b\s*(?:pro)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:navrhni\s+opravu|plan\s+opravy|plán\s+opravy|repair\s+plan|fix\s+plan|bugfix\s+plan)\b\s*(?:pro|for)?\s*:?\s*(.+?)\s*$",
+            ],
+            cue_needles,
+        )
+        if not task:
+            task = "Najdi bug a navrhni opravu."
         return self._plan_helper_command(workspace, task)
 
     def _next_helper_command(self, workspace: str, task: str) -> str:

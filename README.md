@@ -372,6 +372,7 @@ Podobně už jde přirozeně routovat i levná mentor analytika nad jedním task
 - `Jaký workflow bys zvolil pro ...?` nebo `Jaký runtime profile bys zvolil pro ...?` -> `mentor_codex_local.py profile`
 - `Udělej mentor report pro ...` nebo `Shrň workflow pro ...` -> `mentor_codex_local.py report`
 - `Připrav krátký plán pro ...` nebo `Jaký plán bys zvolil pro ...?` -> `mentor_codex_local.py plan`
+- `Najdi bug a navrhni opravu`, `Fix plan` nebo `Plán opravy` -> také `mentor_codex_local.py plan`, ale jako levný bridge z review do opravy
 
 Tohle je důležitý směr celé autonomie: méně jednorázových whitelist markerů a víc širších auditovaných capability scope. V praxi to znamená, že codex-local má být samostatnější hlavně u standardních workflow, která už máme pojmenovaná a ohraničená, ne přes neomezený shell.
 

@@ -304,6 +304,7 @@ Stejne tak uz umi prirozene routovat i dalsi levne mentor vrstvy:
 - `Jaky workflow bys zvolil pro ...?` nebo `Jaky runtime profile bys zvolil pro ...?` -> `mentor_codex_local.py profile`
 - `Udelej mentor report pro ...` nebo `Shrn workflow pro ...` -> `mentor_codex_local.py report`
 - `Priprav kratky plan pro ...` nebo `Jaky plan bys zvolil pro ...?` -> `mentor_codex_local.py plan`
+- `Najdi bug a navrhni opravu`, `Fix plan` nebo `Plan opravy` -> take `mentor_codex_local.py plan`, ale jako levny bridge mezi review a opravou
 
 Plan navic vraci:
 
