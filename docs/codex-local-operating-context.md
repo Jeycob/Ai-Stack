@@ -84,6 +84,7 @@ python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok 
 
 Tenhle mod sklada:
 - helper smoke pres `mentor_scenario_runner.py`
+- helper-only `bootstrap-probe` pro create-repo/bootstrap reasoning bez mutaci
 - user-like audit chat scenare
 - stack summary pres `check_ai_stack.sh`
 
@@ -99,6 +100,19 @@ python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok 
 
 `--strict-live` nedovoli fallback do `dry-run`. Bez OpenWebUI API key skonci
 okamzite jako blocker, protoze z pohledu mentora nejde o plny E2E dukaz.
+
+`self-check` standardne zahrnuje i bootstrap-oriented helper probe nad zadanim
+typu "vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus
+to rozbehnout". Cilem je prubezne hlidat, ze mentor vrstva porad umi rozpoznat
+a rozplanovat bootstrap-improve use-case, aniz by bezne self-checky samy
+zakladaly nova repo. Lze ho upravit nebo vypnout:
+
+```bash
+python3 codex/bin/mentor_codex_local.py self-check ai-stack \
+  --bootstrap-task "Vytvor nove repository Test3 jako FastAPI appku a navrhni dalsi kroky."
+
+python3 codex/bin/mentor_codex_local.py self-check ai-stack --skip-bootstrap-probe
+```
 
 `codex/bin/check_ai_stack.sh` umi tenhle audit-chat smoke pridat do bezneho
 stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po
@@ -121,6 +135,13 @@ nasledne reasoning navrh dalsiho kroku pres `--send-history`. Rezim
 `autopilot` jde o krok dal: po `scan -> verify` necha codex-local vybrat prave
 jeden dalsi bezpecny capability krok z povolene mnoziny a muze ho rovnou
 spustit.
+
+Podobne se lehce rozsiril i safe patch scope. `apply-safe` uz neni zbytecne
+svazany jen tremi soubory a uplne miniaturnim diffem: porad zustava v
+auditovanem source/config prostoru, ale umi vzit o neco sirsi maly patch pres
+`docs/`, `codex/*.json|*.md`, `codex/bin/*.py|*.sh`, `codex/gateway/*.py`,
+`openwebui/*.js|*.css` a vybrane root configy. Cilem je vic realne autonomie a
+min zbytecnych stopu kvuli prilis uzkemu whitelistu.
 
 Pro admin operace pouzivej `--no-live-status`, pokud odpoved ma byt kratka a deterministicka. Pro dlouhe modelove analyzy live status zapni.
 
@@ -475,6 +496,12 @@ Review vraci stejny execution brief pattern, ale s workflow `review`; je urceny 
 Stejny princip plati i pro sirsi capability flow: helper nema zustavat zbytecne uzky u tasku, ktere uz umi auditovane provest. Proto dnes umi klasifikovat i prime capability pozadavky typu `spust testy`, `nainstaluj zavislosti`, `over projekt`, `vytvor repository Test2` nebo `pullni ai-stack a nasad` rovnou na workflow `action`, `create-repo` nebo `deploy`, misto toho aby vsechno shazoval do obecneho `audit`.
 
 Pro opravdu siroka lidska zadani je preferovana dalsi vrstva `delegate`: pokud prompt zni treba `Fixni to a dotahni co zvladnes`, `Udelej co je potreba`, `Proved to jako Codex` nebo `Vyber workflow a proved`, filter nema zbrkle vybrat jediny capability runner. Ma to prelozit na `mentor_codex_local.py delegate`, ktery teprve rozhodne, jestli je spravne `action`, `deploy`, `create-repo`, `autopilot`, `apply-safe` nebo `improve`.
+
+Ten router je navic schvalne tolerantnejsi k prirozenym formulacim. Chyta i
+pozadavky jako `vezmi si to cele`, `postarej se o to sam`, `udelej maximum`,
+`priprav starter`, `napis zaklad appky` nebo `pokracuj sam`, a podle kontextu
+je mapuje bud do `delegate`, nebo rovnou do `bootstrap-improve` /
+`workspace-autopilot`. Model tak neni tolik zavisly na presnem slovniku.
 
 `openwebui_codex_auto_tools_filter.py` umi tenhle use-case uz i prirozene routovat z chatu: kdyz uzivatel napise `repo: <workspace>` a pozadavek typu `Dej mi kratky mentor brief pro ...`, `Jaky brief ma dostat model pro ...` nebo `execution brief`, filter to prelozi na `mentor_codex_local.py brief` pres `GATEWAY_ADMIN_RUN_WORKSPACE`.
 

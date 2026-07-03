@@ -1,8 +1,8 @@
 """
 title: Codex Auto Tools Filter
 author: OpenAI Codex
-version: 0.1.8
-description: Dynamically attaches Codex toolsets and routes broader codex-local natural-language admin intents.
+version: 0.1.9
+description: Dynamically attaches Codex toolsets and routes broader codex-local natural-language admin intents with wider autonomous capability mapping.
 """
 
 import json
@@ -1185,9 +1185,23 @@ class Filter:
             "závislost",
             "napis kod",
             "napiš kód",
+            "napis zaklad",
+            "napiš základ",
+            "zaklad appky",
+            "základ appky",
+            "zaklad aplikace",
+            "základ aplikace",
             "implementuj",
+            "dopln kod",
+            "doplň kód",
             "udelej appku",
             "udělej appku",
+            "udelej projekt",
+            "udělej projekt",
+            "priprav starter",
+            "připrav starter",
+            "priprav scaffold",
+            "připrav scaffold",
             "rozbehni",
             "rozběhni",
             "spust to",
@@ -1196,6 +1210,9 @@ class Filter:
             "testy",
             "dotahni",
             "dotáhni",
+            "pokracuj sam",
+            "pokračuj sám",
+            "pokračuj sam",
             "co je treba",
             "co je třeba",
         ]
@@ -1306,6 +1323,13 @@ class Filter:
             "dokonči to",
             "rozbehni to",
             "rozběhni to",
+            "vem si to cele",
+            "vezmi si to celé",
+            "postarej se o to",
+            "postarej se o to sam",
+            "postarej se o to sám",
+            "dotahni co pujde",
+            "dotáhni co půjde",
             "udelej co je potreba",
             "udělej co je potřeba",
             "pokracuj jako codex",
@@ -1322,6 +1346,8 @@ class Filter:
             "proveď to jako codex",
             "dotahni co zvladnes",
             "dotáhni co zvládneš",
+            "udělej maximum",
+            "udělej co zvládneš",
         )
         if not any(needle in lower for needle in delegate_needles):
             return None
@@ -1353,6 +1379,8 @@ class Filter:
             "pokračuj sam",
             "udelej co je potreba",
             "udělej co je potřeba",
+            "udelej maximum",
+            "udělej maximum",
             "zkus to rozbehat",
             "zkus to rozběhat",
             "over a pokracuj",
@@ -1379,6 +1407,8 @@ class Filter:
             "dodelej to",
             "dokonci to",
             "dokonči to",
+            "zkus vsechno potrebne",
+            "zkus všechno potřebné",
         ]
         if any(needle in lower for needle in recommend_only):
             return f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --recommend-only --timeout 2400"

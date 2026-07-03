@@ -26,6 +26,7 @@ SAFE_PATCH_ROOT_FILES = {
 }
 SAFE_PATCH_PREFIX_RULES = (
     ("docs/", (".md",)),
+    ("codex/", (".json", ".md")),
     ("codex/bin/", (".py", ".sh")),
     ("codex/gateway/", (".py",)),
     ("openwebui/", (".js", ".css")),
@@ -298,14 +299,14 @@ def is_safe_patch_target(rel: str) -> bool:
 def validate_safe_diff(diff: str) -> tuple[list[str], str]:
     if any(token in diff for token in UNSAFE_PATCH_SEGMENTS):
         raise ValueError("Diff touches runtime, backup, secret, or generated paths")
-    if diff.count("\n@@ ") > 12:
+    if diff.count("\n@@ ") > 24:
         raise ValueError("Diff is too large for safe auto-apply")
-    if len(diff.splitlines()) > 240:
+    if len(diff.splitlines()) > 400:
         raise ValueError("Diff has too many lines for safe auto-apply")
 
     files = touched_patch_files(diff)
-    if len(set(files)) > 3:
-        raise ValueError("Safe auto-apply is limited to at most 3 files")
+    if len(set(files)) > 5:
+        raise ValueError("Safe auto-apply is limited to at most 5 files")
 
     cleaned: list[str] = []
     for rel in files:
@@ -400,13 +401,25 @@ def wants_repo_followthrough(task: str) -> bool:
         "závislost",
         "napis kod",
         "napiš kód",
+        "napis zaklad",
+        "napiš základ",
+        "zaklad appky",
+        "základ appky",
+        "zaklad aplikace",
+        "základ aplikace",
         "implementuj",
+        "dopln kod",
+        "doplň kód",
         "vytvor aplikaci",
         "vytvoř aplikaci",
         "udelej appku",
         "udělej appku",
         "udelej projekt",
         "udělej projekt",
+        "priprav starter",
+        "připrav starter",
+        "priprav scaffold",
+        "připrav scaffold",
         "rozbehni",
         "rozběhni",
         "spust to",
@@ -420,6 +433,9 @@ def wants_repo_followthrough(task: str) -> bool:
         "shipni",
         "dotahni",
         "dotáhni",
+        "pokracuj sam",
+        "pokračuj sam",
+        "pokračuj sám",
         "co je treba",
         "co je třeba",
         "react",
@@ -2578,6 +2594,11 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
     api_key_file = Path(getattr(args, "api_key_file", str(Path(__file__).resolve().parents[1] / "state/openwebui-api.key")))
     has_owui_key = bool(os.getenv(getattr(args, "api_key_env", "OWUI_API_KEY"), "").strip()) or api_key_file.is_file()
     strict_live = bool(getattr(args, "strict_live", False))
+    bootstrap_task = getattr(
+        args,
+        "bootstrap_task",
+        "Vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus to rozbehnout.",
+    )
 
     checks: list[tuple[str, list[str], dict[str, str]]] = []
     checks.append((
@@ -2591,6 +2612,18 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         ],
         {},
     ))
+    if not getattr(args, "skip_bootstrap_probe", False):
+        checks.append((
+            "bootstrap-probe",
+            [
+                sys.executable,
+                str(scenario_runner),
+                args.workspace,
+                bootstrap_task,
+                "--json",
+            ],
+            {},
+        ))
     checks.append((
         "chat-scenarios",
         [
@@ -2625,6 +2658,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         payload = {
             "workspace": args.workspace,
             "task": args.task,
+            "bootstrap_task": bootstrap_task,
             "model": args.model,
             "ok": False,
             "strict_live": True,
@@ -2638,6 +2672,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         print("MENTOR_SELF_CHECK")
         print(f"workspace={args.workspace}")
         print(f"task={args.task}")
+        print(f"bootstrap_task={bootstrap_task}")
         print(f"model={args.model}")
         print("ok=False")
         print("strict_live=True")
@@ -2686,6 +2721,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
     payload = {
         "workspace": args.workspace,
         "task": args.task,
+        "bootstrap_task": bootstrap_task,
         "model": args.model,
         "ok": overall_ok,
         "strict_live": strict_live,
@@ -2700,6 +2736,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
     print("MENTOR_SELF_CHECK")
     print(f"workspace={args.workspace}")
     print(f"task={args.task}")
+    print(f"bootstrap_task={bootstrap_task}")
     print(f"model={args.model}")
     print(f"ok={overall_ok}")
     print(f"strict_live={strict_live}")
@@ -2962,6 +2999,8 @@ def parse_args() -> argparse.Namespace:
     self_check = sub.add_parser("self-check", help="Run a compact mentor healthcheck across helper flow, chat scenarios, and stack summary")
     self_check.add_argument("workspace")
     self_check.add_argument("task", nargs="?", default="Navrhni dalsi krok a dotahni co pujde.")
+    self_check.add_argument("--bootstrap-task", default="Vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus to rozbehnout.", help="Bootstrap-oriented probe task for helper-only self-check coverage")
+    self_check.add_argument("--skip-bootstrap-probe", action="store_true", help="Skip the helper-only bootstrap reasoning probe")
     self_check.add_argument("--json", action="store_true", help="Emit JSON results")
     self_check.add_argument("--skip-openwebui", action="store_true", help="Skip OpenWebUI endpoint check inside stack summary")
     self_check.add_argument("--strict-live", action="store_true", help="Require live OpenWebUI chat checks; fail immediately if API key is unavailable")

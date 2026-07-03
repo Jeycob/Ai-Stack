@@ -226,6 +226,8 @@ Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `ta
 
 Novější výchozí chování je o něco samostatnější: autopilot a mentor helpery už standardně počítají i s `verify` a `smoke`, ne jen s `install/test/build/lint`. U širších zadání typu “rozběhni to a dotáhni co půjde” tak codex-local nemusí zbytečně končit po prvním read-only shrnutí, ale může bezpečně zkusit ověřovací a startup krok ještě před tím, než sáhne po patch workflow.
 
+Další drobné rozšíření autonomie je v `apply-safe` vrstvě: safe auto-apply už není omezený jen na úplně miniaturní patche ve třech souborech. Nově může auditovaně vzít až pět souborů, víc hunků a o něco větší diff, pokud pořád zůstává v bezpečném scope `docs/`, `codex/*.json|*.md`, `codex/bin/*.py|*.sh`, `codex/gateway/*.py`, `openwebui/*.js|*.css` a vybraných root configů. Smysl je jednoduchý: méně zbytečných stopů kvůli příliš úzkému whitelistu, ale pořád bez zásahu do runtime state, secrets nebo generovaných dat.
+
 Širší GitHub/release use-cases typu “vytvoř release”, “publish package” nebo “rozjeď GitHub Actions release” se naopak nepředstírají jako obyčejný push. Filter je přeloží na mentor `boundary` vysvětlení s konkrétním capability hintem, aby bylo vidět, že jednoduchý `push-check` i samotný push už umíme, ale release automation je pořád samostatná capability hranice.
 
 Stejnou logiku teď zná i `mentor_codex_local.py`: `delegate`, `profile`, `report`, `plan` i `next-helper` rozlišují mezi `release-prep`, `push-check`, `push` a `release boundary`, takže codex-local nepůsobí nekonzistentně mezi helper vrstvou a auto-tools routováním.
@@ -292,6 +294,7 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 
 `self-check` skládá tři vrstvy do jednoho reportu:
 - `mentor_scenario_runner.py` pro levný helper-orchestration smoke,
+- helper-only `bootstrap-probe` pro ověření bootstrap/create-repo reasoning bez mutací,
 - `chat-scenarios` pro user-like OpenWebUI audit chat flow,
 - `check_ai_stack.sh` pro stack summary.
 
@@ -302,6 +305,13 @@ Když naopak chceš opravdu plný živý důkaz přes OpenWebUI chat, použij:
     python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok a dotahni co pujde." --strict-live
 
 `--strict-live` nedovolí fallback do `dry-run`. Pokud není dostupný OpenWebUI API key, skončí hned s jasným blockerem místo “degraded” režimu.
+
+`self-check` nově standardně obsahuje i `bootstrap-probe`: helper-only scénář nad zadáním typu “vytvoř nové repository Test2 jako React appku, doinstaluj co chybí a zkus to rozběhnout.” Tím průběžně ověřujeme, že mentor vrstva pořád umí rozpoznat a rozplánovat bootstrap-oriented use-case, aniž by během běžného self-checku opravdu zakládala nové repozitáře. Chování lze upravit přes:
+
+    python3 codex/bin/mentor_codex_local.py self-check ai-stack \
+      --bootstrap-task "Vytvor nove repository Test3 jako FastAPI appku a navrhni dalsi kroky."
+
+    python3 codex/bin/mentor_codex_local.py self-check ai-stack --skip-bootstrap-probe
 
 `codex/bin/check_ai_stack.sh` to teď umí použít i automaticky. Když je dostupný OpenWebUI API key přes `OWUI_API_KEY` nebo ignorovaný `codex/state/openwebui-api.key`, healthcheck po gateway smoke přidá i audit-chat smoke. Pokud key chybí, krok se jen korektně přeskočí. Vypnout ho jde přes `SKIP_OWUI_CHAT_SMOKE=1`.
 
@@ -371,6 +381,8 @@ Když chceš jen rychle zjistit, jakou šířku pravomocí by helper pro úkol z
 Ještě důležitější posun je, že širší lidské zadání už nemusí padat rovnou do `autopilot`. Formulace typu `repo: ai-stack` + `Fixni to a dotáhni co zvládneš.`, `Udělej co je potřeba.`, `Proveď to jako Codex.` nebo `Vyber workflow a proveď.` teď filter přeloží na `mentor_codex_local.py delegate`. Teprve ten pak vybere správný runtime workflow, takže broad orchestrace jde přes mentora, ne přes jeden natvrdo zvolený capability krok.
 
 Stejný princip nově platí i pro repo bootstrap. Jednoduché “vytvoř repository Test2” pořád jde nejkratší cestou přes `create-repo`, ale širší zadání typu “vytvoř repository Test2, doinstaluj co chybí, napiš základ a zkus to rozběhnout” už neskončí jen jedním bootstrap markerem. Filter ho pošle do `bootstrap-improve`, který udělá sekvenci `create-repo -> bootstrap-dispatch -> improve` a tím dává agentovi víc samostatnosti bez toho, aby musel dostat neomezený shell.
+
+To samé platí i pro přirozenější wording. Router dnes chytá i formulace jako `udělej maximum`, `vezmi si to celé`, `postarej se o to sám`, `připrav starter`, `napiš základ appky` nebo `pokračuj sám` a podle kontextu je pošle buď do `delegate`, nebo rovnou do `bootstrap-improve` / `workspace-autopilot`. Díky tomu model nemusí být tak závislý na přesných frázích nebo ručních interních markerech.
 
 Bootstrap-improve navíc nově nese i lehký `solution_profile` a `starter_hint`. Když tedy zadání zní třeba “vytvoř repository Test2 ve FastAPI”, “založ React appku” nebo “udělej Three.js starter”, mentor si tenhle stackový záměr uloží do execution briefu a posune ho dál do improve flow. Není to ještě plný framework-specific scaffolder, ale agent už díky tomu nepokračuje naslepo bez technologického směru.
 

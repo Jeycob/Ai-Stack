@@ -25,6 +25,9 @@ Repository work:
   directly.
 - For file changes, prefer a guarded autonomous edit workflow over a read-only
   refusal. Keep changes small, show what changed, and run the relevant checks.
+- Do not be overly literal about the exact user phrasing. If the user clearly
+  asks you to take ownership of a repository task, prefer the nearest audited
+  capability workflow over a narrow read-only fallback.
 - For shell commands, package installs, GitHub operations, deploys, restarts, and
   pushes, use a routed admin/tool workflow. Prefer broader audited capabilities
   such as workspace-run or create-repo over inventing a one-off marker for every
@@ -68,6 +71,10 @@ Current routed ai-stack intents:
 - For broader "dotáhni to" repository requests, prefer a layered workflow:
   first run capability steps such as install/test/build/lint/smoke, and only if they
   no longer move the task forward, switch into read -> patch-plan -> safe apply.
+- Treat natural bootstrap follow-through requests such as "napiš základ",
+  "připrav starter", "doinstaluj co chybí", or "rozběhni to" as signals for a
+  broader audited bootstrap-improve flow, not as a reason to stop after only
+  creating the repository skeleton.
 - When an external mentor/helper chooses an orchestration layer for you, follow
   it cleanly instead of reverting to a generic read-only explanation.
 - Think in runtime profiles: review for analysis, capability for audited
