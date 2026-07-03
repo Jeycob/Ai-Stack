@@ -261,14 +261,41 @@ def choose_workflow(task: str) -> str:
 def classify_task(task: str) -> dict[str, str]:
     lower = task.lower()
 
-    def result(profile: str, workflow: str, reason: str, confidence: str, guardrail_summary: str) -> dict[str, str]:
+    def result(
+        profile: str,
+        workflow: str,
+        reason: str,
+        confidence: str,
+        guardrail_summary: str,
+        missing_capability_hint: str = "",
+    ) -> dict[str, str]:
         return {
             "runtime_profile": profile,
             "workflow": workflow,
             "reason": reason,
             "confidence": confidence,
             "guardrail_summary": guardrail_summary,
+            "missing_capability_hint": missing_capability_hint,
         }
+
+    if any(token in lower for token in ("github actions", "create github repo", "vytvor github", "pushni do githubu", "release", "publish package")):
+        return result(
+            "capability",
+            "audit",
+            "The task mentions remote repository or release operations that may exceed the currently delegated safe runtime scope.",
+            "medium",
+            "We should inspect the workspace and existing deployment/push capabilities first instead of assuming direct remote write access.",
+            "If the task truly needs remote repository or release mutations, add or use a dedicated audited GitHub/release capability rather than widening generic runtime access.",
+        )
+    if any(token in lower for token in ("nainstaluj systemovy balik", "nainstaluj systémový balík", "apt install", "sudo ", "docker compose", "restartni service", "restartuj service")):
+        return result(
+            "runtime",
+            "audit",
+            "The task likely needs host-level runtime or package-management privileges, which should not be inferred from a normal repo task.",
+            "medium",
+            "Current repo-safe and workspace-safe flows are not enough for host-level package/service changes without an explicit audited runtime capability.",
+            "Add or invoke a dedicated host-runtime capability for package installs or service restarts instead of broadening workspace execution implicitly.",
+        )
 
     if any(token in lower for token in ("git status", "git remote", "git log", "spusť příkaz:", "spust prikaz:", "run command")):
         return result(
@@ -293,6 +320,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task points to a small documentation/config/helper change that fits the guarded safe-patch scope.",
             "medium",
             "The requested change looks small enough for guarded ai-stack patching, but only inside the safe file scope and after diff validation.",
+            "If the change grows beyond the safe ai-stack file scope, switch to a broader audited workspace capability instead of forcing apply-safe.",
         )
     if any(token in lower for token in ("fixni to", "rozběhni to", "rozbehni to", "dotáhni to", "dotahni to", "dokonči to", "dokonci to")):
         return result(
@@ -301,6 +329,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task asks to push the project forward agentically and may need both capability steps and a follow-up patch.",
             "medium",
             "The task may require multiple audited steps; start with capability execution and only escalate into safe patching if capability progress runs out.",
+            "If capability execution and safe patching still do not unblock progress, request a dedicated wider runtime capability rather than falling back to generic unrestricted shell.",
         )
     if any(token in lower for token in ("ověř projekt", "over projekt", "pokračuj sám", "pokracuj sam", "udělej co je potřeba", "udelej co je potreba")):
         return result(
@@ -309,6 +338,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task is primarily about audited install/test/build/lint progression inside the workspace.",
             "medium",
             "Execution is requested, but standard capability steps should be tried before any patch-oriented or broader runtime action.",
+            "If the next useful step is outside install/test/build/lint, expose that next step as a named audited capability instead of widening autopilot blindly.",
         )
     return result(
         "review",
@@ -316,6 +346,7 @@ def classify_task(task: str) -> dict[str, str]:
         "Defaulting to the narrowest safe mentoring workflow because the task does not clearly require execution.",
         "low",
         "Intent is ambiguous, so we avoid widening permissions until the task shape is clearer from the audit context.",
+        "Clarify or infer the next audited capability from the repository context before expanding runtime scope.",
     )
 
 
@@ -815,6 +846,7 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
     print(f"DELEGATE_CONFIDENCE={decision['confidence']}")
     print(f"DELEGATE_REASON={decision['reason']}")
     print(f"DELEGATE_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"DELEGATE_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
 
     if workflow == "run":
         command_text = extract_run_command(args.task)
@@ -839,6 +871,7 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
     print(f"CONFIDENCE={decision['confidence']}")
     print(f"REASON={decision['reason']}")
     print(f"GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
     return 0
 
 

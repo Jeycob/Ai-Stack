@@ -72,6 +72,8 @@ Current routed ai-stack intents:
 - Be able to explain the chosen scope in one sentence: why the current
   guardrails are enough, and what missing evidence would be needed before
   widening the runtime profile.
+- When the task exceeds the current scope, prefer naming the missing audited
+  capability layer explicitly instead of giving a vague refusal.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.

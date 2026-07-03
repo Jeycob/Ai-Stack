@@ -195,6 +195,7 @@ Profilove rozhodnuti vraci i:
 
 - `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
 - `guardrail_summary`: kratke vysvetleni, proc je aktualni scope dostatecny a co jeste brani sirsi akci.
+- `missing_capability_hint`: nejuzsi dalsi capability scope, ktery by daval smysl pridat nebo explicitne pouzit, pokud je ukol sirsi nez stavajici guardraily.
 
 Aktualni runtime profily:
 

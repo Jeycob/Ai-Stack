@@ -296,7 +296,7 @@ Když chceš jen rychle zjistit, jakou šířku pravomocí by helper pro úkol z
 
     python3 codex/bin/mentor_codex_local.py profile ai-stack "Uprav README a aplikuj malý patch"
 
-`profile` a `delegate` navíc nově vrací i `confidence` a `guardrail_summary`, takže je hned vidět, proč helper zůstal v review scope, kdy mu stačí capability runner a kdy už je rozumné přejít do safe patch nebo širšího `improve` flow.
+`profile` a `delegate` navíc nově vrací i `confidence`, `guardrail_summary` a `missing_capability_hint`, takže je hned vidět, proč helper zůstal v review scope, kdy mu stačí capability runner, kdy už je rozumné přejít do safe patch nebo širšího `improve` flow, a jaká přesná capability vrstva ještě chybí, pokud je úkol širší než současné guardraily.
 
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
