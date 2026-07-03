@@ -401,6 +401,8 @@ Zároveň už `bootstrap-dispatch` nerozbíhá nesmyslné pseudo-commandy. Pokud
 
 První takhle dříve blokovaný profil už jsme rovnou posunuli do reálné capability vrstvy: `opengl-native` má nově dedikovaný audited scaffolder `codex/bin/scaffold_opengl_native.py`. `bootstrap-dispatch` ho umí přeložit do skutečného guardrailed runneru přes `run_check.py`, takže OpenGL starter už není jen roadmap poznámka, ale opravdový první bootstrap krok.
 
+Stejným směrem je teď posunutý i `fastapi-service`. Místo pouhého `pip install ...` recipe má vlastní scaffolder `codex/bin/scaffold_fastapi_service.py`, který vytvoří minimální kostru `app/main.py`, `app/config.py`, `tests/test_health.py`, `requirements.txt` a doplní provozní poznámky do README. Díky tomu bootstrap neznamená jen nainstalované balíčky, ale i skutečný běžitelný starter, na který už může navázat `smoke`, `verify` nebo `pytest`.
+
 Kvůli tokenům má mentor nově i lehčí `compact execution brief` větev. Používá se tam, kde jde hlavně o orchestration handoff mezi helpery a není potřeba znovu posílat celý reasoning blok. Zachovává jen minimum: `workspace`, `workflow`, případně `solution_profile`, `public_stack`, `scaffold_recipe`, `scaffold_loop`, `next_scope_hint` a `next_helper`.
 
 Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.

@@ -601,8 +601,8 @@ def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
             "install -> dev server smoke -> test or lint -> build",
         ),
         "fastapi-service": (
-            "python -m venv .venv && . .venv/bin/activate && python -m pip install fastapi uvicorn pydantic-settings pytest httpx",
-            "app/main.py, app/config.py, tests/test_health.py, pyproject.toml or requirements.txt",
+            "codex_scaffold_fastapi_service",
+            "app/main.py, app/config.py, tests/test_health.py, requirements.txt",
             "venv setup -> import smoke -> pytest -> uvicorn run smoke",
         ),
         "flask-service": (
@@ -1662,6 +1662,19 @@ def scaffold_plan_steps(decision: dict[str, str], task: str) -> list[tuple[str, 
 
 
 def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -> list[str]:
+    if recipe == "codex_scaffold_fastapi_service":
+        script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_fastapi_service.py"
+        return [
+            sys.executable,
+            "codex/bin/run_check.py",
+            repo_name,
+            "--timeout",
+            str(timeout),
+            "--",
+            sys.executable,
+            str(script),
+            ".",
+        ]
     if recipe == "codex_scaffold_opengl_native":
         script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_opengl_native.py"
         return [

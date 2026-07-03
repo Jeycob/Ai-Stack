@@ -116,6 +116,10 @@ def fastapi_smoke_command(root: Path) -> list[str] | None:
         text = read_small_text(candidate)
         if "FastAPI(" in text and re.search(r"(?m)^\s*app\s*=", text):
             return [sys.executable, "-m", "uvicorn", f"{stem}:app", "--host", "127.0.0.1", "--port", "8000"]
+    nested = root / "app/main.py"
+    text = read_small_text(nested)
+    if "FastAPI(" in text and re.search(r"(?m)^\s*app\s*=", text):
+        return [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"]
     return None
 
 

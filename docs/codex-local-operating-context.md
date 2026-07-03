@@ -363,6 +363,14 @@ pozna pres specialni scaffold token a prelozi na opravdovy audited runner pres
 `run_check.py`, takze OpenGL starter uz neni jen slovni plan, ale vykonatelny
 bootstrap krok v ramci stavajici capability vrstvy.
 
+Stejny princip uz plati i pro `fastapi-service`: `bootstrap-dispatch` dnes umi
+prelozit scaffold token na `codex/bin/scaffold_fastapi_service.py`, ktery
+nevytvori jen virtualenv/install recipe, ale i minimalni kostru aplikace
+(`app/main.py`, `app/config.py`, `tests/test_health.py`, `requirements.txt`).
+Tahle zmena je dulezita, protoze dalsi capability kroky jako `smoke`, `verify`
+nebo `pytest` uz pak navazuji na realny service starter, ne jen na prazdny repo
+s nainstalovanymi balicky.
+
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
 Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen
