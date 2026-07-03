@@ -76,6 +76,21 @@ python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --list
 python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --dry-run --scenario verify-project --scenario next-step
 ```
 
+Pro kombinovanou sebekontrolu mentoring vrstvy je tam i:
+
+```bash
+python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok a dotahni co pujde."
+```
+
+Tenhle mod sklada:
+- helper smoke pres `mentor_scenario_runner.py`
+- user-like audit chat scenare
+- stack summary pres `check_ai_stack.sh`
+
+Kdyz chybi OpenWebUI API key, chat scenare se automaticky prepnou do `dry-run`
+rezimu a report je oznaci jako `degraded`. Cilem je, aby self-check zustal
+uzitecny i mimo plne bezici runtime.
+
 `codex/bin/check_ai_stack.sh` umi tenhle audit-chat smoke pridat do bezneho
 stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po
 gateway smoke pusti i `owui_chat_smoke.py`. Bez key se tenhle krok jen preskoci

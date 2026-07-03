@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -2570,6 +2571,130 @@ def run_chat_scenarios_sequence(args: argparse.Namespace) -> int:
     return proc.returncode
 
 
+def run_self_check_sequence(args: argparse.Namespace) -> int:
+    scenario_runner = Path(__file__).resolve().parent / "mentor_scenario_runner.py"
+    chat_scenarios = Path(__file__).resolve().parent / "owui_chat_scenarios.py"
+    stack_check = Path(__file__).resolve().parent / "check_ai_stack.sh"
+    api_key_file = Path(getattr(args, "api_key_file", str(Path(__file__).resolve().parents[1] / "state/openwebui-api.key")))
+    has_owui_key = bool(os.getenv(getattr(args, "api_key_env", "OWUI_API_KEY"), "").strip()) or api_key_file.is_file()
+
+    checks: list[tuple[str, list[str], dict[str, str]]] = []
+    checks.append((
+        "mentor-scenario",
+        [
+            sys.executable,
+            str(scenario_runner),
+            args.workspace,
+            args.task,
+            "--json",
+        ],
+        {},
+    ))
+    checks.append((
+        "chat-scenarios",
+        [
+            sys.executable,
+            str(chat_scenarios),
+            "--workspace",
+            args.workspace,
+            "--json",
+            "--scenario",
+            "git-status",
+            "--scenario",
+            "verify-project",
+            "--scenario",
+            "next-step",
+        ],
+        {},
+    ))
+    checks.append((
+        "stack-check",
+        ["bash", str(stack_check)],
+        {
+            "CHECK_AI_STACK_SUMMARY_ONLY": "1",
+            "WORKSPACE": args.workspace,
+            "MODEL": args.model,
+            "SKIP_OPENWEBUI": "1" if getattr(args, "skip_openwebui", False) else "0",
+        },
+    ))
+
+    results = []
+    overall_ok = True
+    for name, command, extra_env in checks:
+        effective_command = list(command)
+        expected_mode = "live"
+        if name == "chat-scenarios" and not has_owui_key:
+            effective_command.append("--dry-run")
+            expected_mode = "dry-run"
+        proc = subprocess.run(
+            effective_command,
+            cwd=Path(__file__).resolve().parents[2],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, **extra_env} if extra_env else None,
+        )
+        output = proc.stdout or ""
+        ok = proc.returncode == 0
+        degraded = False
+        note = ""
+        if name == "chat-scenarios" and not has_owui_key:
+            degraded = True
+            note = "OpenWebUI API key missing; chat scenarios ran in dry-run mode."
+        if name == "stack-check" and not has_owui_key and "OpenWebUI audit chat smoke=SKIP" in output:
+            degraded = True
+            note = "OpenWebUI API key missing; stack summary skipped live chat checks."
+        overall_ok = overall_ok and ok
+        results.append(
+            {
+                "name": name,
+                "exit_code": proc.returncode,
+                "ok": ok,
+                "degraded": degraded,
+                "expected_mode": expected_mode,
+                "note": note,
+                "command": effective_command,
+                "output": output,
+            }
+        )
+
+    payload = {
+        "workspace": args.workspace,
+        "task": args.task,
+        "model": args.model,
+        "ok": overall_ok,
+        "check_count": len(results),
+        "results": results,
+    }
+
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if overall_ok else 1
+
+    print("MENTOR_SELF_CHECK")
+    print(f"workspace={args.workspace}")
+    print(f"task={args.task}")
+    print(f"model={args.model}")
+    print(f"ok={overall_ok}")
+    print(f"check_count={len(results)}")
+    for result in results:
+        print(f"CHECK={result['name']}")
+        print(f"OK={result['ok']}")
+        print(f"DEGRADED={result['degraded']}")
+        print(f"EXPECTED_MODE={result['expected_mode']}")
+        if result["note"]:
+            print(f"NOTE={result['note']}")
+        print(f"EXIT_CODE={result['exit_code']}")
+        print(f"COMMAND={shlex.join(str(x) for x in result['command'])}")
+        print("OUTPUT:")
+        lines = result["output"].splitlines()
+        preview = "\n".join(lines[:20])
+        if len(lines) > 20:
+            preview += f"\n... ({len(lines) - 20} more lines)"
+        print(preview.rstrip())
+    return 0 if overall_ok else 1
+
+
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
     if args.mode == "audit":
         return run_audit_sequence(args)
@@ -2621,6 +2746,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_brief_sequence(args)
     if args.mode == "chat-scenarios":
         return run_chat_scenarios_sequence(args)
+    if args.mode == "self-check":
+        return run_self_check_sequence(args)
     if args.mode == "top":
         return run_top_sequence(args)
     if args.mode == "backlog":
@@ -2804,6 +2931,12 @@ def parse_args() -> argparse.Namespace:
     chat_scenarios.add_argument("--max-delay", type=float, default=4.0)
     chat_scenarios.add_argument("--total-timeout", type=float, default=240.0)
     chat_scenarios.add_argument("--quiet", action="store_true")
+
+    self_check = sub.add_parser("self-check", help="Run a compact mentor healthcheck across helper flow, chat scenarios, and stack summary")
+    self_check.add_argument("workspace")
+    self_check.add_argument("task", nargs="?", default="Navrhni dalsi krok a dotahni co pujde.")
+    self_check.add_argument("--json", action="store_true", help="Emit JSON results")
+    self_check.add_argument("--skip-openwebui", action="store_true", help="Skip OpenWebUI endpoint check inside stack summary")
 
     top = sub.add_parser("top", help="Return only the current top-priority task from a multi-task set, with reason and execution brief")
     top.add_argument("workspace")
