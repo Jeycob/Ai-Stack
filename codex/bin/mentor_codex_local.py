@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shlex
 import subprocess
 import sys
@@ -95,13 +96,38 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
     raise SystemExit(f"Unsupported mode: {args.mode}")
 
 
-def invoke_turn(args: argparse.Namespace, visible: str, technical: str, send_history: bool = False) -> int:
+def parse_next_action(text: str, allowed_actions: set[str]) -> tuple[str, str]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    action = ""
+    reason = ""
+    for line in lines:
+        m = re.match(r"(?i)^NEXT_ACTION:\s*([A-Za-z_-]+)\s*$", line)
+        if m:
+            action = m.group(1).strip().lower()
+            continue
+        m = re.match(r"(?i)^REASON:\s*(.+?)\s*$", line)
+        if m:
+            reason = m.group(1).strip()
+    if not action:
+        raise ValueError("NEXT_ACTION line was not found in codex-local response")
+    if action not in allowed_actions | {"none"}:
+        raise ValueError(f"NEXT_ACTION {action!r} is not in the allowed action set")
+    return action, reason
+
+
+def invoke_turn(
+    args: argparse.Namespace,
+    visible: str,
+    technical: str,
+    send_history: bool = False,
+    capture_output: bool = False,
+) -> tuple[int, str]:
     if args.dry_run:
         print("VISIBLE_PROMPT")
         print(visible)
         print("\nTECHNICAL_PROMPT")
         print(technical)
-        return 0
+        return 0, ""
 
     script = Path(__file__).resolve().parent / "owui_chat_turn.py"
     visible_file = write_temp(visible + "\n")
@@ -126,8 +152,8 @@ def invoke_turn(args: argparse.Namespace, visible: str, technical: str, send_his
     if args.send_history or send_history:
         cmd.append("--send-history")
 
-    proc = subprocess.run(cmd, text=True)
-    return proc.returncode
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE if capture_output else None, stderr=subprocess.STDOUT if capture_output else None)
+    return proc.returncode, proc.stdout or ""
 
 
 def run_audit_sequence(args: argparse.Namespace) -> int:
@@ -148,9 +174,90 @@ def run_audit_sequence(args: argparse.Namespace) -> int:
         (summary_visible, summary_technical, True),
     ]
     for visible, technical, send_history in steps:
-        rc = invoke_turn(args, visible, technical, send_history=send_history)
+        rc, _ = invoke_turn(args, visible, technical, send_history=send_history)
         if rc != 0:
             return rc
+    return 0
+
+
+def run_autopilot_sequence(args: argparse.Namespace) -> int:
+    allowed_actions = {x.strip().lower() for x in args.allow_actions.split(",") if x.strip()}
+    if not allowed_actions:
+        raise SystemExit("--allow-actions must contain at least one action")
+    invalid = sorted(allowed_actions - {"install", "test", "build", "lint"})
+    if invalid:
+        raise SystemExit(f"Unsupported actions in --allow-actions: {', '.join(invalid)}")
+
+    scan_visible = f"repo: {args.workspace}\nNejdřív si technicky zmapuj workspace. Nic nespouštěj."
+    scan_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_SCAN {args.workspace}"
+
+    verify_visible = (
+        f"repo: {args.workspace}\n"
+        "Teď si připrav ověřovací plán projektu jako senior developer. Nic ještě nespouštěj, jen vyhodnoť verify kroky."
+    )
+    verify_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_ACTION {args.workspace} verify --timeout {args.timeout} --dry-run"
+
+    chooser_visible = (
+        f"repo: {args.workspace}\n"
+        "Vyber právě jeden další bezpečný krok na základě předchozího auditu. "
+        "Zůstaň v povolených akcích a zatím nic nespouštěj. "
+        "Jde jen o doporučení dalšího capability kroku."
+    )
+    chooser_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        "Na základě celé dosavadní historie vyber právě jednu další bezpečnou capability akci. "
+        f"Povolené akce: {', '.join(sorted(allowed_actions))}, none. "
+        "Odpověz přesně ve dvou řádcích a ničím navíc:\n"
+        "NEXT_ACTION: <action-or-none>\n"
+        "REASON: <one sentence>"
+    )
+
+    execute_template = {
+        "install": "Na základě auditu teď proveď instalaci závislostí a vrať stručný výsledek.",
+        "test": "Na základě auditu teď spusť testy a vrať stručný výsledek.",
+        "build": "Na základě auditu teď spusť build a vrať stručný výsledek.",
+        "lint": "Na základě auditu teď spusť lint a vrať stručný výsledek.",
+    }
+
+    if args.dry_run:
+        for visible, technical in [
+            (scan_visible, scan_technical),
+            (verify_visible, verify_technical),
+            (chooser_visible, chooser_technical),
+        ]:
+            print("VISIBLE_PROMPT")
+            print(visible)
+            print("\nTECHNICAL_PROMPT")
+            print(technical)
+            print()
+        return 0
+
+    for visible, technical, send_history in [
+        (scan_visible, scan_technical, False),
+        (verify_visible, verify_technical, True),
+    ]:
+        rc, _ = invoke_turn(args, visible, technical, send_history=send_history)
+        if rc != 0:
+            return rc
+
+    rc, chooser_output = invoke_turn(args, chooser_visible, chooser_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+    action, reason = parse_next_action(chooser_output, allowed_actions)
+    if action == "none" or args.recommend_only:
+        print(f"NEXT_ACTION: {action}")
+        if reason:
+            print(f"REASON: {reason}")
+        return 0
+
+    execute_visible = f"repo: {args.workspace}\n{execute_template[action]}"
+    execute_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_ACTION {args.workspace} {action} --timeout {args.timeout}"
+    rc, _ = invoke_turn(args, execute_visible, execute_technical, send_history=True)
+    if rc != 0:
+        return rc
+    print(f"NEXT_ACTION: {action}")
+    if reason:
+        print(f"REASON: {reason}")
     return 0
 
 
@@ -203,6 +310,13 @@ def parse_args() -> argparse.Namespace:
     audit.add_argument("--timeout", type=int, default=2400)
     audit.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
+    autopilot = sub.add_parser("autopilot", help="Run scan + verify + choose and optionally execute one safe next action")
+    autopilot.add_argument("workspace")
+    autopilot.add_argument("--timeout", type=int, default=2400)
+    autopilot.add_argument("--allow-actions", default="install,test,build,lint")
+    autopilot.add_argument("--recommend-only", action="store_true", help="Only print the chosen next action, do not execute it")
+    autopilot.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
@@ -225,9 +339,12 @@ def main() -> int:
 
     if args.mode == "audit":
         return run_audit_sequence(args)
+    if args.mode == "autopilot":
+        return run_autopilot_sequence(args)
 
     visible, technical = build_prompts(args)
-    return invoke_turn(args, visible, technical)
+    rc, _ = invoke_turn(args, visible, technical)
+    return rc
 
 
 if __name__ == "__main__":

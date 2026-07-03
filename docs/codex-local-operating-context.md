@@ -41,7 +41,10 @@ Pro opakovane mentor workflow nad auditem pouzivej helper
 tebe a vola `owui_chat_turn.py` pod kapotou. Je vhodny pro bezne operace typu
 scan workspace, install/test/build/lint/verify, explicitni run command nebo
 deploy. Rezim `audit` umi orchestrace po vice turnech: scan, verify dry-run a
-nasledne reasoning navrh dalsiho kroku pres `--send-history`.
+nasledne reasoning navrh dalsiho kroku pres `--send-history`. Rezim
+`autopilot` jde o krok dal: po `scan -> verify` necha codex-local vybrat prave
+jeden dalsi bezpecny capability krok z povolene mnoziny a muze ho rovnou
+spustit.
 
 Pro admin operace pouzivej `--no-live-status`, pokud odpoved ma byt kratka a deterministicka. Pro dlouhe modelove analyzy live status zapni.
 
@@ -84,7 +87,7 @@ Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 - OpenWebUI nesmi mit pripojeny Docker socket bez jasneho duvodu.
 - Runtime cesty `codex/state/`, `codex/audit/`, `logs/`, `.env`, `__pycache__`, `.bak-*` necommitovat.
 - Pokud je potreba nova schopnost, nejdriv zvaz rozsirenou capability s jasnym profilem, misto dalsiho jednorazoveho markeru. Musi byt pojmenovana, testovana, auditovana a zdokumentovana.
-- Bezny chat je read-only. Pozadavky na shell, instalace, generovani klicu, GitHub repo, push nebo realne editace musi bud vratit vysvetleni, nebo jit pres auditovany capability workflow pro konkretni workspace. Pokud schopnost chybi, agent si ma rict o rozsireni workspace profilu.
+- Bezny snapshot chat sam nic neprovadi primo. Pozadavky na shell, instalace, generovani klicu, GitHub repo, push nebo realne editace maji jit pres auditovany capability workflow pro konkretni workspace. Pokud capability existuje, agent ji ma pouzit; pokud chybi, ma si rict o rozsireni workspace profilu misto predstirani akce.
 
 ## Admin prikazy
 
@@ -116,6 +119,30 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 7. Spust `GATEWAY_ADMIN_GIT_STATUS` a over `(none)` u blocked/sensitive cest.
 8. Pushni pres `GATEWAY_ADMIN_GIT_PUSH main <message>`.
 9. Po pushi zkontroluj cisty status.
+
+## Vyssi autonomie
+
+Preferovany smer rozvoje je mene jednorazovych markeru a vice sirsich,
+auditovanych capabilities. Prakticky to znamena:
+
+- pouzivat `workspace-run` pro read-only a explicitni prikazy uvnitr
+  registrovaneho workspace,
+- pouzivat `workspace-action` pro install/test/build/lint/verify,
+- pro vicekrokovou praci pouzivat `mentor_codex_local.py audit` nebo
+  `mentor_codex_local.py autopilot`,
+- capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
+
+Priklad doporucovaciho autopilota:
+
+```bash
+python3 codex/bin/mentor_codex_local.py autopilot Odysseus-Lite --recommend-only
+```
+
+Priklad provedeni jednoho dalsiho bezpecneho kroku:
+
+```bash
+python3 codex/bin/mentor_codex_local.py autopilot Odysseus-Lite
+```
 
 ## Pro nove nastroje
 

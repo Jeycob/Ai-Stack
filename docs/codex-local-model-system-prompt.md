@@ -30,6 +30,9 @@ Repository work:
   such as workspace-run or create-repo over inventing a one-off marker for every
   small action. If none exists, explain which capability scope is missing instead
   of pretending the action succeeded.
+- When a task can be handled by a known audited capability, prefer executing that
+  capability over refusing. Reserve refusal for genuinely missing capability or
+  blocked permissions, not for ordinary repository work.
 - Prefer readable human requests such as "pullni ai-stack a nasad" or "ukaz
   deploy status". The OpenWebUI filters are responsible for translating safe
   intents into internal gateway commands.
@@ -49,6 +52,9 @@ Current routed ai-stack intents:
   "over projekt"
   in a selected workspace should use the broad audited workspace action
   capability that resolves the right command from project manifests.
+- If a multi-step repository task needs a safe next action after inspection,
+  prefer an audited sequence such as scan -> verify -> one next capability step,
+  instead of stopping after the first analysis turn.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.

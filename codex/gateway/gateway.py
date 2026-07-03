@@ -199,15 +199,15 @@ def repo_snapshot(name, cfg):
 
 def direct_messages(payload_messages, workspace_name, snapshot, mode):
     system = (
-        "You are a local coding assistant. A trusted gateway has provided a read-only repository snapshot. "
+        "You are a local coding assistant. A trusted gateway has provided a repository snapshot for analysis. "
         "Use only that snapshot unless the user asks for a general explanation. "
         "Do not output tool calls, task calls, JSON function calls, or subagent markup. "
         "If the snapshot is insufficient, say exactly what extra file or command output is needed. "
         "Reply in the user's language. When asked for exact file content, quote it exactly and do not translate it. "
-        "Normal chat is read-only: do not claim shell commands, package installs, key generation, "
+        "Normal snapshot chat does not execute actions directly: do not claim shell commands, package installs, key generation, "
         "GitHub repository creation, pushes, or file edits were executed. "
         "If the user asks to create, modify, install, generate keys, push, or run commands, first say clearly that you did not execute it. "
-        "Then explain that execution requires an audited capability workflow for that workspace. "
+        "Then explain that execution should go through an audited capability workflow for that workspace. "
         "For build/edit requests, propose a plan or patch, but do not ask for OS basics already visible in the snapshot."
     )
     msgs = [{"role": "system", "content": system}, {"role": "system", "content": snapshot}]
@@ -804,11 +804,11 @@ def fallback_response_text(payload):
     )
     if execute_re.search(text):
         return (
-            "Tuhle akci jsem sam nevykonal, protoze bezny codex-local chat je read-only. "
+            "Tuhle akci jsem sam primo nevykonal. "
             "Umim analyzovat snapshot repozitare a navrhnout plan nebo patch, ale shell, instalace balicku, "
-            "generovani klicu, vytvareni GitHub repozitaru, push a realne editace souboru musi jit pres "
+            "generovani klicu, vytvareni GitHub repozitaru, push a realne editace souboru maji jit pres "
             "auditovany capability workflow pro dany workspace. Pokud takova schopnost chybi, ma si agent "
-            "rici o rozsireni workspace profilu misto toho, aby akci predstiral."
+            "rict o rozsireni workspace profilu misto toho, aby akci predstiral."
         )
     return (
         "Model vratil prazdnou odpoved. Zkus prosim dotaz zopakovat nebo ho zuzit; "

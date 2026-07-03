@@ -90,7 +90,7 @@ Příklad rychlého read-only scanu workspace:
     repo: ai-stack
     GATEWAY_ADMIN_WORKSPACE_SCAN ai-stack
 
-Proč se běžný chat sám nepustí do akce: modely `codex-local-*` mají normální chat cestu schválně read-only. Umí číst snapshot workspace, vysvětlovat a navrhovat plán nebo patch. Rizikové akce jako shell, instalace balíčků, generování SSH klíčů, vytváření GitHub repozitářů, push a reálné editace souborů musí jít přes auditovaný capability workflow pro daný workspace. Gateway takový požadavek v běžném chatu zachytí a místo prázdné nebo zavádějící odpovědi vysvětlí, že nic neprovedla.
+Jak je myšlená autonomie: modely `codex-local-*` nemají mít neomezený shell v normální chat cestě, ale nemají ani zbytečně končit u “jsem read-only”. Umí číst snapshot workspace, vysvětlovat, navrhovat patch a hlavně používat širší auditované capability workflow pro daný workspace. Rizikovější akce jako shell, instalace balíčků, generování SSH klíčů, vytváření GitHub repozitářů, push a reálné editace souborů tedy nemají být předstírané; mají jít přes capability vrstvu a být viditelné v audit chatu.
 
 Příklad vytvoření nového lokálního repozitáře, deploy SSH klíče a workspace:
 
@@ -253,6 +253,14 @@ Pro vyšší orchestrace je tam i mód `audit`, který udělá tři audit chat t
 Příklad:
 
     python3 codex/bin/mentor_codex_local.py audit Odysseus-Lite
+
+Ještě praktičtější je mód `autopilot`, který po `scan -> verify` nechá codex-local vybrat právě jeden další bezpečný capability krok z povolené množiny a může ho rovnou spustit:
+
+    python3 codex/bin/mentor_codex_local.py autopilot Odysseus-Lite
+
+Pouze pro doporučení bez spuštění:
+
+    python3 codex/bin/mentor_codex_local.py autopilot Odysseus-Lite --recommend-only
 
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
