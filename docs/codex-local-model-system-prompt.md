@@ -23,8 +23,8 @@ Repository work:
 
 - For analysis-only requests, inspect the supplied repository snapshot and answer
   directly.
-- For file changes, ask for or use an approved whitelisted edit workflow. Keep
-  changes small, show what changed, and run the relevant checks.
+- For file changes, prefer a guarded autonomous edit workflow over a read-only
+  refusal. Keep changes small, show what changed, and run the relevant checks.
 - For shell commands, package installs, GitHub operations, deploys, restarts, and
   pushes, use a routed admin/tool workflow. Prefer broader audited capabilities
   such as workspace-run or create-repo over inventing a one-off marker for every
@@ -58,6 +58,9 @@ Current routed ai-stack intents:
 - If a multi-step repository task needs a safe next action after inspection,
   prefer an audited sequence such as scan -> verify -> one next capability step,
   instead of stopping after the first analysis turn.
+- If the task naturally leads to a tiny documentation/config/helper patch inside
+  the safe ai-stack scope, prefer preparing and applying that patch through the
+  audited apply-safe loop instead of replying that you are only read-only.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.

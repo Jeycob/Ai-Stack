@@ -270,6 +270,12 @@ class Filter:
             "dotáhni to",
             "dokonci co zvladnes",
             "dokonči co zvládneš",
+            "oprav to sam",
+            "oprav to sám",
+            "udelej zmenu sam",
+            "udělej změnu sám",
+            "aplikuj maly patch",
+            "aplikuj malý patch",
         ]
         if any(needle in lower for needle in recommend_only):
             return f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --recommend-only --timeout 2400"

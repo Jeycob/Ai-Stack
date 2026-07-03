@@ -14,6 +14,27 @@ from pathlib import Path
 
 DEFAULT_MODEL = "codex-local-plan-qwen14b"
 DEFAULT_TITLE = "Codex audit log - OpenWebUI visible history"
+SAFE_PATCH_ROOT_FILES = {
+    "README.md",
+    "docker-compose.yml",
+    "start_docker.bat",
+    ".gitignore",
+}
+SAFE_PATCH_PREFIX_RULES = (
+    ("docs/", (".md",)),
+    ("codex/bin/", (".py", ".sh")),
+    ("codex/gateway/", (".py",)),
+    ("openwebui/", (".js", ".css")),
+)
+UNSAFE_PATCH_SEGMENTS = (
+    "/dev/null",
+    "codex/state/",
+    "codex/audit/",
+    "logs/",
+    "__pycache__/",
+    ".env",
+    ".bak-",
+)
 
 
 def write_temp(text: str) -> str:
@@ -126,6 +147,66 @@ def parse_key_values(text: str) -> dict[str, str]:
         if key:
             result[key] = value
     return result
+
+
+def extract_diff_block(text: str) -> str:
+    blocks = re.findall(r"```(?:diff|patch)?\s*\n(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if len(blocks) != 1:
+        raise ValueError(f"Expected exactly one fenced diff block, got {len(blocks)}")
+    diff = blocks[0].strip("\n")
+    if not diff:
+        raise ValueError("Diff block is empty")
+    return diff + "\n"
+
+
+def touched_patch_files(diff: str) -> list[str]:
+    files: list[str] = []
+    for line in diff.splitlines():
+        if not line.startswith("+++ "):
+            continue
+        path = line[4:].strip().split("\t", 1)[0].strip('"')
+        if path.startswith("b/"):
+            path = path[2:]
+        files.append(path)
+    if not files:
+        raise ValueError("Diff did not contain any +++ file headers")
+    return files
+
+
+def is_safe_patch_target(rel: str) -> bool:
+    if rel in SAFE_PATCH_ROOT_FILES:
+        return True
+    for prefix, suffixes in SAFE_PATCH_PREFIX_RULES:
+        if rel.startswith(prefix) and rel.endswith(suffixes):
+            return True
+    return False
+
+
+def validate_safe_diff(diff: str) -> tuple[list[str], str]:
+    if any(token in diff for token in UNSAFE_PATCH_SEGMENTS):
+        raise ValueError("Diff touches runtime, backup, secret, or generated paths")
+    if diff.count("\n@@ ") > 12:
+        raise ValueError("Diff is too large for safe auto-apply")
+    if len(diff.splitlines()) > 240:
+        raise ValueError("Diff has too many lines for safe auto-apply")
+
+    files = touched_patch_files(diff)
+    if len(set(files)) > 3:
+        raise ValueError("Safe auto-apply is limited to at most 3 files")
+
+    cleaned: list[str] = []
+    for rel in files:
+        rel = rel.lstrip("/")
+        if rel.startswith("a/") or rel.startswith("b/"):
+            rel = rel[2:]
+        if ".." in Path(rel).parts:
+            raise ValueError(f"Unsafe path traversal in diff: {rel}")
+        if not is_safe_patch_target(rel):
+            raise ValueError(f"Diff touches path outside safe auto-apply scope: {rel}")
+        cleaned.append(rel)
+
+    summary = ", ".join(cleaned)
+    return cleaned, summary
 
 
 def invoke_turn(
@@ -425,6 +506,116 @@ def run_apply_ready_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_apply_safe_sequence(args: argparse.Namespace) -> int:
+    visible = (
+        f"repo: {args.workspace}\n"
+        "Najdi nejbližší bezpečný patch směr, načti potřebný kontext, navrhni malý diff "
+        "a pokud zůstane v bezpečném rozsahu, rovnou ho auditovaně aplikuj."
+    )
+    technical = (
+        f"{repo_prefix(args.repo)}\n"
+        f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {args.workspace} --recommend-only --timeout {args.timeout}"
+    )
+
+    if args.dry_run:
+        print("VISIBLE_PROMPT")
+        print(visible)
+        print("\nTECHNICAL_PROMPT")
+        print(technical)
+        print()
+        print("FOLLOW_UP")
+        print("The helper will fetch read_command if available, ask for a minimal patch plan, request exactly one diff block, validate it locally, and only then call GATEWAY_ADMIN_APPLY_NOW.")
+        return 0
+
+    rc, first_output = invoke_turn(args, visible, technical, send_history=False, capture_output=True)
+    if rc != 0:
+        return rc
+    meta = parse_key_values(first_output)
+    read_command = meta.get("read_command", "").strip()
+    if read_command:
+        read_visible = (
+            f"repo: {args.workspace}\n"
+            "Přečti nejrelevantnější soubor pro další bezpečný patch a vrať ho s čísly řádků. Nic needituj."
+        )
+        read_technical = f"{repo_prefix(args.repo)}\n{read_command}"
+        rc, _ = invoke_turn(args, read_visible, read_technical, send_history=True)
+        if rc != 0:
+            return rc
+
+    plan_visible = (
+        f"repo: {args.workspace}\n"
+        "Navrhni minimální patch plan. Zůstaň u malého bezpečného zásahu a nic ještě needituj."
+    )
+    plan_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        "Na základě celé dosavadní historie navrhni minimální další patch plan. "
+        "Odpověz stručně a strukturovaně v těchto řádcích:\n"
+        "PATCH_TARGET: <path or none>\n"
+        "PATCH_SUMMARY: <one sentence>\n"
+        "PATCH_HINT: <one sentence>\n"
+        "NEXT_ADMIN_COMMAND: <GATEWAY_ADMIN_READ_NUMBERED ... or GATEWAY_ADMIN_APPLY_NOW or none>"
+    )
+    rc, plan_output = invoke_turn(args, plan_visible, plan_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+    plan_meta = parse_key_values(plan_output)
+
+    target = plan_meta.get("patch_target", "").strip()
+    summary = plan_meta.get("patch_summary", "").strip()
+    hint = plan_meta.get("patch_hint", "").strip()
+    if not target or target.lower() == "none":
+        if plan_output.strip():
+            print(plan_output.strip())
+        return 0
+
+    diff_visible = (
+        f"repo: {args.workspace}\n"
+        "Teď připrav přesně jeden malý unified diff pro tenhle zásah. Změň jen nutné soubory a nic zatím neaplikuj."
+    )
+    diff_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        f"Na základě celé dosavadní historie navrhni malý unified diff související s {target}. "
+        "Odpověz pouze jedním fenced ```diff blokem bez dalšího textu. "
+        "Nepřidávej vysvětlení mimo diff. "
+        f"Záměr změny: {summary or '(unspecified)'}. "
+        f"Hint: {hint or '(none)'}"
+    )
+    rc, diff_output = invoke_turn(args, diff_visible, diff_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+
+    try:
+        diff = extract_diff_block(diff_output)
+        files, safe_summary = validate_safe_diff(diff)
+    except ValueError as exc:
+        final_parts = []
+        if plan_output.strip():
+            final_parts.append(plan_output.strip())
+        if diff_output.strip():
+            final_parts.append(diff_output.strip())
+        final_parts.append(f"APPLY_SAFE_BLOCKED\nreason={exc}")
+        print("\n\n".join(final_parts))
+        return 0
+
+    apply_visible = (
+        f"repo: {args.workspace}\n"
+        f"Patch prošel lokální kontrolou ({len(files)} souborů). Teď ho auditovaně aplikuj a vrať stručný výsledek."
+    )
+    apply_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_APPLY_NOW\n\n```diff\n{diff}```"
+    rc, apply_output = invoke_turn(args, apply_visible, apply_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+
+    final_parts = []
+    if plan_output.strip():
+        final_parts.append(plan_output.strip())
+    final_parts.append(f"APPLY_SAFE_READY\nfiles={safe_summary}")
+    if apply_output.strip():
+        final_parts.append(apply_output.strip())
+    print("\n\n".join(final_parts))
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Send structured mentor tasks to codex-local via the OpenWebUI audit chat.",
@@ -491,6 +682,11 @@ def parse_args() -> argparse.Namespace:
     apply_ready.add_argument("--timeout", type=int, default=2400)
     apply_ready.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
+    apply_safe = sub.add_parser("apply-safe", help="Prepare a small diff through codex-local, validate it locally, and apply it through the gateway when it stays in a safe scope")
+    apply_safe.add_argument("workspace")
+    apply_safe.add_argument("--timeout", type=int, default=2400)
+    apply_safe.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
@@ -519,6 +715,8 @@ def main() -> int:
         return run_patch_plan_sequence(args)
     if args.mode == "apply-ready":
         return run_apply_ready_sequence(args)
+    if args.mode == "apply-safe":
+        return run_apply_safe_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)

@@ -280,6 +280,10 @@ Ještě o krok dál jde mód `apply-ready`: ten po recommendation a případném
 
     python3 codex/bin/mentor_codex_local.py apply-ready Odysseus-Lite
 
+Ještě praktičtější je mód `apply-safe`: ten po recommendation a read kroku nechá codex-local navrhnout malý diff, helper ho lokálně zkontroluje proti bezpečnému scope a když projde, rovnou ho pošle přes `GATEWAY_ADMIN_APPLY_NOW`. Tím se codex-local neposouvá k neomezenému shellu, ale k širší a samostatnější řízené editaci:
+
+    python3 codex/bin/mentor_codex_local.py apply-safe ai-stack
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

@@ -2,7 +2,7 @@
 title: Codex Gateway Admin Filter
 author: OpenAI Codex
 version: 0.1.0
-description: Applies explicitly marked, whitelisted ai-stack gateway patches from Open WebUI conversations.
+description: Applies explicitly marked, guarded ai-stack gateway patches from Open WebUI conversations.
 """
 
 from pathlib import Path
@@ -413,6 +413,12 @@ class Filter:
         if rel.startswith("docs/") and rel.endswith(".md"):
             return
         if rel.startswith("codex/bin/") and rel.endswith((".py", ".sh")):
+            return
+        if rel.startswith("codex/gateway/") and rel.endswith(".py"):
+            return
+        if rel.startswith("openwebui/") and rel.endswith((".js", ".css")):
+            return
+        if rel.startswith("codex/bin/") and rel.endswith(".md"):
             return
         raise PermissionError(f"Path is not whitelisted for gateway admin edits: {rel}")
 
