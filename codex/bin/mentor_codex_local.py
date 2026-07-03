@@ -361,18 +361,8 @@ def summarize_improve_outcome(
     allow_actions_value: str,
     recovery_cycles: int,
 ) -> str:
-    upper = raw_output.upper()
     meta = parse_key_values(raw_output)
-    status = "completed"
-    if "IMPROVE_RECOVERY_LIMIT_REACHED" in upper:
-        status = "recovery_limit_reached"
-    elif "IMPROVE_BLOCKED_CYCLE_" in upper or "APPLY_SAFE_BLOCKED" in upper:
-        status = "blocked"
-    elif "IMPROVE_READY_CYCLE_" in upper or "APPLY_SAFE_READY" in upper:
-        status = "patched_and_reverified"
-    elif "WORKSPACE_AUTOPILOT_OK" in upper or "WORKSPACE_ACTION_OK" in upper:
-        status = "capability_progress"
-
+    status, status_reason = classify_improve_outcome(raw_output, meta)
     recommendation = (
         meta.get("recommendation", "").strip()
         or meta.get("next_recommendation", "").strip()
@@ -380,10 +370,13 @@ def summarize_improve_outcome(
     )
     patch_target = meta.get("patch_target", "").strip() or "none"
     read_command = meta.get("read_command", "").strip() or "none"
+    stop_reason = meta.get("stop_reason", "").strip() or "none"
     return "\n".join(
         [
             "IMPROVE_OUTCOME",
             f"IMPROVE_OUTCOME_STATUS={status}",
+            f"IMPROVE_OUTCOME_REASON={status_reason}",
+            f"IMPROVE_OUTCOME_STOP_REASON={stop_reason}",
             f"IMPROVE_OUTCOME_FOCUS={improve_focus}",
             f"IMPROVE_OUTCOME_BOOTSTRAP_STATUS={bootstrap_status or 'none'}",
             f"IMPROVE_OUTCOME_ALLOW_ACTIONS={allow_actions_value}",
@@ -393,6 +386,42 @@ def summarize_improve_outcome(
             f"IMPROVE_OUTCOME_NEXT={recommendation or 'none'}",
         ]
     )
+
+
+def classify_improve_outcome(raw_output: str, meta: dict[str, str] | None = None) -> tuple[str, str]:
+    upper = raw_output.upper()
+    meta = meta or parse_key_values(raw_output)
+    recommendation = (
+        meta.get("recommendation", "").strip()
+        or meta.get("next_recommendation", "").strip()
+        or meta.get("patch_hint", "").strip()
+    )
+    patch_target = meta.get("patch_target", "").strip().lower()
+    read_command = meta.get("read_command", "").strip().lower()
+    stop_reason = meta.get("stop_reason", "").strip().lower()
+    has_patch_guidance_now = bool(recommendation or (patch_target and patch_target != "none") or (read_command and read_command != "none"))
+
+    if "IMPROVE_RECOVERY_LIMIT_REACHED" in upper:
+        return "recovery_limit_reached", "patch guidance persisted after configured recovery cycles"
+    if "IMPROVE_BLOCKED_CYCLE_" in upper or "APPLY_SAFE_BLOCKED" in upper or stop_reason == "step_failed":
+        return "blocked", "safe patch or capability step remained blocked"
+    if "IMPROVE_READY_CYCLE_" in upper or "APPLY_SAFE_READY" in upper:
+        if has_patch_guidance_now:
+            return "recovered_to_new_blocker", "safe patch landed, but a new concrete blocker or recommendation remains"
+        if stop_reason == "no_more_supported_actions":
+            return "completed", "recovery cleared the known blocker and no additional safe action is currently supported"
+        if "WORKSPACE_AUTOPILOT_OK" in upper or "WORKSPACE_ACTION_OK" in upper:
+            return "patched_and_reverified", "safe patch landed and the immediate verification step succeeded"
+        return "patched", "safe patch landed without a stronger follow-up signal"
+    if "WORKSPACE_AUTOPILOT_OK" in upper or "WORKSPACE_ACTION_OK" in upper:
+        if has_patch_guidance_now:
+            return "new_blocker", "capability flow ran, but it already surfaced a concrete next blocker or patch target"
+        if stop_reason == "no_more_supported_actions":
+            return "completed", "capability flow exhausted safe next steps without surfacing a new blocker"
+        if stop_reason == "max_steps_reached":
+            return "capability_progress", "capability flow made progress and stopped only because of the step limit"
+        return "capability_progress", "capability flow made safe progress"
+    return "completed", "no blocking signal remained in the final improve output"
 
 
 def summarize_bootstrap_improve_outcome(
@@ -3507,6 +3536,15 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         [
             sys.executable,
             str(mentor_recovery_followup_smoke),
+        ],
+        {},
+    ))
+    mentor_improve_outcome_smoke = Path(__file__).resolve().parent / "mentor_improve_outcome_smoke.py"
+    checks.append((
+        "mentor-improve-outcome-smoke",
+        [
+            sys.executable,
+            str(mentor_improve_outcome_smoke),
         ],
         {},
     ))
