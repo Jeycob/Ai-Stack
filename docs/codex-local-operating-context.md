@@ -25,6 +25,8 @@ Primarni audit chat je:
 
 Prace s repozitari ma jit pres `codex/bin/owui_chat_turn.py`. Helper zapise lidsky citelnou instrukci do OpenWebUI historie a technicky prompt muze poslat oddelene. Diky tomu uzivatel vidi zamer, prubeh a vysledek, ale nevidi interni admin payloady nebo dlouhe diffy, pokud to neni potreba.
 
+`owui_chat_turn.py` ma byt idempotentni pro bezne retry. Pro stejny viditelny i technicky prompt si dopocita stabilni turn key a kdyz v chatu najde uz rozbehnutou nedokoncenou assistant zpravu pro ten samy turn, znovu ji pouzije misto toho, aby appendnul dalsi duplicitni user prompt. To je dulezite pro levnejsi mentor workflow i cistsi audit trail.
+
 Doporuceny vzor:
 
 ```bash

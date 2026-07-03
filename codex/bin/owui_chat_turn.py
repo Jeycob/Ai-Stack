@@ -14,6 +14,7 @@ left in the configured audit chat.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -47,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--visible-prompt-file", help="Human-facing prompt file for the visible OpenWebUI chat")
     parser.add_argument("--out", help="Write assistant response text to file")
     parser.add_argument("--response-json-out", help="Write raw completion JSON to file")
+    parser.add_argument("--turn-key", help="Stable idempotency key for reusing an already running visible turn")
     parser.add_argument("--send-history", action="store_true", help="Send the visible chat chain to the model")
     parser.add_argument("--timeout", type=float, default=30.0, help="Per-attempt timeout")
     parser.add_argument("--attempts", type=int, default=12)
@@ -166,6 +168,7 @@ def append_message(
     model: str,
     ts: int,
     done: bool = True,
+    turn_key: str | None = None,
 ) -> str:
     msg_id = str(uuid.uuid4())
     if parent_id in messages:
@@ -185,8 +188,44 @@ def append_message(
         msg.update({"model": model, "modelName": model, "done": done})
     else:
         msg.update({"models": [model]})
+    if turn_key:
+        msg["codexTurnKey"] = turn_key
     messages[msg_id] = msg
     return msg_id
+
+
+def effective_turn_key(args: argparse.Namespace, visible_prompt: str, technical_prompt: str) -> str:
+    if args.turn_key:
+        return args.turn_key.strip()
+    seed = "\n".join([args.chat_id, args.model, visible_prompt, technical_prompt])
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
+
+
+def find_reusable_turn(messages: dict, model: str, visible_prompt: str, turn_key: str, now: int, max_age_s: int = 1800) -> tuple[str | None, str | None]:
+    user_id: str | None = None
+    assistant_id: str | None = None
+    candidates = sorted(
+        (
+            (msg_id, msg)
+            for msg_id, msg in messages.items()
+            if isinstance(msg, dict) and msg.get("codexTurnKey") == turn_key
+        ),
+        key=lambda item: int(item[1].get("timestamp") or 0),
+        reverse=True,
+    )
+    for msg_id, msg in candidates:
+        ts = int(msg.get("timestamp") or 0)
+        if ts and now - ts > max_age_s:
+            continue
+        role = msg.get("role")
+        if role == "assistant" and msg.get("model") == model and msg.get("done") is False:
+            parent_id = msg.get("parentId")
+            parent = messages.get(parent_id, {}) if isinstance(parent_id, str) else {}
+            if isinstance(parent, dict) and parent.get("role") == "user" and parent.get("content") == visible_prompt:
+                return parent_id, msg_id
+        if role == "user" and msg.get("content") == visible_prompt and user_id is None:
+            user_id = msg_id
+    return user_id, assistant_id
 
 
 def running_text(args: argparse.Namespace, started: float, state: str) -> str:
@@ -333,6 +372,7 @@ def main() -> int:
     args = parse_args()
     technical_prompt = read_prompt(args)
     visible_prompt = read_visible_prompt(args, technical_prompt)
+    turn_key = effective_turn_key(args, visible_prompt, technical_prompt)
     status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
     if status >= 400 or not isinstance(chat_response, dict):
         raise RuntimeError(f"Unable to load chat {args.chat_id}: {chat_response}")
@@ -343,36 +383,41 @@ def main() -> int:
     messages = history.setdefault("messages", {})
     current_id = history.get("currentId")
     now = int(time.time())
-    user_id = append_message(messages, current_id, "user", visible_prompt, args.model, now)
-    history["currentId"] = user_id
-    chat["history"] = history
-    chat["messages"] = list(messages.keys())
-    http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+    user_id, live_message_id = find_reusable_turn(messages, args.model, visible_prompt, turn_key, now)
 
-    live_message_id: str | None = None
+    if user_id is None:
+        user_id = append_message(messages, current_id, "user", visible_prompt, args.model, now, turn_key=turn_key)
+        history["currentId"] = user_id
+        chat["history"] = history
+        chat["messages"] = list(messages.keys())
+        http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+
     live_stop: threading.Event | None = None
     live_thread: threading.Thread | None = None
     started = time.monotonic()
     if not args.no_live_status:
-        status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
-        if status < 400 and isinstance(chat_response, dict):
-            chat = chat_response["chat"]
-            history = chat.setdefault("history", {})
-            messages = history.setdefault("messages", {})
-            live_message_id = append_message(
-                messages,
-                user_id,
-                "assistant",
-                running_text(args, started, "sent to OpenWebUI gateway"),
-                args.model,
-                int(time.time()),
-                done=False,
-            )
-            history["currentId"] = live_message_id
-            chat["history"] = history
-            chat["messages"] = list(messages.keys())
-            chat["title"] = args.title
-            http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+        if live_message_id is None:
+            status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
+            if status < 400 and isinstance(chat_response, dict):
+                chat = chat_response["chat"]
+                history = chat.setdefault("history", {})
+                messages = history.setdefault("messages", {})
+                live_message_id = append_message(
+                    messages,
+                    user_id,
+                    "assistant",
+                    running_text(args, started, "sent to OpenWebUI gateway"),
+                    args.model,
+                    int(time.time()),
+                    done=False,
+                    turn_key=turn_key,
+                )
+                history["currentId"] = live_message_id
+                chat["history"] = history
+                chat["messages"] = list(messages.keys())
+                chat["title"] = args.title
+                http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+        if live_message_id is not None:
             live_stop, live_thread = start_live_status(args, live_message_id, started)
 
     model_messages = messages_for_model(messages, user_id, technical_prompt, args.send_history)
@@ -402,7 +447,7 @@ def main() -> int:
     history = chat.setdefault("history", {})
     messages = history.setdefault("messages", {})
     current_id = history.get("currentId") or user_id
-    assistant_id = append_message(messages, current_id, "assistant", text, args.model, int(time.time()))
+    assistant_id = append_message(messages, current_id, "assistant", text, args.model, int(time.time()), turn_key=turn_key)
     history["currentId"] = assistant_id
     chat["history"] = history
     chat["messages"] = list(messages.keys())
