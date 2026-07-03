@@ -346,6 +346,8 @@ Ještě jedna levná pojistka je `codex/bin/gateway_admin_run_workspace_smoke.py
 
 To je důležité jako druhá obranná linie proti rekurzi `OpenWebUI chat -> helper -> stejný chat`, i kdyby někde zůstal starý builder bez stateless flagu.
 
+Na stejný problém teď míří i `codex/bin/gateway_background_env_smoke.py`. Ten už neleze do filtru, ale přímo do runtime vrstvy `admin_run_workspace(background=True)`. Ověřuje, že background gateway job předá child procesu i `OWUI_STATELESS=1` a další forwarded env. To chrání scénář, kdy route už helper správně pošle jako background run, ale child proces by bez env propagation znovu spadl do viditelného `/api/v1/chats/...` flow a zacyklil se na stejném OpenWebUI requestu.
+
 Stejnou věc jde teď spouštět i přes hlavní mentor helper, aby scénářový smoke nebyl další izolovaný nástroj bokem:
 
     python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --list
@@ -363,6 +365,7 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 - `mentor_recovery_followup_smoke.py` pro regression guard nad retry-after-patch loopem v `improve`,
 - `mentor_improve_outcome_smoke.py` pro regression guard nad klasifikací hotovo/progress/blocker v `improve`,
 - `gateway_admin_run_workspace_smoke.py` pro regression guard nad automatickou stateless normalizací starších helper commandů,
+- `gateway_background_env_smoke.py` pro regression guard nad předáním `OWUI_STATELESS` do background workspace jobů,
 - `chat-scenarios` pro user-like OpenWebUI audit chat flow, včetně širší autonomy/profile vrstvy,
 - `check_ai_stack.sh` pro stack summary.
 

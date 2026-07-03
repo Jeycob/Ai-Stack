@@ -1336,11 +1336,14 @@ def admin_run_workspace(payload):
         })
         with open(log_file, "ab") as log:
             log.write(("scheduled_command=" + " ".join(command) + "\n").encode("utf-8", "replace"))
+            child_env = os.environ.copy()
+            child_env.update(env_map)
             proc = subprocess.Popen(
                 cmd,
                 cwd=REPO_ROOT,
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                env=child_env,
                 start_new_session=True,
             )
         workspace_run_write(job_id, {

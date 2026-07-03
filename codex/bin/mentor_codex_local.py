@@ -3557,6 +3557,15 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         ],
         {},
     ))
+    gateway_background_env_smoke = Path(__file__).resolve().parent / "gateway_background_env_smoke.py"
+    checks.append((
+        "gateway-background-env-smoke",
+        [
+            sys.executable,
+            str(gateway_background_env_smoke),
+        ],
+        {},
+    ))
     checks.append((
         "gateway-admin-dry-run",
         [
