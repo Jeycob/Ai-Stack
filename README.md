@@ -171,11 +171,19 @@ Příklad pushnutí povolených změn:
 
 Při dlouhých operacích používej helper `codex/bin/owui_chat_turn.py`; ten zapíše instrukci do OpenWebUI chatu hned, založí běžící assistant zprávu a průběžně ji aktualizuje:
 
-    OWUI_API_KEY=<set locally> python3 codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --prompt-file /tmp/prompt.txt --status-interval 3 --quiet
+    python3 codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --prompt-file /tmp/prompt.txt --status-interval 3 --quiet
 
 Pro admin nebo patch operace používej oddělený viditelný a technický prompt. Viditelný prompt je lidský popis práce pro audit chat; technický prompt může obsahovat interní gateway/admin marker a diff, ale do viditelné historie se nezapisuje:
 
-    OWUI_API_KEY=<set locally> python3 codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --visible-prompt-file /tmp/visible.txt --prompt-file /tmp/technical.txt --status-interval 3 --quiet
+    python3 codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --visible-prompt-file /tmp/visible.txt --prompt-file /tmp/technical.txt --status-interval 3 --quiet
+
+OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
+
+    codex/bin/store_openwebui_api_key.sh
+
+Nebo přes stdin z lokálního tajného zdroje; nepiš reálný key jako literál do shell historie:
+
+    codex/bin/store_openwebui_api_key.sh < /path/to/local/openwebui-api.key
 
 Technické markery typu `GATEWAY_ADMIN_APPLY_NOW` jsou interní bezpečnostní protokol pro whitelisted zápis souborů. V běžném OpenWebUI chatu mají být schované za helperem a viditelné jen jako lidské shrnutí práce, status a výsledek.
 
@@ -198,7 +206,7 @@ Praktická pravidla pro zadávání úloh:
 - Napiš, zda agent smí editovat soubory, nebo má jen analyzovat.
 - U editací omez rozsah: například `měň jen README.md` nebo `měň jen codex/gateway/gateway.py`.
 - Pro rychlou práci používej `codex-local-plan-qwen14b` a `codex-local-build-qwen14b`; 32B nech pro složitější analýzy.
-- Do promptů ani souborů nevkládej secrets; používej placeholdery typu `OWUI_API_KEY=<set locally>`.
+- Do promptů ani verzovaných souborů nevkládej secrets; OpenWebUI API key ukládej do ignorovaného `codex/state/openwebui-api.key`.
 - Před pushem vždy zkontroluj `GATEWAY_ADMIN_GIT_STATUS` a ujisti se, že `blocked_paths` i `sensitive_paths_seen` jsou `(none)`.
 
 ## Provozní příkazy
@@ -210,9 +218,9 @@ Praktická pravidla pro zadávání úloh:
 - Smoke test gateway: `python3 codex/bin/codex_gateway_smoke.py --base-url http://192.168.0.48:9101 --workspace ai-stack`.
 - Celkový healthcheck lokálního stacku ve WSL: `bash codex/bin/check_ai_stack.sh`; pro LAN kontrolu nastav `OPENWEBUI_URL=http://192.168.0.48:9090 CODEX_GATEWAY_URL=http://192.168.0.48:9101`.
 - Spuštění kontrolního příkazu v registrovaném workspace přes gateway: `curl -sS http://127.0.0.1:9101/v1/admin/workspace/run -H "Content-Type: application/json" -d '{"workspace":"ai-stack","timeout":30,"command":["git","status","--short","--branch"]}'`.
-- Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `OWUI_API_KEY=<set locally> python3 codex/bin/sync_openwebui_function.py --dry-run`.
-- Aplikace synchronizace OpenWebUI funkce po review: `OWUI_API_KEY=<set locally> python3 codex/bin/sync_openwebui_function.py`.
-- Bezpečné mapování OpenWebUI endpointů bez mutačních metod: `OWUI_API_KEY=<set locally> python3 codex/bin/discover_openwebui_endpoints.py --path /api/config --path /api/v1/functions/list`.
+- Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `python3 codex/bin/sync_openwebui_function.py --dry-run`.
+- Aplikace synchronizace OpenWebUI funkce po review: `python3 codex/bin/sync_openwebui_function.py`.
+- Bezpečné mapování OpenWebUI endpointů bez mutačních metod: `OWUI_API_KEY_FILE=codex/state/openwebui-api.key python3 codex/bin/discover_openwebui_endpoints.py --path /api/config --path /api/v1/functions/list`.
 - Seznam modelů: `curl http://192.168.0.48:9101/v1/models`.
 - Seznam workspaces: `curl http://192.168.0.48:9101/v1/workspaces`.
 

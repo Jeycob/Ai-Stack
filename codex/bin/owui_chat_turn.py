@@ -30,12 +30,15 @@ DEFAULT_BASE_URL = "http://192.168.0.48:9090"
 DEFAULT_CHAT_ID = "57529037-84b9-42e1-8bae-9eab35b601bd"
 DEFAULT_MODEL = "codex-local-plan-qwen14b"
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
+DEFAULT_API_KEY_FILE = Path(__file__).resolve().parents[1] / "state/openwebui-api.key"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send a visible turn through an OpenWebUI chat.")
     parser.add_argument("--base-url", default=os.getenv("OWUI_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--chat-id", default=os.getenv("OWUI_AUDIT_CHAT_ID", DEFAULT_CHAT_ID))
+    parser.add_argument("--api-key-env", default="OWUI_API_KEY")
+    parser.add_argument("--api-key-file", default=os.getenv("OWUI_API_KEY_FILE", str(DEFAULT_API_KEY_FILE)))
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--title", default="Codex audit log - OpenWebUI visible history")
     parser.add_argument("--prompt", help="User prompt text")
@@ -87,6 +90,22 @@ def retry_delay(args: argparse.Namespace, attempt_index: int) -> float:
     return min(args.max_delay, args.initial_delay * (2 ** attempt_index))
 
 
+def openwebui_api_key(args: argparse.Namespace) -> str:
+    token = os.getenv(args.api_key_env) if args.api_key_env else ""
+    if token:
+        return token
+    if args.api_key_file:
+        path = Path(args.api_key_file)
+        if path.is_file():
+            token = path.read_text(encoding="utf-8").strip()
+            if token:
+                return token
+    raise SystemExit(
+        f"OpenWebUI API key is not set; checked env {args.api_key_env!r} "
+        f"and file {args.api_key_file!r}"
+    )
+
+
 def http_request(
     args: argparse.Namespace,
     method: str,
@@ -94,9 +113,7 @@ def http_request(
     body: dict | None = None,
     allow_error: bool = False,
 ) -> tuple[int, dict | list | str]:
-    token = os.getenv("OWUI_API_KEY")
-    if not token:
-        raise SystemExit("OWUI_API_KEY is not set")
+    token = openwebui_api_key(args)
 
     url = f"{args.base_url.rstrip('/')}/{path.lstrip('/')}"
     data = None

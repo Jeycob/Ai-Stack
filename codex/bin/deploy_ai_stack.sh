@@ -125,6 +125,8 @@ python3 -m py_compile \
   codex/gateway/gateway.py \
   codex/bin/openwebui_gateway_admin_filter.py \
   codex/bin/openwebui_codex_auto_tools_filter.py \
+  codex/bin/http_retry.py \
+  codex/bin/owui_chat_turn.py \
   codex/bin/run_check.py \
   codex/bin/add_workspace.py \
   codex/bin/sync_openwebui_function.py

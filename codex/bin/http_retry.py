@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--header", action="append", default=[], help="Header line, e.g. 'Content-Type: application/json'")
     parser.add_argument("--header-file", help="File containing one header per line")
     parser.add_argument("--bearer-env", help="Read bearer token from this environment variable")
+    parser.add_argument("--bearer-file", help="Read bearer token from this file if --bearer-env is unset")
     parser.add_argument("--data-file", help="Request body file")
     parser.add_argument("--json", dest="json_text", help="Inline JSON request body")
     parser.add_argument("--json-file", help="JSON request body file")
@@ -60,10 +61,15 @@ def read_headers(args: argparse.Namespace) -> dict[str, str]:
         key, value = line.split(":", 1)
         headers[key.strip()] = value.strip()
 
-    if args.bearer_env:
-        token = os.environ.get(args.bearer_env)
+    if args.bearer_env or args.bearer_file:
+        token = os.environ.get(args.bearer_env or "") if args.bearer_env else ""
+        if not token and args.bearer_file:
+            path = Path(args.bearer_file)
+            if path.is_file():
+                token = path.read_text(encoding="utf-8").strip()
         if not token:
-            raise SystemExit(f"Environment variable {args.bearer_env} is not set")
+            sources = [s for s in [args.bearer_env, args.bearer_file] if s]
+            raise SystemExit("Bearer token is not set; checked " + ", ".join(sources))
         headers["Authorization"] = f"Bearer {token}"
     return headers
 

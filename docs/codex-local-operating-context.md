@@ -28,7 +28,7 @@ Prace s repozitari ma jit pres `codex/bin/owui_chat_turn.py`. Helper zapise lids
 Doporuceny vzor:
 
 ```bash
-OWUI_API_KEY=<set locally> python3 codex/bin/owui_chat_turn.py \
+python3 codex/bin/owui_chat_turn.py \
   --model codex-local-plan-qwen14b \
   --visible-prompt-file /tmp/visible.txt \
   --prompt-file /tmp/technical.txt \
@@ -37,6 +37,10 @@ OWUI_API_KEY=<set locally> python3 codex/bin/owui_chat_turn.py \
 ```
 
 Pro admin operace pouzivej `--no-live-status`, pokud odpoved ma byt kratka a deterministicka. Pro dlouhe modelove analyzy live status zapni.
+
+OpenWebUI API key nepredavej v prikazu. Helpery ho ctou z `OWUI_API_KEY`,
+nebo bezpecneji z ignorovaneho `codex/state/openwebui-api.key`. Pro ulozeni
+pouzij `codex/bin/store_openwebui_api_key.sh`, ktery klic nevypisuje.
 
 ## Modely
 

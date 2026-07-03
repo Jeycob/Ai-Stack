@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync a local function source file to OpenWebUI.")
     parser.add_argument("--base-url", default=os.getenv("OWUI_BASE_URL", "http://192.168.0.48:9090"))
     parser.add_argument("--api-key-env", default="OWUI_API_KEY")
+    parser.add_argument("--api-key-file", default=os.getenv("OWUI_API_KEY_FILE", "codex/state/openwebui-api.key"))
     parser.add_argument("--function-id", default="codex_gateway_admin_filter")
     parser.add_argument("--source", default="codex/bin/openwebui_gateway_admin_filter.py")
     parser.add_argument("--dry-run", action="store_true", help="Only report whether an update is needed.")
@@ -40,10 +41,24 @@ def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def openwebui_api_key(args: argparse.Namespace) -> str:
+    token = os.getenv(args.api_key_env) if args.api_key_env else ""
+    if token:
+        return token
+    if args.api_key_file:
+        path = Path(args.api_key_file)
+        if path.is_file():
+            token = path.read_text(encoding="utf-8").strip()
+            if token:
+                return token
+    raise SystemExit(
+        f"OpenWebUI API key is not set; checked env {args.api_key_env!r} "
+        f"and file {args.api_key_file!r}"
+    )
+
+
 def request_json(args: argparse.Namespace, method: str, path: str, body: dict | None = None) -> dict:
-    token = os.getenv(args.api_key_env)
-    if not token:
-        raise SystemExit(f"{args.api_key_env} is not set")
+    token = openwebui_api_key(args)
     url = f"{args.base_url.rstrip('/')}/{path.lstrip('/')}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     data = None
