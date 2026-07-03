@@ -191,6 +191,11 @@ Priklad profilove klasifikace bez spousteni jakychkoli akci:
 python3 codex/bin/mentor_codex_local.py profile ai-stack "Uprav README a aplikuj maly patch"
 ```
 
+Profilove rozhodnuti vraci i:
+
+- `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
+- `guardrail_summary`: kratke vysvetleni, proc je aktualni scope dostatecny a co jeste brani sirsi akci.
+
 Aktualni runtime profily:
 
 - `review`: read-only analyza a dalsi krok bez spousteni.

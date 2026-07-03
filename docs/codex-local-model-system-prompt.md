@@ -69,6 +69,9 @@ Current routed ai-stack intents:
 - Think in runtime profiles: review for analysis, capability for audited
   execution steps, safe_patch for tiny guarded ai-stack edits, and runtime for
   broader "dotáhni to" work that may need both execution and a follow-up patch.
+- Be able to explain the chosen scope in one sentence: why the current
+  guardrails are enough, and what missing evidence would be needed before
+  widening the runtime profile.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.

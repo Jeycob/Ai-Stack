@@ -261,20 +261,62 @@ def choose_workflow(task: str) -> str:
 def classify_task(task: str) -> dict[str, str]:
     lower = task.lower()
 
-    def result(profile: str, workflow: str, reason: str) -> dict[str, str]:
-        return {"runtime_profile": profile, "workflow": workflow, "reason": reason}
+    def result(profile: str, workflow: str, reason: str, confidence: str, guardrail_summary: str) -> dict[str, str]:
+        return {
+            "runtime_profile": profile,
+            "workflow": workflow,
+            "reason": reason,
+            "confidence": confidence,
+            "guardrail_summary": guardrail_summary,
+        }
 
     if any(token in lower for token in ("git status", "git remote", "git log", "spusť příkaz:", "spust prikaz:", "run command")):
-        return result("capability", "run", "Explicit command inside a registered workspace is best handled by the audited workspace runner.")
+        return result(
+            "capability",
+            "run",
+            "Explicit command inside a registered workspace is best handled by the audited workspace runner.",
+            "high",
+            "Command stays inside a registered workspace, so audited workspace-run is sufficient and broader patch/runtime scope is unnecessary.",
+        )
     if any(token in lower for token in ("navrhni další krok", "navrhni dalsi krok", "co dál", "co dal", "audit", "analyzuj")):
-        return result("review", "audit", "The task asks for analysis or next-step reasoning without an explicit execution request.")
+        return result(
+            "review",
+            "audit",
+            "The task asks for analysis or next-step reasoning without an explicit execution request.",
+            "high",
+            "No execution intent is visible, so we stay in the narrowest read-only mentoring scope.",
+        )
     if any(token in lower for token in ("apply patch", "aplikuj patch", "malý patch", "maly patch", "uprav readme", "uprav dokumentaci")):
-        return result("safe_patch", "apply-safe", "The task points to a small documentation/config/helper change that fits the guarded safe-patch scope.")
+        return result(
+            "safe_patch",
+            "apply-safe",
+            "The task points to a small documentation/config/helper change that fits the guarded safe-patch scope.",
+            "medium",
+            "The requested change looks small enough for guarded ai-stack patching, but only inside the safe file scope and after diff validation.",
+        )
     if any(token in lower for token in ("fixni to", "rozběhni to", "rozbehni to", "dotáhni to", "dotahni to", "dokonči to", "dokonci to")):
-        return result("runtime", "improve", "The task asks to push the project forward agentically and may need both capability steps and a follow-up patch.")
+        return result(
+            "runtime",
+            "improve",
+            "The task asks to push the project forward agentically and may need both capability steps and a follow-up patch.",
+            "medium",
+            "The task may require multiple audited steps; start with capability execution and only escalate into safe patching if capability progress runs out.",
+        )
     if any(token in lower for token in ("ověř projekt", "over projekt", "pokračuj sám", "pokracuj sam", "udělej co je potřeba", "udelej co je potreba")):
-        return result("capability", "autopilot", "The task is primarily about audited install/test/build/lint progression inside the workspace.")
-    return result("review", "audit", "Defaulting to the narrowest safe mentoring workflow because the task does not clearly require execution.")
+        return result(
+            "capability",
+            "autopilot",
+            "The task is primarily about audited install/test/build/lint progression inside the workspace.",
+            "medium",
+            "Execution is requested, but standard capability steps should be tried before any patch-oriented or broader runtime action.",
+        )
+    return result(
+        "review",
+        "audit",
+        "Defaulting to the narrowest safe mentoring workflow because the task does not clearly require execution.",
+        "low",
+        "Intent is ambiguous, so we avoid widening permissions until the task shape is clearer from the audit context.",
+    )
 
 
 def extract_run_command(task: str) -> str:
@@ -770,7 +812,9 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
     workflow = decision["workflow"]
     print(f"DELEGATE_RUNTIME_PROFILE={decision['runtime_profile']}")
     print(f"DELEGATE_WORKFLOW={workflow}")
+    print(f"DELEGATE_CONFIDENCE={decision['confidence']}")
     print(f"DELEGATE_REASON={decision['reason']}")
+    print(f"DELEGATE_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
 
     if workflow == "run":
         command_text = extract_run_command(args.task)
@@ -792,7 +836,9 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"RUNTIME_PROFILE={decision['runtime_profile']}")
     print(f"WORKFLOW={decision['workflow']}")
+    print(f"CONFIDENCE={decision['confidence']}")
     print(f"REASON={decision['reason']}")
+    print(f"GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
     return 0
 
 
