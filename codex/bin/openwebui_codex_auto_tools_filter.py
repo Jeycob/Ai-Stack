@@ -878,6 +878,21 @@ class Filter:
             "publish zmeny",
             "publish změny",
         ]
+        push_check_words = [
+            "ready na push",
+            "pripravené na push",
+            "pripravene na push",
+            "před pushem",
+            "pred pushem",
+            "before push",
+            "push readiness",
+            "zkontroluj push",
+            "co blokuje push",
+            "what blocks push",
+            "muze to jit pushnout",
+            "může to jít pushnout",
+            "je to ready na push",
+        ]
         release_words = [
             "release",
             "publish package",
@@ -891,6 +906,8 @@ class Filter:
             return "GATEWAY_ADMIN_DEPLOY_STATUS"
         if any(word in lower for word in deploy_words):
             return "GATEWAY_ADMIN_DEPLOY_STACK"
+        if any(word in lower for word in push_check_words):
+            return "GATEWAY_ADMIN_GIT_STATUS"
         if any(word in lower for word in push_words) and not any(word in lower for word in release_words):
             message = self._extract_ai_stack_push_message(text)
             return f"GATEWAY_ADMIN_GIT_PUSH main {message}"

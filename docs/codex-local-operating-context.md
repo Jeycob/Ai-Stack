@@ -69,7 +69,8 @@ OpenWebUI model settings prompt pro `codex-local-*` je verzovany v
 lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
 
 `Codex Auto Tools Filter` ma rozpoznavat prirozene intenty typu "pullni
-ai-stack a nasad", "ukaz deploy status", jednoduche publish zadani jako
+ai-stack a nasad", "ukaz deploy status", preflight push dotazy jako
+"je to ready na push?" nebo "co blokuje push", jednoduche publish zadani jako
 "pushni zmeny do GitHubu" nebo "commitni a pushni", bootstrap zadani jako
 "vytvor nove repository Test2 a vygeneruj ssh klic", "zaloz projekt Test2 na GitHubu" nebo
 "priprav workspace Test2 s deploy key", bezne repo kontroly typu "zkontroluj git status",
@@ -80,8 +81,8 @@ workspace-run, workspace-action, workspace-autopilot, create-repo recipe a pozde
 profile-based schopnosti.
 Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
-Zaroven ma umet rozlisit jednoduchy audited push od sirsi release automation
-scope. Pro "pushni zmeny" je spravna capability `GATEWAY_ADMIN_GIT_PUSH`; pro
+Zaroven ma umet rozlisit `push-check`, jednoduchy audited push a sirsi release automation
+scope. Pro "je to ready na push?" je spravna capability `GATEWAY_ADMIN_GIT_STATUS`; pro "pushni zmeny" je spravna capability `GATEWAY_ADMIN_GIT_PUSH`; pro
 "vytvor release", "publish package" nebo GitHub Actions release workflow ma
 radsi vratit mentor `boundary` vysvetleni a roadmap hint, nez predstirat, ze
 to je jen dalsi obycejny push.
