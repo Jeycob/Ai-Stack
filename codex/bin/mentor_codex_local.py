@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -37,6 +38,29 @@ UNSAFE_PATCH_SEGMENTS = (
     ".env",
     ".bak-",
 )
+
+WORKFLOW_PRIORITY = {
+    "improve": 95,
+    "autopilot": 85,
+    "apply-safe": 75,
+    "run": 65,
+    "audit": 45,
+}
+
+CONFIDENCE_PRIORITY = {
+    "high": 8,
+    "medium": 4,
+    "low": 0,
+}
+
+
+@dataclass
+class BacklogEntry:
+    task: str
+    decision: dict[str, str]
+    priority: int
+    next_helper: str
+    audit_prompt: str
 
 
 def write_temp(text: str) -> str:
@@ -936,6 +960,69 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
     return f"repo: {workspace}\nAnalyzuj projekt a navrhni další krok. Nic needituj."
 
 
+def backlog_priority(decision: dict[str, str], task: str) -> int:
+    score = WORKFLOW_PRIORITY.get(decision["workflow"], 40)
+    score += CONFIDENCE_PRIORITY.get(decision["confidence"], 0)
+
+    lower = task.lower()
+    if any(token in lower for token in ("hned", "urgent", "priorita", "co nejdřív", "co nejdriv")):
+        score += 6
+    if decision.get("capability_scope") in {"remote_repo", "host_runtime"}:
+        score -= 8
+    if decision["workflow"] == "audit" and decision.get("capability_id") == "clarify_or_infer_capability":
+        score -= 4
+    return score
+
+
+def collect_backlog_tasks(args: argparse.Namespace) -> list[str]:
+    tasks: list[str] = []
+    if getattr(args, "task", None):
+        tasks.extend(args.task)
+    task_file = getattr(args, "task_file", None)
+    if task_file:
+        for line in Path(task_file).read_text(encoding="utf-8").splitlines():
+            item = line.strip()
+            if item and not item.startswith("#"):
+                tasks.append(item)
+    if not tasks and not sys.stdin.isatty():
+        for line in sys.stdin.read().splitlines():
+            item = line.strip()
+            if item and not item.startswith("#"):
+                tasks.append(item)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in tasks:
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        deduped.append(normalized)
+        seen.add(normalized)
+    return deduped
+
+
+def build_backlog_entries(workspace: str, tasks: list[str]) -> list[BacklogEntry]:
+    entries: list[BacklogEntry] = []
+    for task in tasks:
+        decision = classify_task(task)
+        entries.append(
+            BacklogEntry(
+                task=task,
+                decision=decision,
+                priority=backlog_priority(decision, task),
+                next_helper=recommended_next_step(decision, workspace, task),
+                audit_prompt=audit_chat_prompt_suggestion(decision, workspace, task),
+            )
+        )
+    return sorted(
+        entries,
+        key=lambda item: (
+            -item.priority,
+            -WORKFLOW_PRIORITY.get(item.decision["workflow"], 0),
+            item.task.lower(),
+        ),
+    )
+
+
 def run_report_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"MENTOR_REPORT_WORKSPACE={args.workspace}")
@@ -1012,6 +1099,40 @@ def run_plan_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_backlog_sequence(args: argparse.Namespace) -> int:
+    tasks = collect_backlog_tasks(args)
+    if not tasks:
+        raise SystemExit("backlog mode requires at least one task via --task, --task-file, or stdin")
+
+    entries = build_backlog_entries(args.workspace, tasks)
+    print(f"MENTOR_BACKLOG_WORKSPACE={args.workspace}")
+    print(f"MENTOR_BACKLOG_COUNT={len(entries)}")
+    if entries:
+        print(f"MENTOR_BACKLOG_TOP_WORKFLOW={entries[0].decision['workflow']}")
+        print(f"MENTOR_BACKLOG_TOP_TASK={entries[0].task}")
+
+    for idx, entry in enumerate(entries, start=1):
+        decision = entry.decision
+        print(f"BACKLOG_ITEM_{idx}_TASK={entry.task}")
+        print(f"BACKLOG_ITEM_{idx}_PRIORITY={entry.priority}")
+        print(f"BACKLOG_ITEM_{idx}_WORKFLOW={decision['workflow']}")
+        print(f"BACKLOG_ITEM_{idx}_RUNTIME_PROFILE={decision['runtime_profile']}")
+        print(f"BACKLOG_ITEM_{idx}_CONFIDENCE={decision['confidence']}")
+        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_ID={decision['capability_id']}")
+        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_SCOPE={decision['capability_scope']}")
+        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_SUMMARY={decision['capability_summary']}")
+        print(f"BACKLOG_ITEM_{idx}_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+        print(f"BACKLOG_ITEM_{idx}_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+        print(f"BACKLOG_ITEM_{idx}_NEXT_HELPER={entry.next_helper}")
+        print(f"BACKLOG_ITEM_{idx}_REASON={decision['reason']}")
+        print(f"BACKLOG_ITEM_{idx}_PLAN_CMD=python3 codex/bin/mentor_codex_local.py plan {args.workspace} {shlex.quote(entry.task)}")
+        print(f"BACKLOG_ITEM_{idx}_REPORT_CMD=python3 codex/bin/mentor_codex_local.py report {args.workspace} {shlex.quote(entry.task)}")
+        print(f"BACKLOG_ITEM_{idx}_AUDIT_CHAT_PROMPT<<EOF")
+        print(entry.audit_prompt)
+        print("EOF")
+    return 0
+
+
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
     if args.mode == "audit":
         return run_audit_sequence(args)
@@ -1033,6 +1154,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_report_sequence(args)
     if args.mode == "plan":
         return run_plan_sequence(args)
+    if args.mode == "backlog":
+        return run_backlog_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)
@@ -1139,6 +1262,12 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("workspace")
     plan.add_argument("task")
     plan.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; plan mode never calls OpenWebUI")
+
+    backlog = sub.add_parser("backlog", help="Classify and prioritize multiple tasks into a mentor-ready queue with next helper commands")
+    backlog.add_argument("workspace")
+    backlog.add_argument("--task", action="append", default=[], help="Task text; can be repeated")
+    backlog.add_argument("--task-file", help="Path to a newline-delimited task file")
+    backlog.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; backlog mode never calls OpenWebUI")
 
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")

@@ -205,6 +205,17 @@ Priklad mentor planu, ktery z jednoho tasku vrati kratkou 2-4 krokovou posloupno
 python3 codex/bin/mentor_codex_local.py plan ai-stack "Fixni to a dotahni co zvladnes."
 ```
 
+Priklad backlogu nad vice tasky, kdy helper sam srovna poradi a u kazde polozky vrati workflow, capability metadata, dalsi helper command i pripraveny audit prompt:
+
+```bash
+python3 codex/bin/mentor_codex_local.py backlog ai-stack \
+  --task "Fixni to a dotahni co zvladnes." \
+  --task "Uprav README a aplikuj maly patch" \
+  --task "Vytvor release a pushni to na GitHub"
+```
+
+Backlog umi cist tasky i ze stdin nebo z newline-delimited souboru pres `--task-file`, takze je vhodny jako uzsi scheduler vrstva nad vice prirozenymi zadani.
+
 Profilove rozhodnuti vraci i:
 
 - `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
@@ -224,6 +235,15 @@ Plan navic vraci:
 - `PLAN_STEP_<N>_LABEL`: typ dalsiho kroku.
 - `PLAN_STEP_<N>_VALUE`: konkretni helper command nebo capability review krok.
 - `PLAN_STEP_COUNT`: pocet kroku v navrhu.
+
+Backlog navic vraci:
+
+- `MENTOR_BACKLOG_COUNT`: pocet tasku ve fronte.
+- `MENTOR_BACKLOG_TOP_TASK`: task s nejvyssi prioritou.
+- `BACKLOG_ITEM_<N>_PRIORITY`: jednoduche poradi pro dalsi automatizaci.
+- `BACKLOG_ITEM_<N>_NEXT_HELPER`: konkretni helper command pro dalsi krok.
+- `BACKLOG_ITEM_<N>_PLAN_CMD`: pripraveny detailni `plan` command pro danou polozku.
+- `BACKLOG_ITEM_<N>_AUDIT_CHAT_PROMPT`: viditelny prompt pripraveny do OpenWebUI auditu.
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 

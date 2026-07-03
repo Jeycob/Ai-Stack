@@ -310,6 +310,21 @@ Když chceš ještě o krok praktičtější dohled nad delším úkolem, použi
 
     python3 codex/bin/mentor_codex_local.py plan ai-stack "Fixni to a dotáhni co zvládneš."
 
+Když už máš víc úkolů najednou a chceš, aby si helper sám srovnal pořadí a šířku pravomocí, použij `backlog`. Nad každým taskem udělá stejnou klasifikaci jako `profile/report/plan`, ale vrátí prioritizovanou frontu s `NEXT_HELPER`, `PLAN_CMD` a připraveným audit chat promptem:
+
+    python3 codex/bin/mentor_codex_local.py backlog ai-stack \
+      --task "Fixni to a dotáhni co zvládneš." \
+      --task "Uprav README a aplikuj malý patch" \
+      --task "Vytvoř release a pushni to na GitHub"
+
+Stejný backlog můžeš helperu poslat i přes stdin nebo soubor po řádcích:
+
+    printf '%s\n' \
+      "Ověř projekt a pokračuj sám." \
+      "Uprav README a aplikuj malý patch" \
+      "Nainstaluj systémový balík a restartuj service" \
+      | python3 codex/bin/mentor_codex_local.py backlog ai-stack
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh
