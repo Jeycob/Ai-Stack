@@ -2638,6 +2638,10 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
             "verify-project",
             "--scenario",
             "next-step",
+            "--scenario",
+            "workflow-profile-improve",
+            "--scenario",
+            "mentor-brief-bootstrap",
         ],
         {},
     ))

@@ -272,6 +272,7 @@ Nad tím je teď ještě lehký scénářový runner `codex/bin/owui_chat_scenar
 
     python3 codex/bin/owui_chat_scenarios.py --list
     python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario git-status --scenario next-step
+    python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario workflow-profile-improve --scenario mentor-brief-bootstrap
     OWUI_API_KEY=... python3 codex/bin/owui_chat_scenarios.py --scenario all --json
 
 Výchozí scénáře dnes pokrývají:
@@ -295,7 +296,7 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 `self-check` skládá tři vrstvy do jednoho reportu:
 - `mentor_scenario_runner.py` pro levný helper-orchestration smoke,
 - helper-only `bootstrap-probe` pro ověření bootstrap/create-repo reasoning bez mutací,
-- `chat-scenarios` pro user-like OpenWebUI audit chat flow,
+- `chat-scenarios` pro user-like OpenWebUI audit chat flow, včetně širší autonomy/profile vrstvy,
 - `check_ai_stack.sh` pro stack summary.
 
 Když chybí OpenWebUI API key, chat scénáře se v `self-check` automaticky přepnou do `dry-run` režimu a report je označí jako `degraded` místo falešného tvrdého failu. Díky tomu jde self-check pouštět i v lokálním klonu, kde zrovna nemáš k dispozici celý běžící stack.

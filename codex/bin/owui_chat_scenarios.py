@@ -68,6 +68,18 @@ SCENARIOS: dict[str, Scenario] = {
         prompt_template="repo: {workspace}\nNavrhni dalsi krok.",
         expected_substrings=("WORKSPACE_AUTOPILOT_OK", "recommend_only=True"),
     ),
+    "workflow-profile-improve": Scenario(
+        name="workflow-profile-improve",
+        description="Natural routing question that should classify a broad autonomy request into the improve/runtime profile instead of a narrow read-only answer.",
+        prompt_template="repo: {workspace}\nJaky workflow bys zvolil pro: Fixni to a udelej maximum, co pujde.",
+        expected_substrings=("WORKFLOW=improve", "RUNTIME_PROFILE=runtime"),
+    ),
+    "mentor-brief-bootstrap": Scenario(
+        name="mentor-brief-bootstrap",
+        description="Natural mentor-brief request that should classify bootstrap follow-through into bootstrap-improve without mutating anything.",
+        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2, priprav starter, napis zaklad appky a pokracuj sam.",
+        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "bootstrap-improve"),
+    ),
 }
 
 

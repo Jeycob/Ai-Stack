@@ -58,6 +58,7 @@ Priklady:
 ```bash
 python3 codex/bin/owui_chat_scenarios.py --list
 python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario git-status --scenario next-step
+python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario workflow-profile-improve --scenario mentor-brief-bootstrap
 OWUI_API_KEY=... python3 codex/bin/owui_chat_scenarios.py --scenario all --json
 ```
 
@@ -67,6 +68,8 @@ Vychozi scenare dnes pokryvaji:
 - `push-readiness`
 - `deploy-status`
 - `next-step`
+- `workflow-profile-improve`
+- `mentor-brief-bootstrap`
 
 Pokud nechces volat scenarovy runner primo, stejny smoke jde spustit i pres
 hlavni mentor helper:
@@ -85,7 +88,7 @@ python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok 
 Tenhle mod sklada:
 - helper smoke pres `mentor_scenario_runner.py`
 - helper-only `bootstrap-probe` pro create-repo/bootstrap reasoning bez mutaci
-- user-like audit chat scenare
+- user-like audit chat scenare, vcetne autonomy/profile routingu
 - stack summary pres `check_ai_stack.sh`
 
 Kdyz chybi OpenWebUI API key, chat scenare se automaticky prepnou do `dry-run`
