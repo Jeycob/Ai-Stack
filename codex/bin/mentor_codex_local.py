@@ -626,7 +626,7 @@ def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
             "install -> dev server smoke -> build",
         ),
         "opengl-native": (
-            "use CMake scaffold plus glfw and glad packages available on the target system",
+            "codex_scaffold_opengl_native",
             "CMakeLists.txt, src/main.cpp, include/ or third_party/glad as needed, README build notes",
             "configure -> build -> run sample window smoke",
         ),
@@ -1662,6 +1662,19 @@ def scaffold_plan_steps(decision: dict[str, str], task: str) -> list[tuple[str, 
 
 
 def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -> list[str]:
+    if recipe == "codex_scaffold_opengl_native":
+        script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_opengl_native.py"
+        return [
+            sys.executable,
+            "codex/bin/run_check.py",
+            repo_name,
+            "--timeout",
+            str(timeout),
+            "--",
+            sys.executable,
+            str(script),
+            ".",
+        ]
     return [
         sys.executable,
         "codex/bin/run_check.py",
@@ -1680,6 +1693,8 @@ def scaffold_recipe_execution_mode(recipe: str) -> str:
     if not recipe:
         return "missing"
     lower = recipe.lower()
+    if lower.startswith("codex_scaffold_"):
+        return "executable"
     executable_markers = (
         "npm ",
         "npx ",

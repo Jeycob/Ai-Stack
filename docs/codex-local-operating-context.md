@@ -357,6 +357,12 @@ profil nebo maly starter patch. Je to schvalna hranice capability - lepsi
 priznat, ze treba OpenGL starter jeste nema bezpecny bootstrap command, nez
 predstirat automatizaci nad textovym popisem.
 
+Prvni takhle drive blokovany profil uz ale ma realny scaffolder: pro
+`opengl-native` je v repu `codex/bin/scaffold_opengl_native.py`. Dispatcher ho
+pozna pres specialni scaffold token a prelozi na opravdovy audited runner pres
+`run_check.py`, takze OpenGL starter uz neni jen slovni plan, ale vykonatelny
+bootstrap krok v ramci stavajici capability vrstvy.
+
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
 Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen

@@ -397,7 +397,9 @@ Další vrstva je `bootstrap-dispatch`. Ten už z téhož zadání vezme konkré
 
 Nově navíc `bootstrap-dispatch` nekončí jen u prvního scaffold commandu. Ze `scaffold_loop` si odvodí další kandidátní capability kroky (`install`, `smoke`, `verify`, `build`, `test`, `lint`), zohlední co už pokryl samotný recipe, a po úspěšném bootstrapu zkusí najít krátkou podporovanou posloupnost dalších workspace akcí přes existující `workspace_action.py`. Tím se další kroky opírají o reuse už hotových capability resolverů místo nové bespoke logiky. Sekvence zůstává krátká a guardrailed; při prvním failu se zastaví.
 
-Zároveň už `bootstrap-dispatch` nerozbíhá nesmyslné pseudo-commandy. Pokud je `scaffold_recipe` jen popisný plán a ne skutečně spustitelný shell command, helper to nově označí jako `SCAFFOLD_RECIPE_MODE=manual` a vrátí jasný blocker s dalším krokem místo toho, aby se snažil pustit text typu “use CMake scaffold plus glfw...”. To je důležité hlavně pro profily jako `opengl-native`, kde je bezpečnější přiznat potřebu dedikovaného scaffolderu nebo malého starter patche než předstírat automatizaci.
+Zároveň už `bootstrap-dispatch` nerozbíhá nesmyslné pseudo-commandy. Pokud je `scaffold_recipe` jen popisný plán a ne skutečně spustitelný shell command, helper to označí jako `SCAFFOLD_RECIPE_MODE=manual` a vrátí jasný blocker s dalším krokem místo toho, aby se snažil pustit text typu “use CMake scaffold plus glfw...”.
+
+První takhle dříve blokovaný profil už jsme rovnou posunuli do reálné capability vrstvy: `opengl-native` má nově dedikovaný audited scaffolder `codex/bin/scaffold_opengl_native.py`. `bootstrap-dispatch` ho umí přeložit do skutečného guardrailed runneru přes `run_check.py`, takže OpenGL starter už není jen roadmap poznámka, ale opravdový první bootstrap krok.
 
 Kvůli tokenům má mentor nově i lehčí `compact execution brief` větev. Používá se tam, kde jde hlavně o orchestration handoff mezi helpery a není potřeba znovu posílat celý reasoning blok. Zachovává jen minimum: `workspace`, `workflow`, případně `solution_profile`, `public_stack`, `scaffold_recipe`, `scaffold_loop`, `next_scope_hint` a `next_helper`.
 
