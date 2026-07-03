@@ -222,6 +222,8 @@ Příklad veřejného web dotazu bez ručního markeru:
 
 Auto-tools filter ho přepíše na auditovaný `GATEWAY_ADMIN_WEB_ANSWER https://www.seznam.cz/ -- ...`. Gateway stáhne jen veřejný HTTP/HTTPS zdroj přes omezený GET, blokuje lokální a privátní adresy, nepoužívá cookies ani secrets, z HTML vytáhne čitelný text a lokální model odpoví pouze z načteného zdroje. Pro čisté stažení textu bez otázky existuje `GATEWAY_ADMIN_WEB_FETCH <url>`.
 
+Stejná capability funguje i v přirozenějším slovosledu jako `stahni z seznam.cz kdo ma dneska svatek` nebo `podivej se na https://example.com a stahni mi text`. Filter z takového promptu nejdřív vytáhne veřejnou URL a potom se pokusí očistit samotný dotaz, aby se dál neposílalo celé technické zadání typu `stáhni mi to z ...`, ale už jen věcná otázka.
+
 Příklad vyššího ověřovacího workflow:
 
     repo: ai-stack

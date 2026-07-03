@@ -103,6 +103,12 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         unexpected=("nemám přístup", "read-only"),
     ),
     RouteScenario(
+        name="web-answer-seznam-svatek-reversed",
+        prompt="stahni z seznam.cz kdo ma dneska svatek",
+        expected=("GATEWAY_ADMIN_WEB_ANSWER https://www.seznam.cz/", "kdo ma dneska svatek"),
+        unexpected=("nemám přístup", "read-only"),
+    ),
+    RouteScenario(
         name="web-fetch-url",
         prompt="Podivej se na https://example.com a stahni mi text.",
         expected=("GATEWAY_ADMIN_WEB_FETCH https://example.com", "--max-bytes 300000"),
@@ -131,6 +137,12 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         prompt="repozitar: Test2\nvytvor mi ssh klic pro github",
         expected=("GATEWAY_ADMIN_SSH_KEYGEN github-Test2 Test2@local",),
         unexpected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2", "GATEWAY_ADMIN_WORKSPACE_EDIT"),
+    ),
+    RouteScenario(
+        name="labelled-create-workspace-git-ssh",
+        prompt="repo Test3\nvytvor workspace a initni git a vygeneruj ssh klic",
+        expected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test3",),
+        unexpected=("GATEWAY_ADMIN_SSH_KEYGEN", "mentor_codex_local.py delegate", "Tuhle akci jsem sam"),
     ),
     RouteScenario(
         name="workspace-direct-edit-webgl",

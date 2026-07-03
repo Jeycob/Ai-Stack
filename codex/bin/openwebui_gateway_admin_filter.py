@@ -271,6 +271,9 @@ class Filter:
 
     def _workspace_from_text(self, text: str) -> str | None:
         match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*([A-Za-z0-9_.-]{{1,80}})\s*$", text)
+        if match:
+            return match.group(1)
+        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s+([A-Za-z0-9_.-]{{1,80}})\s*$", text)
         return match.group(1) if match else None
 
     def _line_value(self, text: str, label_pattern: str) -> str | None:
@@ -286,7 +289,7 @@ class Filter:
             stripped = line.strip()
             if not stripped:
                 continue
-            if re.match(rf"(?i)^{WORKSPACE_LABEL_PATTERN}\s*:\s*[A-Za-z0-9_.-]{{1,80}}\s*$", stripped):
+            if re.match(rf"(?i)^{WORKSPACE_LABEL_PATTERN}(?:\s*:\s*|\s+)[A-Za-z0-9_.-]{{1,80}}\s*$", stripped):
                 continue
             if re.match(rf"(?i)^{FILE_LABEL_PATTERN}\s*:\s*.+$", stripped):
                 continue
@@ -440,11 +443,14 @@ class Filter:
         lower = text.lower()
         create_cues = ("vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav")
         target_cues = ("workspace", "repository", "repozitar", "repozitář", "repo ", "projekt")
-        key_only_cues = ("ssh key", "ssh klic", "ssh klíč", "vygeneruj klic", "vygeneruj klíč")
+        key_cues = ("ssh key", "ssh klic", "ssh klíč", "vygeneruj klic", "vygeneruj klíč")
+        create_hit = any(cue in lower for cue in create_cues)
+        target_hit = any(cue in lower for cue in target_cues)
+        key_hit = any(cue in lower for cue in key_cues)
         return (
-            any(cue in lower for cue in create_cues)
-            and any(cue in lower for cue in target_cues)
-            and not any(cue in lower for cue in key_only_cues)
+            create_hit
+            and target_hit
+            and (not key_hit or (create_hit and target_hit))
         )
 
     def _natural_web_url(self, text: str) -> str | None:
@@ -463,6 +469,31 @@ class Filter:
             if domain in lower:
                 return url
         return None
+
+    def _extract_web_question(self, text: str) -> str:
+        question = " ".join(self._non_route_lines(text)).strip() or text.strip()
+        question = re.sub(r"https?://[^\s<>'\")]+", " ", question, flags=re.I)
+        question = re.sub(
+            r"(?i)\b(?:www\.)?(seznam\.cz|novinky\.cz|idnes\.cz|example\.com|github\.com)\b/?",
+            " ",
+            question,
+        )
+        cleanup_patterns = (
+            r"(?i)\bst[aá]hni(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bst[aá]hnout(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bnacti(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bna[cč]ti(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bpod[ií]vej\s+se(?:\s+na)?\b",
+            r"(?i)\bfetch\b",
+            r"(?i)\bdownload\b",
+            r"(?i)\bz\s+webu\b",
+            r"(?i)\bz\s+internetu\b",
+        )
+        for pattern in cleanup_patterns:
+            question = re.sub(pattern, " ", question)
+        question = re.sub(r"(?i)\b(url|str[aá]nku|web|website|site)\b", " ", question)
+        question = re.sub(r"\s+", " ", question).strip(" ,.;:-")
+        return question or (" ".join(self._non_route_lines(text)).strip() or text.strip())[:1200]
 
     def _natural_admin_command(self, body: dict, text: str) -> str | None:
         model = str(body.get("model") or "")
@@ -484,17 +515,16 @@ class Filter:
         if workspace and self._looks_like_read_only_repo_analysis(text):
             return None
 
-        if workspace and any(cue in lower for cue in ("ssh", "klic", "klíč", "key", "github")) and any(
-            cue in lower for cue in ("vygeneruj", "vytvor", "vytvoř", "generate", "create")
-        ):
-            key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{workspace}")[:64].strip("-") or "github-workspace"
-            return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
-
         if workspace:
             if any(cue in lower for cue in ("status jobu", "stav jobu", "background status", "status background", "jak bezi job", "jak běží job", "status runu", "stav runu")):
                 return f"GATEWAY_ADMIN_RUN_WORKSPACE_STATUS {shlex.quote(workspace)}"
             if self._looks_like_create_workspace_request(task_text) and workspace.lower() not in {"ai-stack", "smoke"}:
                 return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {shlex.quote(workspace)}"
+            if any(cue in lower for cue in ("ssh", "klic", "klíč", "key", "github")) and any(
+                cue in lower for cue in ("vygeneruj", "vytvor", "vytvoř", "generate", "create")
+            ):
+                key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{workspace}")[:64].strip("-") or "github-workspace"
+                return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
             if self._looks_like_edit_request(task_text):
                 action = self._looks_like_workspace_action(task_text)
                 run_after = f" --run-after {action}" if action else ""
@@ -511,7 +541,7 @@ class Filter:
 
         url = self._natural_web_url(text)
         if url and any(cue in lower for cue in ("stahni", "stáhni", "nacti", "načti", "precti", "přečti", "podivej", "podívej", "svatek", "svátek", "?")):
-            question = " ".join(self._non_route_lines(text)).strip() or text.strip()
+            question = self._extract_web_question(text)
             return f"GATEWAY_ADMIN_WEB_ANSWER {shlex.quote(url)} -- {shlex.quote(question[:1200])}"
         return None
 

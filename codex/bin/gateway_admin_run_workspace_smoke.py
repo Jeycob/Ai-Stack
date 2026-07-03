@@ -79,6 +79,17 @@ def main() -> int:
     if routed is not None:
         raise AssertionError(f"read-only-analysis: expected direct model path, got {routed!r}")
 
+    bootstrap_prompt = (
+        "repo Test3\n"
+        "vytvor workspace a initni git a vygeneruj ssh klic"
+    )
+    routed = filt._natural_admin_command(
+        {"model": "codex-local-plan-qwen14b", "messages": [{"role": "user", "content": bootstrap_prompt}]},
+        bootstrap_prompt,
+    )
+    if routed != "GATEWAY_ADMIN_CREATE_LOCAL_REPO Test3":
+        raise AssertionError(f"create-workspace-git-ssh: expected create-local-repo, got {routed!r}")
+
     print("GATEWAY_ADMIN_RUN_WORKSPACE_SMOKE_OK")
     return 0
 

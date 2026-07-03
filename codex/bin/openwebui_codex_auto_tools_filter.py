@@ -262,7 +262,7 @@ class Filter:
             stripped = line.strip()
             if not stripped:
                 continue
-            if re.match(rf"(?i)^{WORKSPACE_LABEL_PATTERN}\s*:\s*[A-Za-z0-9_.-]{{1,80}}\s*$", stripped):
+            if re.match(rf"(?i)^{WORKSPACE_LABEL_PATTERN}(?:\s*:\s*|\s+)[A-Za-z0-9_.-]{{1,80}}\s*$", stripped):
                 continue
             if re.match(rf"(?i)^{FILE_LABEL_PATTERN}\s*:\s*.+$", stripped):
                 continue
@@ -1253,6 +1253,31 @@ class Filter:
         )
         return any(cue in lower for cue in question_cues)
 
+    def _extract_web_question(self, text: str) -> str:
+        question = " ".join(self._non_repo_lines(text)).strip() or text.strip()
+        question = re.sub(r"https?://[^\s<>'\")]+", " ", question, flags=re.I)
+        question = re.sub(
+            r"(?i)\b(?:www\.)?(seznam\.cz|novinky\.cz|idnes\.cz|example\.com|github\.com)\b/?",
+            " ",
+            question,
+        )
+        cleanup_patterns = (
+            r"(?i)\bst[aá]hni(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bst[aá]hnout(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bnacti(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bna[cč]ti(?:\s+mi)?(?:\s+to)?(?:\s+z)?\b",
+            r"(?i)\bpod[ií]vej\s+se(?:\s+na)?\b",
+            r"(?i)\bfetch\b",
+            r"(?i)\bdownload\b",
+            r"(?i)\bz\s+webu\b",
+            r"(?i)\bz\s+internetu\b",
+        )
+        for pattern in cleanup_patterns:
+            question = re.sub(pattern, " ", question)
+        question = re.sub(r"(?i)\b(url|str[aá]nku|web|website|site)\b", " ", question)
+        question = re.sub(r"\s+", " ", question).strip(" ,.;:-")
+        return question or (" ".join(self._non_repo_lines(text)).strip() or text.strip())[:1200]
+
     def _natural_web_command(self, text: str) -> str | None:
         if not self._looks_like_web_intent(text):
             return None
@@ -1260,7 +1285,7 @@ class Filter:
         if not url:
             return None
         if self._looks_like_web_question(text):
-            question = " ".join(self._non_repo_lines(text)).strip() or text.strip()
+            question = self._extract_web_question(text)
             return f"GATEWAY_ADMIN_WEB_ANSWER {shlex.quote(url)} -- {shlex.quote(question[:1200])}"
         return f"GATEWAY_ADMIN_WEB_FETCH {shlex.quote(url)} --max-bytes 300000"
 
@@ -1368,6 +1393,10 @@ class Filter:
             return None
         task = " ".join(self._non_repo_lines(text)).strip() or text.strip()
         lower = task.lower()
+        create_cues = ("vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav")
+        repo_cues = ("workspace", "repository", "repozitar", "repozitář", "repo ", "projekt")
+        if any(cue in lower for cue in create_cues) and any(cue in lower for cue in repo_cues):
+            return None
         if not any(cue in lower for cue in ("ssh", "klic", "klíč", "key", "deploy key", "github")):
             return None
         if not any(cue in lower for cue in ("vygeneruj", "vytvor", "vytvoř", "generate", "create")):
@@ -1427,7 +1456,20 @@ class Filter:
         task_lower = task.lower()
         create_words = ["vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav"]
         repo_words = ["repository", "repozitar", "repozitář", "repo ", "projekt ", "workspace "]
-        setup_words = ["ssh key", "ssh klic", "ssh klíč", "github", "deploy key", "git remote", "origin"]
+        setup_words = [
+            "ssh key",
+            "ssh klic",
+            "ssh klíč",
+            "github",
+            "deploy key",
+            "git remote",
+            "origin",
+            "git init",
+            "init git",
+            "initni git",
+            "inicializuj git",
+            "initialize git",
+        ]
         followthrough_words = [
             "doinstaluj",
             "nainstaluj",
@@ -1494,7 +1536,8 @@ class Filter:
                 word in task_lower
                 for word in ("repository", "repozitar", "repozitář", "repo", "projekt", "workspace")
             )
-            asks_only_for_key = any(word in task_lower for word in ("ssh key", "ssh klic", "ssh klíč", "vygeneruj klic", "vygeneruj klíč"))
+            key_requested = any(word in task_lower for word in ("ssh key", "ssh klic", "ssh klíč", "vygeneruj klic", "vygeneruj klíč"))
+            asks_only_for_key = key_requested and not (has_task_create and has_task_repo)
             if has_task_create and has_task_repo and not asks_only_for_key:
                 if any(word in lower for word in followthrough_words):
                     return self._bootstrap_improve_helper_command(task)
@@ -1742,6 +1785,9 @@ class Filter:
 
     def _workspace_from_text(self, text: str) -> str | None:
         match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*([A-Za-z0-9_.-]{{1,80}})\s*$", text)
+        if match:
+            return match.group(1)
+        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s+([A-Za-z0-9_.-]{{1,80}})\s*$", text)
         if match:
             return match.group(1)
         return None
