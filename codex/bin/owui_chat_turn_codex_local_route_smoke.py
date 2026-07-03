@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--expect",
         action="append",
-        default=["AGENT_LOOP", "workflow=review", "planner_source="],
+        default=["AGENT_LOOP_OK", "workflow=review", "read_only=True"],
         help="Substring that must appear in the stateless codex-local response. Can be repeated.",
     )
     parser.add_argument("--timeout", type=float, default=30.0)
