@@ -198,6 +198,18 @@ def main() -> int:
             expect("workspace_git_publish" in taskspec["required_capabilities"], "taskspec-publish-capability", json.dumps(taskspec, ensure_ascii=False))
             publish_plan_from_taskspec = gateway.agent_taskspec_to_plan(taskspec, "TestCode", "ai-stack", True, publish_task)
             expect(publish_plan_from_taskspec["workflow"] == "workspace_git_publish", "taskspec-to-plan-git-publish", json.dumps(publish_plan_from_taskspec, ensure_ascii=False))
+            normalized_locked_publish = gateway.normalize_agent_plan(
+                publish_plan_from_taskspec,
+                "TestCode",
+                "ai-stack",
+                True,
+                publish_task,
+            )
+            expect(
+                normalized_locked_publish["workflow"] == "workspace_git_publish",
+                "taskspec-locked-plan-keeps-git-publish",
+                json.dumps(normalized_locked_publish, ensure_ascii=False),
+            )
 
             continue_messages = [
                 {"role": "user", "content": "vytvor mi nove repository TestCode"},

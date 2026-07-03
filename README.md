@@ -260,6 +260,8 @@ Planner uvnitř gateway je nově výslovně `LLM-first`. To znamená, že `admin
 
 Ještě důležitější je, že planner už nemá vracet rovnou hotový workflow jen podle keywordů. Nejprve vytváří `TaskSpec`, tedy strukturovaný popis významu úlohy: aktuální workspace, skutečný cíl uživatele, jestli jde o nové repo nebo práci v existujícím workspace, cílový remote, požadovaný end-state, potřebné capability, chybějící vstupy, rizikovost a recovery plán. Deterministický kód pak z `TaskSpec` teprve mapuje capability jako `review`, `edit`, `action`, `run`, `bootstrap`, `workspace_git_publish`, `ssh_key_create`, `ssh_key_show_public`, `web_answer`, `web_fetch` nebo `deploy`.
 
+Od commitu `7cb415e` a navazujících změn je navíc `TaskSpec` plán považovaný za capability-locked. Prakticky to znamená, že když LLM planner zvolí například `workspace_git_publish`, `workspace_action:verify` nebo read-only `review`, následná normalizační vrstva už ten workflow nesmí znovu přepsat jen proto, že se v promptu objevují slova jako `repo`, `ssh`, `github`, `push`, `oprav` nebo `spusť`. Keyword heuristiky zůstávají jen jako bounded fallback pro situaci, kdy planner selže nebo capability úplně chybí.
+
 Praktický dopad je hlavně u Git/GitHub úloh. Prompt typu:
 
     repo: TestCode

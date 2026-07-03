@@ -728,6 +728,104 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "clarify_or_infer_capability": "clarify",
     "clarify": "clarify",
 }
+CORE_AGENT_CAPABILITIES = {
+    "review": {
+        "workflow": "review",
+        "summary": "Read-only analysis over a repository snapshot; never edits.",
+        "scope": "workspace_snapshot",
+        "implemented": True,
+    },
+    "workspace_review": {
+        "workflow": "review",
+        "summary": "Alias for read-only workspace review.",
+        "scope": "workspace_snapshot",
+        "implemented": True,
+    },
+    "read_only_review": {
+        "workflow": "review",
+        "summary": "Alias for read-only workspace review.",
+        "scope": "workspace_snapshot",
+        "implemented": True,
+    },
+    "workspace_edit": {
+        "workflow": "edit",
+        "summary": "Audited workspace edit through unified diff application.",
+        "scope": "workspace_repo",
+        "implemented": True,
+    },
+    "edit": {
+        "workflow": "edit",
+        "summary": "Alias for audited workspace edit.",
+        "scope": "workspace_repo",
+        "implemented": True,
+    },
+    "workspace_run": {
+        "workflow": "run",
+        "summary": "Run one explicit short command inside the workspace runtime.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "run": {
+        "workflow": "run",
+        "summary": "Alias for explicit workspace command execution.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "workspace_autopilot": {
+        "workflow": "autopilot",
+        "summary": "Audited verify/recovery loop over bounded workspace actions.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "autopilot": {
+        "workflow": "autopilot",
+        "summary": "Alias for audited workspace autopilot.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "bootstrap": {
+        "workflow": "bootstrap",
+        "summary": "Alias for audited repository/workspace bootstrap.",
+        "scope": "workspace_bootstrap",
+        "implemented": True,
+    },
+    "ssh_key_create": {
+        "workflow": "ssh_key_create",
+        "summary": "Alias for idempotent workspace SSH key creation.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "ssh_key_show_public": {
+        "workflow": "ssh_key_show_public",
+        "summary": "Alias for returning the workspace SSH public key.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "web_answer": {
+        "workflow": "web_answer",
+        "summary": "Alias for public web answer capability.",
+        "scope": "public_web",
+        "implemented": True,
+    },
+    "web_fetch": {
+        "workflow": "web_fetch",
+        "summary": "Alias for public web fetch capability.",
+        "scope": "public_web",
+        "implemented": True,
+    },
+    "deploy": {
+        "workflow": "deploy",
+        "summary": "Alias for ai-stack deploy flow.",
+        "scope": "stack_runtime",
+        "implemented": True,
+    },
+    "clarify": {
+        "workflow": "clarify",
+        "summary": "Return a precise missing-input or missing-capability recovery step.",
+        "scope": "mentoring",
+        "implemented": True,
+    },
+}
 
 
 def extract_json_object(text):
@@ -797,8 +895,35 @@ def agent_controller_workspace(requested_workspace):
     return default, False, workspaces
 
 
+def agent_capability_registry():
+    registry = {name: dict(spec) for name, spec in CORE_AGENT_CAPABILITIES.items()}
+
+    for name, spec in load_capability_roadmap_payload().get("capabilities", {}).items():
+        if not isinstance(spec, dict):
+            continue
+        capability = str(name).strip()
+        if not capability:
+            continue
+        entry = registry.setdefault(capability, {})
+        entry.setdefault("workflow", AGENT_CAPABILITY_TO_WORKFLOW.get(capability, "clarify"))
+        entry["summary"] = str(spec.get("summary") or entry.get("summary") or "").strip()
+        entry["scope"] = str(spec.get("scope") or entry.get("scope") or "").strip()
+        entry["implemented"] = bool(spec.get("implemented", True))
+
+    for action, spec in load_workspace_action_registry().items():
+        capability = f"workspace_action:{str(action).strip().lower()}"
+        registry[capability] = {
+            "workflow": "action",
+            "action": str(action).strip().lower(),
+            "summary": str(spec.get("summary") or "Audited workspace action").strip(),
+            "scope": "workspace_runtime",
+            "implemented": True,
+        }
+    return registry
+
+
 def agent_capability_catalog():
-    registry = load_workspace_action_registry()
+    capability_registry = agent_capability_registry()
     lines = [
         "- review: read-only analysis over repository snapshot; never edits",
         "- edit: safe repository edit through audited unified diff application; optional verify/test/build/smoke follow-up",
@@ -817,7 +942,7 @@ def agent_capability_catalog():
         "Workspace actions:",
     ]
     for action in ("install", "verify", "smoke", "test", "build", "lint"):
-        spec = registry.get(action) or {}
+        spec = capability_registry.get(f"workspace_action:{action}") or {}
         summary = str(spec.get("summary", "")).strip()
         lines.append(f"- {action}: {summary or 'audited workspace action'}")
     return "\n".join(lines)
@@ -1464,20 +1589,15 @@ def agent_capability_hints_from_task(task, workspace_exists):
 
 
 def split_agent_capabilities(capabilities):
+    registry = agent_capability_registry()
     implemented = []
     missing = []
     for raw in capabilities or []:
         capability = str(raw or "").strip()
         if not capability:
             continue
-        if capability.startswith("workspace_action:"):
-            action = capability.split(":", 1)[1].strip().lower()
-            if action in AGENT_LOOP_ACTIONS:
-                implemented.append(capability)
-            else:
-                missing.append(capability)
-            continue
-        if capability in AGENT_CAPABILITY_TO_WORKFLOW:
+        entry = registry.get(capability) or {}
+        if entry.get("implemented"):
             implemented.append(capability)
         else:
             missing.append(capability)
@@ -1667,6 +1787,14 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     required_capabilities = _string_list(spec.get("required_capabilities"))
     implemented_capabilities, missing_capabilities = split_agent_capabilities(required_capabilities)
     capabilities = set(implemented_capabilities)
+    action_capability = next(
+        (
+            capability.split(":", 1)[1].strip().lower()
+            for capability in implemented_capabilities
+            if capability.startswith("workspace_action:")
+        ),
+        "",
+    )
     read_only = bool(spec.get("read_only"))
     workflow = "clarify"
     action = ""
@@ -1698,9 +1826,9 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     elif "workspace_edit" in capabilities or agent_edit_requested(task):
         workflow = "edit"
         run_after = str(spec.get("run_after") or "").strip().lower()
-    elif any(str(item).startswith("workspace_action:") for item in capabilities) or spec.get("action"):
+    elif action_capability or spec.get("action"):
         workflow = "action"
-        action = str(spec.get("action") or "").strip().lower()
+        action = str(spec.get("action") or action_capability or "").strip().lower()
     elif spec.get("command"):
         workflow = "run"
         command = spec.get("command") or []
@@ -1733,6 +1861,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         "question": str(spec.get("question") or "").strip(),
         "ssh_comment": str(spec.get("ssh_comment") or "").strip(),
         "confidence": str(spec.get("confidence") or "medium").strip().lower(),
+        "capability_locked": True,
     }
 
 
@@ -1776,6 +1905,16 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     confidence = str(plan.get("confidence") or "medium").strip().lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"
+    capability_locked = bool(plan.get("capability_locked"))
+    required_capabilities = _string_list(plan.get("required_capabilities"))
+    action_capability = next(
+        (
+            capability.split(":", 1)[1].strip().lower()
+            for capability in required_capabilities
+            if capability.startswith("workspace_action:")
+        ),
+        "",
+    )
     inferred_action = agent_infer_action_from_task(task)
     inferred_followups = agent_infer_followup_actions(task)
     bootstrap_requested = agent_bootstrap_requested(task)
@@ -1788,58 +1927,61 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     ssh_comment = str(plan.get("ssh_comment") or "").strip()
     if not ssh_comment:
         ssh_comment = agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
-    if bootstrap_requested:
-        workflow = "bootstrap"
-    elif workspace_exists and git_publish_requested:
-        workflow = "workspace_git_publish"
-    elif workspace_exists and ssh_key_show_public_requested:
-        workflow = "ssh_key_show_public"
-    elif workspace_exists and ssh_key_create_requested:
-        workflow = "ssh_key_create"
-    if workflow == "bootstrap" and not bootstrap_requested:
-        if agent_edit_requested(task):
-            workflow = "edit"
-        elif inferred_action:
-            workflow = "action"
-            action = action or inferred_action
+    if not capability_locked:
+        if bootstrap_requested:
+            workflow = "bootstrap"
         elif workspace_exists and git_publish_requested:
             workflow = "workspace_git_publish"
         elif workspace_exists and ssh_key_show_public_requested:
             workflow = "ssh_key_show_public"
         elif workspace_exists and ssh_key_create_requested:
             workflow = "ssh_key_create"
-        elif run_requested:
-            workflow = "run"
-        else:
-            workflow = "clarify"
-    if workflow == "web_fetch" and agent_web_question_requested(task):
-        workflow = "web_answer"
+        if workflow == "bootstrap" and not bootstrap_requested:
+            if agent_edit_requested(task):
+                workflow = "edit"
+            elif inferred_action:
+                workflow = "action"
+                action = action or inferred_action
+            elif workspace_exists and git_publish_requested:
+                workflow = "workspace_git_publish"
+            elif workspace_exists and ssh_key_show_public_requested:
+                workflow = "ssh_key_show_public"
+            elif workspace_exists and ssh_key_create_requested:
+                workflow = "ssh_key_create"
+            elif run_requested:
+                workflow = "run"
+            else:
+                workflow = "clarify"
+        if workflow == "web_fetch" and agent_web_question_requested(task):
+            workflow = "web_answer"
     if workflow in {"web_fetch", "web_answer"} and not str(plan.get("url") or "").strip():
         plan["url"] = agent_public_url_from_task(task)
     if workflow == "web_answer" and not str(plan.get("question") or "").strip():
         plan["question"] = str(task or "").strip()
-    if not read_only and workflow == "review" and inferred_action:
+    if not capability_locked and not read_only and workflow == "review" and inferred_action:
         workflow = "action"
         action = action or inferred_action
-    if not read_only and workflow == "review" and run_requested:
+    if not capability_locked and not read_only and workflow == "review" and run_requested:
         workflow = "run"
-    if not read_only and workflow == "review" and agent_edit_requested(task):
+    if not capability_locked and not read_only and workflow == "review" and agent_edit_requested(task):
         workflow = "edit"
     if workflow == "edit" and not run_after and inferred_action:
         run_after = inferred_action
-    if workflow in {"bootstrap", "autopilot"} and not followup_actions:
+    if workflow in {"bootstrap", "autopilot"} and not followup_actions and not capability_locked:
         followup_actions = inferred_followups
-    if workflow == "run" and inferred_action and not explicit_command_requested:
+    if workflow == "action" and not action and action_capability:
+        action = action_capability
+    if workflow == "run" and inferred_action and not explicit_command_requested and not capability_locked:
         workflow = "action"
         action = action or inferred_action
         command = []
-    if workflow == "run" and workspace_exists and ssh_key_create_requested and not bootstrap_requested:
+    if workflow == "run" and workspace_exists and ssh_key_create_requested and not bootstrap_requested and not capability_locked:
         workflow = "ssh_key_create"
         command = []
-    if workflow == "run" and workspace_exists and ssh_key_show_public_requested and not bootstrap_requested:
+    if workflow == "run" and workspace_exists and ssh_key_show_public_requested and not bootstrap_requested and not capability_locked:
         workflow = "ssh_key_show_public"
         command = []
-    if workflow == "run" and workspace_exists and git_publish_requested and not bootstrap_requested:
+    if workflow == "run" and workspace_exists and git_publish_requested and not bootstrap_requested and not capability_locked:
         workflow = "workspace_git_publish"
         command = []
     if workflow == "run" and not command:
@@ -1869,6 +2011,10 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         "question": str(plan.get("question") or "").strip(),
         "ssh_comment": ssh_comment,
         "confidence": confidence,
+        "required_capabilities": required_capabilities,
+        "missing_capabilities": _string_list(plan.get("missing_capabilities")),
+        "missing_inputs": _string_list(plan.get("missing_inputs")),
+        "capability_locked": capability_locked,
     }
 
 

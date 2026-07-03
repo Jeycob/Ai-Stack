@@ -229,6 +229,70 @@ def assert_workspace_git_publish_manual_recovery() -> None:
     print("WORKSPACE_GIT_PUBLISH_MANUAL_RECOVERY_OK")
 
 
+def assert_capability_locked_plan_stays_on_taskspec_workflow() -> None:
+    task = "repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git"
+    normalized = gateway.normalize_agent_plan(
+        {
+            "workflow": "workspace_git_publish",
+            "workspace": "TestCode",
+            "remote_url": "git@github.com:owner/repo.git",
+            "required_capabilities": ["workspace_git_publish"],
+            "capability_locked": True,
+            "confidence": "high",
+        },
+        "TestCode",
+        "ai-stack",
+        True,
+        task,
+    )
+    if normalized.get("workflow") != "workspace_git_publish":
+        raise SystemExit(f"capability_locked plan drifted unexpectedly, got {normalized!r}")
+
+    review_locked = gateway.normalize_agent_plan(
+        {
+            "workflow": "review",
+            "workspace": "TestCode",
+            "required_capabilities": ["workspace_review"],
+            "capability_locked": True,
+            "confidence": "high",
+        },
+        "TestCode",
+        "ai-stack",
+        True,
+        "TestCode oprav to a spust testy",
+    )
+    if review_locked.get("workflow") != "review":
+        raise SystemExit(f"capability_locked review should stay review, got {review_locked!r}")
+    print("CAPABILITY_LOCKED_NORMALIZATION_OK")
+
+
+def assert_workspace_action_capability_registry_mapping() -> None:
+    taskspec = gateway.normalize_agent_taskspec(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "verify the project",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "workspace_verified",
+            "required_capabilities": ["workspace_action:verify"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "Use verify capability.",
+            "read_only": False,
+        },
+        "ai-stack",
+        "ai-stack",
+        True,
+        "Ověř projekt a vrať stručný audit výsledků.",
+    )
+    plan = gateway.agent_taskspec_to_plan(taskspec, "ai-stack", "ai-stack", True, "Ověř projekt a vrať stručný audit výsledků.")
+    if plan.get("workflow") != "action" or plan.get("action") != "verify":
+        raise SystemExit(f"workspace_action capability should resolve to verify action, got {plan!r}")
+    print("WORKSPACE_ACTION_CAPABILITY_REGISTRY_OK")
+
+
 def assert_unknown_capability_needs_attention() -> None:
     task = "Synchronizuj produkční databázi přes neexistující remote capability."
     taskspec = gateway.normalize_agent_taskspec(
@@ -727,6 +791,8 @@ def main() -> int:
     assert_verify_prefers_action_over_run_without_explicit_command()
     assert_explicit_command_stays_run()
     assert_workspace_git_publish_manual_recovery()
+    assert_capability_locked_plan_stays_on_taskspec_workflow()
+    assert_workspace_action_capability_registry_mapping()
     assert_unknown_capability_needs_attention()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()
