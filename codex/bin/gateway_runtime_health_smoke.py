@@ -51,6 +51,10 @@ def assert_ready_payload() -> None:
         raise SystemExit(f"expected default codex-local alias in health payload, got {payload!r}")
     if model_runtime.get("structured_output") != "auto":
         raise SystemExit(f"expected structured_output=auto in health payload, got {payload!r}")
+    if not isinstance(model_runtime.get("structured_attempt_timeout"), int):
+        raise SystemExit(f"expected structured_attempt_timeout in health payload, got {payload!r}")
+    if "structured_backend_usable" not in model_runtime:
+        raise SystemExit(f"expected structured backend state in health payload, got {payload!r}")
     if payload.get("readiness_issues") != []:
         raise SystemExit(f"expected no readiness issues, got {payload!r}")
     if (payload.get("openwebui") or {}).get("base_url") != "http://127.0.0.1:9090":

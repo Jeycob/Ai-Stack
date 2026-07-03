@@ -58,6 +58,7 @@ Výchozí runtime politika je:
 - `CODEX_LOCAL_ALLOW_HEAVY_ESCALATION=false`
 - `CODEX_LOCAL_STRUCTURED_OUTPUT=auto`
 - `CODEX_LOCAL_STRUCTURED_BACKEND=auto`
+- `CODEX_LOCAL_STRUCTURED_ATTEMPT_TIMEOUT=8`
 - `CODEX_LOCAL_EXPERIMENTAL_PLANNER_MODEL=` ponechat prázdné, pokud výslovně netestuješ planner experiment.
 
 Na RTX 4080 16 GB / 64 GB RAM je 14B praktická defaultní volba, protože drží nižší latenci i VRAM churn. Heavy model má být ruční deep mode, ne něco, co se samo přepíná každé dva turny.
@@ -277,7 +278,7 @@ Model se přitom standardně nemění. Planner, executor, reviewer i recovery po
 - `reviewer`: porovná výsledek s cílovým stavem,
 - `recovery`: určí root cause, next safe action a případný `MANUAL_STEP_REQUIRED`.
 
-Pro `TaskSpec` a podobné tool JSON se nově preferuje structured-output vrstva v režimu `auto`. Když backend umí `response_format` nebo podobný structured backend, gateway ho použije. Když ne, není to hard fail: spadne na běžný JSON výstup a jeden repair retry. Tím pádem `llguidance` nebo Granite planner nejsou povinné runtime závislosti, jen volitelné zlepšení.
+Pro `TaskSpec` a podobné tool JSON se nově preferuje structured-output vrstva v režimu `auto`. Když backend umí `response_format` nebo podobný structured backend, gateway ho použije. Protože některé OpenAI-compatible backendy umí při nepodporovaném `json_schema` místo rychlé chyby dlouho viset, structured pokus je schválně krátký (`CODEX_LOCAL_STRUCTURED_ATTEMPT_TIMEOUT`, výchozí 8 s). Když selže, gateway si to pro běžící proces zapamatuje, další planner volání už structured backend nepokouší a spadne na běžný JSON výstup plus jeden repair retry. Tím pádem `llguidance` nebo Granite planner nejsou povinné runtime závislosti, jen volitelné zlepšení.
 
 Od commitu `7cb415e` a navazujících změn je navíc `TaskSpec` plán považovaný za capability-locked. Prakticky to znamená, že když LLM planner zvolí například `workspace_git_publish`, `workspace_action:verify` nebo read-only `review`, následná normalizační vrstva už ten workflow nesmí znovu přepsat jen proto, že se v promptu objevují slova jako `repo`, `ssh`, `github`, `push`, `oprav` nebo `spusť`. Keyword heuristiky zůstávají jen jako bounded fallback pro situaci, kdy planner selže nebo capability úplně chybí.
 

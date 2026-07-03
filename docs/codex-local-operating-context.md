@@ -192,7 +192,14 @@ Doporucene env:
 - `CODEX_LOCAL_ALLOW_HEAVY_ESCALATION=false`
 - `CODEX_LOCAL_STRUCTURED_OUTPUT=auto`
 - `CODEX_LOCAL_STRUCTURED_BACKEND=auto`
+- `CODEX_LOCAL_STRUCTURED_ATTEMPT_TIMEOUT=8`
 - `CODEX_LOCAL_EXPERIMENTAL_PLANNER_MODEL=` ponechat prazdne, pokud jen netestujes planner experiment.
+
+Structured output v rezimu `auto` je bounded probe, ne hard dependency. Gateway
+zkusi `json_schema`/structured backend jen kratce; pokud backend selze nebo visi,
+zapamatuje si fallback pro bezici proces a pokracuje pres plain JSON + repair
+retry. `llguidance`/Guidance tedy muze zlepsit TaskSpec/tool JSON, ale nesmi
+zablokovat bezny agent loop.
 
 OpenWebUI model settings prompt pro `codex-local-*` je verzovany v
 `docs/codex-local-model-system-prompt.md`. Prompt ma model smerovat k normalni

@@ -25,6 +25,7 @@ HEAVY_MODEL_NAME = "qwen2.5-coder:32b"
 DEFAULT_MODEL_MODE = "single"
 DEFAULT_STRUCTURED_OUTPUT = "auto"
 DEFAULT_STRUCTURED_BACKEND = "auto"
+DEFAULT_STRUCTURED_ATTEMPT_TIMEOUT = 8
 
 ROLE_PLANNER = "planner"
 ROLE_EXECUTOR = "executor"
@@ -45,6 +46,17 @@ def env_bool(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def env_int(name: str, default: int, lower: int, upper: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(lower, min(upper, value))
+
+
 @dataclass(frozen=True)
 class CodexLocalConfig:
     default_model: str
@@ -54,6 +66,7 @@ class CodexLocalConfig:
     structured_output: str
     structured_backend: str
     experimental_planner_model: str
+    structured_attempt_timeout: int = DEFAULT_STRUCTURED_ATTEMPT_TIMEOUT
 
 
 def load_codex_local_config() -> CodexLocalConfig:
@@ -65,6 +78,12 @@ def load_codex_local_config() -> CodexLocalConfig:
         structured_output=os.getenv("CODEX_LOCAL_STRUCTURED_OUTPUT", DEFAULT_STRUCTURED_OUTPUT).strip().lower() or DEFAULT_STRUCTURED_OUTPUT,
         structured_backend=os.getenv("CODEX_LOCAL_STRUCTURED_BACKEND", DEFAULT_STRUCTURED_BACKEND).strip().lower() or DEFAULT_STRUCTURED_BACKEND,
         experimental_planner_model=os.getenv("CODEX_LOCAL_EXPERIMENTAL_PLANNER_MODEL", "").strip(),
+        structured_attempt_timeout=env_int(
+            "CODEX_LOCAL_STRUCTURED_ATTEMPT_TIMEOUT",
+            DEFAULT_STRUCTURED_ATTEMPT_TIMEOUT,
+            1,
+            60,
+        ),
     )
 
 

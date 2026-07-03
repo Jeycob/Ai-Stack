@@ -52,6 +52,13 @@ if not ADMIN_TOKEN and ADMIN_TOKEN_FILE:
 
 CODEX_LOCAL_CONFIG = load_codex_local_config()
 MODELS = codex_local_model_aliases(CODEX_LOCAL_CONFIG)
+STRUCTURED_BACKEND_STATE = {
+    "usable": None,
+    "strategy": "unprobed",
+    "last_error": "",
+    "last_schema": "",
+    "last_checked": 0.0,
+}
 
 
 def _repo_root_candidates():
@@ -585,6 +592,10 @@ def runtime_health():
             "allow_heavy_escalation": CODEX_LOCAL_CONFIG.allow_heavy_escalation,
             "structured_output": CODEX_LOCAL_CONFIG.structured_output,
             "structured_backend": CODEX_LOCAL_CONFIG.structured_backend,
+            "structured_attempt_timeout": CODEX_LOCAL_CONFIG.structured_attempt_timeout,
+            "structured_backend_usable": STRUCTURED_BACKEND_STATE.get("usable"),
+            "structured_backend_strategy": STRUCTURED_BACKEND_STATE.get("strategy"),
+            "structured_backend_last_error": STRUCTURED_BACKEND_STATE.get("last_error"),
             "experimental_planner_model": CODEX_LOCAL_CONFIG.experimental_planner_model,
         },
         "runtime_repo_root": str(REPO_ROOT),
@@ -972,6 +983,10 @@ def codex_local_runtime_surface(requested_model_name="", *, task="", role=ROLE_A
         "used_experimental_planner": bool(runtime.get("used_experimental_planner")),
         "structured_output": CODEX_LOCAL_CONFIG.structured_output,
         "structured_backend": CODEX_LOCAL_CONFIG.structured_backend,
+        "structured_attempt_timeout": CODEX_LOCAL_CONFIG.structured_attempt_timeout,
+        "structured_backend_usable": STRUCTURED_BACKEND_STATE.get("usable"),
+        "structured_backend_strategy": STRUCTURED_BACKEND_STATE.get("strategy"),
+        "structured_backend_last_error": STRUCTURED_BACKEND_STATE.get("last_error"),
     }
 
 
@@ -979,6 +994,8 @@ def codex_local_structured_response_format(schema_name, schema):
     backend = CODEX_LOCAL_CONFIG.structured_backend
     mode = CODEX_LOCAL_CONFIG.structured_output
     if mode == "none" or backend == "none":
+        return None
+    if mode == "auto" and backend == "auto" and STRUCTURED_BACKEND_STATE.get("usable") is False:
         return None
     return {
         "type": "json_schema",
@@ -1010,17 +1027,51 @@ def structured_json_repair_messages(raw_text, schema_name, schema):
     ]
 
 
+def reset_structured_backend_state():
+    STRUCTURED_BACKEND_STATE.update({
+        "usable": None,
+        "strategy": "unprobed",
+        "last_error": "",
+        "last_schema": "",
+        "last_checked": 0.0,
+    })
+
+
+def mark_structured_backend(ok, *, schema_name="", error=""):
+    STRUCTURED_BACKEND_STATE.update({
+        "usable": bool(ok),
+        "strategy": "json_schema" if ok else "plain_json_fallback",
+        "last_error": str(error or "")[:500],
+        "last_schema": str(schema_name or "")[:120],
+        "last_checked": time.time(),
+    })
+
+
 def structured_json_chat(model_id, messages, schema_name, schema, timeout=240):
     attempts = []
     response_format = codex_local_structured_response_format(schema_name, schema)
     if CODEX_LOCAL_CONFIG.structured_output == "auto" and response_format:
         try:
-            response = ollama_chat(model_id, messages, timeout=timeout, response_format=response_format)
+            structured_timeout = max(1, min(int(timeout), int(CODEX_LOCAL_CONFIG.structured_attempt_timeout)))
+            response = ollama_chat(
+                model_id,
+                messages,
+                timeout=structured_timeout,
+                response_format=response_format,
+            )
             raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            attempts.append({"stage": "structured", "ok": True})
+            attempts.append({"stage": "structured", "ok": True, "timeout": structured_timeout})
+            mark_structured_backend(True, schema_name=schema_name)
             return extract_json_object(raw), raw, {"strategy": "structured", "attempts": attempts}
         except Exception as exc:
-            attempts.append({"stage": "structured", "ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            error = f"{type(exc).__name__}: {exc}"
+            attempts.append({
+                "stage": "structured",
+                "ok": False,
+                "timeout": max(1, min(int(timeout), int(CODEX_LOCAL_CONFIG.structured_attempt_timeout))),
+                "error": error,
+            })
+            mark_structured_backend(False, schema_name=schema_name, error=error)
     response = ollama_chat(model_id, messages, timeout=timeout)
     raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
     try:

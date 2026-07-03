@@ -113,7 +113,9 @@ def main() -> int:
         structured_output="auto",
         structured_backend="auto",
         experimental_planner_model="",
+        structured_attempt_timeout=3,
     )
+    gateway.reset_structured_backend_state()
     with patch.object(gateway, "CODEX_LOCAL_CONFIG", structured_cfg), patch.object(
         gateway,
         "ollama_chat",
@@ -137,6 +139,58 @@ def main() -> int:
         )
     expect(parsed == {"foo": "fixed"}, "structured-repair-retry", repr((parsed, meta)))
     expect(meta["strategy"] == "repair_retry", "structured-repair-strategy", repr(meta))
+    expect(meta["attempts"][0]["timeout"] == 3, "structured-bounded-timeout", repr(meta))
+    expect(
+        gateway.STRUCTURED_BACKEND_STATE["usable"] is False,
+        "structured-failure-cached",
+        repr(gateway.STRUCTURED_BACKEND_STATE),
+    )
+
+    with patch.object(gateway, "CODEX_LOCAL_CONFIG", structured_cfg), patch.object(
+        gateway,
+        "ollama_chat",
+        return_value={"choices": [{"message": {"content": '{"foo":"plain"}'}}]},
+    ) as chat_mock:
+        parsed, _raw, meta = gateway.structured_json_chat(
+            "qwen2.5-coder:14b",
+            [{"role": "user", "content": "test"}],
+            "demo",
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"foo": {"type": "string"}},
+                "required": ["foo"],
+            },
+            timeout=10,
+        )
+    expect(parsed == {"foo": "plain"}, "structured-disabled-after-failure", repr((parsed, meta)))
+    expect(meta["strategy"] == "plain_json", "structured-cache-plain-strategy", repr(meta))
+    expect(chat_mock.call_count == 1, "structured-cache-skips-schema-attempt", repr(chat_mock.call_args_list))
+
+    gateway.reset_structured_backend_state()
+    with patch.object(gateway, "CODEX_LOCAL_CONFIG", structured_cfg), patch.object(
+        gateway,
+        "ollama_chat",
+        side_effect=[
+            TimeoutError("structured hung"),
+            {"choices": [{"message": {"content": '{"foo":"fallback"}'}}]},
+        ],
+    ) as chat_mock:
+        parsed, _raw, meta = gateway.structured_json_chat(
+            "qwen2.5-coder:14b",
+            [{"role": "user", "content": "test"}],
+            "demo",
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"foo": {"type": "string"}},
+                "required": ["foo"],
+            },
+            timeout=10,
+        )
+    expect(parsed == {"foo": "fallback"}, "structured-timeout-fallback", repr((parsed, meta)))
+    expect(meta["strategy"] == "plain_json", "structured-timeout-fallback-strategy", repr(meta))
+    expect(chat_mock.call_count == 2, "structured-timeout-then-plain", repr(chat_mock.call_args_list))
 
     print("CODEX_LOCAL_MODEL_RUNTIME_SMOKE_OK")
     return 0
