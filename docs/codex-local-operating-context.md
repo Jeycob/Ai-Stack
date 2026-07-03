@@ -292,6 +292,8 @@ Boundary vraci:
 
 Stejny princip plati i pro sirsi capability flow: helper nema zustavat zbytecne uzky u tasku, ktere uz umi auditovane provest. Proto dnes umi klasifikovat i prime capability pozadavky typu `spust testy`, `nainstaluj zavislosti`, `over projekt`, `vytvor repository Test2` nebo `pullni ai-stack a nasad` rovnou na workflow `action`, `create-repo` nebo `deploy`, misto toho aby vsechno shazoval do obecneho `audit`.
 
+Pro opravdu siroka lidska zadani je preferovana dalsi vrstva `delegate`: pokud prompt zni treba `Fixni to a dotahni co zvladnes`, `Udelej co je potreba`, `Proved to jako Codex` nebo `Vyber workflow a proved`, filter nema zbrkle vybrat jediny capability runner. Ma to prelozit na `mentor_codex_local.py delegate`, ktery teprve rozhodne, jestli je spravne `action`, `deploy`, `create-repo`, `autopilot`, `apply-safe` nebo `improve`.
+
 `openwebui_codex_auto_tools_filter.py` umi tenhle use-case uz i prirozene routovat z chatu: kdyz uzivatel napise `repo: <workspace>` a pozadavek typu `Dej mi kratky mentor brief pro ...`, `Jaky brief ma dostat model pro ...` nebo `execution brief`, filter to prelozi na `mentor_codex_local.py brief` pres `GATEWAY_ADMIN_RUN_WORKSPACE`.
 
 Stejne tak uz umi prirozene routovat i dalsi levne mentor vrstvy:

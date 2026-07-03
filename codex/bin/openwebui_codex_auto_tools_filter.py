@@ -130,6 +130,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_common_command(text)
         if not command:
+            command = self._natural_workspace_delegate_command(text)
+        if not command:
             command = self._natural_workspace_autopilot_command(text)
         if not command:
             command = self._natural_workspace_action_command(text)
@@ -847,6 +849,56 @@ class Filter:
             if any(needle in lower for needle in needles):
                 return f"GATEWAY_ADMIN_WORKSPACE_ACTION {workspace} {action} --timeout {timeout}"
         return None
+
+    def _delegate_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "delegate",
+            workspace,
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 180 -- {shlex.join(command)}"
+
+    def _natural_workspace_delegate_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+
+        delegate_needles = (
+            "fixni to",
+            "dotahni to",
+            "dotáhni to",
+            "dokonci to",
+            "dokonči to",
+            "rozbehni to",
+            "rozběhni to",
+            "udelej co je potreba",
+            "udělej co je potřeba",
+            "pokracuj jako codex",
+            "pokračuj jako codex",
+            "bud autonomni",
+            "buď autonomní",
+            "vyber workflow a proved",
+            "vyber workflow a proveď",
+            "sam rozhodni workflow",
+            "sám rozhodni workflow",
+            "mentorovane to proved",
+            "mentorovaně to proveď",
+            "proved to jako codex",
+            "proveď to jako codex",
+            "dotahni co zvladnes",
+            "dotáhni co zvládneš",
+        )
+        if not any(needle in lower for needle in delegate_needles):
+            return None
+
+        lines = self._non_repo_lines(text)
+        task = " ".join(lines).strip()
+        if not task:
+            return None
+        return self._delegate_helper_command(workspace, task)
 
     def _natural_workspace_autopilot_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
