@@ -550,6 +550,7 @@ Praktická pravidla pro zadávání úloh:
 
 - Start z Windows: `C:\Repositories\ai-stack\start_docker.bat`.
 - Ruční start Codex stacku ve WSL: `sudo /mnt/c/Repositories/ai-stack/codex/bin/start_codex_stack.sh`.
+- Pokud ruční start skončí před `Codex stack OK`, skript vypíše `GATEWAY_START_FAILED`, stav procesu gateway a posledních 80 řádků `codex/audit/gateway.log`, aby byl vidět import/runtime error bez ručního lovení v logu.
 - Volitelný autostart při každém startu WSL: v `/etc/wsl.conf` nastav `[boot] command = bash /mnt/c/Repositories/ai-stack/codex/bin/wsl_boot_ai_stack.sh --background`. Skript loguje do `codex/audit/wsl-boot-ai-stack.log`.
 - Přidání workspace: `python3 codex/bin/add_workspace.py <name> <path> --port <port>`.
 - Kontrola gateway: `curl http://127.0.0.1:9101/health` ve WSL nebo `curl http://192.168.0.48:9101/health` z LAN.

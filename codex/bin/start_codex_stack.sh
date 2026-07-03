@@ -13,6 +13,31 @@ PASS_FILE="$STATE_ROOT/opencode-smoke.pass"
 ADMIN_TOKEN_FILE="$STATE_ROOT/codex-gateway-admin.token"
 IMAGE="ghcr.io/anomalyco/opencode"
 
+gateway_diag() {
+  echo "GATEWAY_START_FAILED" >&2
+  echo "gateway=$GATEWAY" >&2
+  echo "gateway_log=$AUDIT_ROOT/gateway.log" >&2
+  if [ -f "$STATE_ROOT/codex-gateway.pid" ]; then
+    pid="$(cat "$STATE_ROOT/codex-gateway.pid" 2>/dev/null || true)"
+    echo "gateway_pid=${pid:-unknown}" >&2
+    if [ -n "$pid" ] && kill -0 "$pid" >/dev/null 2>&1; then
+      echo "gateway_process=running" >&2
+    else
+      echo "gateway_process=not-running" >&2
+    fi
+  else
+    echo "gateway_pid_file=missing" >&2
+  fi
+
+  if [ -f "$AUDIT_ROOT/gateway.log" ]; then
+    echo "--- gateway.log tail ---" >&2
+    tail -n 80 "$AUDIT_ROOT/gateway.log" >&2 || true
+    echo "--- end gateway.log tail ---" >&2
+  else
+    echo "gateway_log_missing=true" >&2
+  fi
+}
+
 mkdir -p "$STATE_ROOT" "$AUDIT_ROOT"
 chown -R "$AI_USER:$AI_USER" "$STATE_ROOT" "$AUDIT_ROOT" || true
 
@@ -90,10 +115,19 @@ while IFS=$'\t' read -r name path port cpus memory; do
     -p "127.0.0.1:$port:4096" \
     "$IMAGE" serve --hostname 0.0.0.0 --port 4096
 
+  ready=0
   for i in {1..60}; do
-    curl -fsS -u "opencode:$OPENCODE_PASS" "http://127.0.0.1:$port/global/health" >/dev/null 2>&1 && break
+    if curl -fsS -u "opencode:$OPENCODE_PASS" "http://127.0.0.1:$port/global/health" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
     sleep 1
   done
+  if [ "$ready" -ne 1 ]; then
+    echo "OpenCode workspace did not become healthy: $name on port $port" >&2
+    docker logs --tail=80 "$cname" >&2 || true
+    exit 1
+  fi
 done < <(python3 - "$WORKSPACES_FILE" <<'PY'
 import json, sys
 data=json.load(open(sys.argv[1]))
@@ -112,10 +146,19 @@ pkill -f "$GATEWAY" >/dev/null 2>&1 || true
 
 runuser -u "$AI_USER" -- bash -lc "PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
 
+gateway_pid="$(cat "$STATE_ROOT/codex-gateway.pid" 2>/dev/null || true)"
 for i in {1..30}; do
-  curl -fsS http://127.0.0.1:9101/health >/dev/null 2>&1 && break
+  if curl -fsS http://127.0.0.1:9101/health >/dev/null 2>&1; then
+    echo "Codex gateway OK"
+    echo "Codex stack OK"
+    exit 0
+  fi
+  if [ -n "$gateway_pid" ] && ! kill -0 "$gateway_pid" >/dev/null 2>&1; then
+    gateway_diag
+    exit 1
+  fi
   sleep 1
 done
 
-curl -fsS http://127.0.0.1:9101/health >/dev/null
-echo "Codex stack OK"
+gateway_diag
+exit 1
