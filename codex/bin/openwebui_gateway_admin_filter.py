@@ -1137,10 +1137,10 @@ class Filter:
     def _workspace_autopilot_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_AUTOPILOT\s+(.+?)\s*$", text)
         if not m:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--recommend-only] [--env KEY=VALUE]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]")
         parts = shlex.split(m.group(1))
         if not parts:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--recommend-only] [--env KEY=VALUE]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]")
 
         workspace = parts.pop(0)
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
@@ -1148,6 +1148,7 @@ class Filter:
 
         timeout = 1800
         allow_actions = ["install", "test", "build", "lint"]
+        max_steps = 1
         recommend_only = False
         env_map = {}
         while parts:
@@ -1157,6 +1158,9 @@ class Filter:
                 continue
             if opt == "--allow-actions" and parts:
                 allow_actions = [x.strip().lower() for x in parts.pop(0).split(",") if x.strip()]
+                continue
+            if opt == "--max-steps" and parts:
+                max_steps = int(parts.pop(0))
                 continue
             if opt == "--recommend-only":
                 recommend_only = True
@@ -1179,6 +1183,7 @@ class Filter:
             "workspace": workspace,
             "timeout": timeout,
             "allow_actions": allow_actions,
+            "max_steps": max_steps,
             "recommend_only": recommend_only,
         }
         if env_map:
@@ -1208,6 +1213,21 @@ class Filter:
                 else:
                     step_lines.append(f"- {action_name}: {state}")
 
+        executed = result.get("executed_actions") or []
+        executed_lines = []
+        if isinstance(executed, list):
+            for step in executed:
+                if not isinstance(step, dict):
+                    continue
+                action_name = str(step.get("action", "(unknown)"))
+                state = "ok" if step.get("ok") else f"failed ({step.get('error') or step.get('exit_code')})"
+                command = step.get("command") or []
+                command_text = self._shell_join(command) if command else ""
+                if command_text:
+                    executed_lines.append(f"- {action_name}: {state} command={command_text}")
+                else:
+                    executed_lines.append(f"- {action_name}: {state}")
+
         install_probe = result.get("install_probe") or {}
         install_detail = ""
         if isinstance(install_probe, dict) and install_probe:
@@ -1222,11 +1242,13 @@ class Filter:
             f"chosen_action={result.get('chosen_action', 'none')}\n"
             f"recommend_only={result.get('recommend_only', False)}\n"
             f"allow_actions={','.join(result.get('allow_actions', allow_actions))}\n"
+            f"max_steps={result.get('max_steps', max_steps)}\n"
             f"reason={result.get('reason', '')}\n"
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
             + ("verify_steps:\n" + "\n".join(step_lines) + "\n" if step_lines else "")
+            + ("executed_actions:\n" + "\n".join(executed_lines) + "\n" if executed_lines else "")
             + install_detail
             + self._details("output", output)
         )

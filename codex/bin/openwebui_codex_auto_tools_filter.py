@@ -266,11 +266,15 @@ class Filter:
             "sám vyber další krok",
             "sam pokracuj",
             "sám pokračuj",
+            "dotahni to",
+            "dotáhni to",
+            "dokonci co zvladnes",
+            "dokonči co zvládneš",
         ]
         if any(needle in lower for needle in recommend_only):
             return f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --recommend-only --timeout 2400"
         if any(needle in lower for needle in autopilot):
-            return f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --timeout 2400"
+            return f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --timeout 2400 --max-steps 2"
         return None
 
     def _workspace_from_text(self, text: str) -> str | None:

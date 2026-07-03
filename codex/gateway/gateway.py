@@ -702,11 +702,14 @@ def admin_workspace_autopilot(payload):
     env_map = payload.get("env") or {}
     recommend_only = bool(payload.get("recommend_only", False))
     allow_actions = payload.get("allow_actions") or ["install", "test", "build", "lint"]
+    max_steps = int(payload.get("max_steps") or 1)
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
     if timeout < 1 or timeout > 3600:
         raise ValueError("timeout must be between 1 and 3600")
+    if max_steps < 1 or max_steps > 5:
+        raise ValueError("max_steps must be between 1 and 5")
     if not isinstance(env_map, dict):
         raise ValueError("env must be an object")
     if isinstance(allow_actions, str):
@@ -729,17 +732,14 @@ def admin_workspace_autopilot(payload):
     })
     verify_steps = verify.get("verify_steps") or []
 
-    chosen_action = None
-    chosen_reason = ""
+    candidate_actions = []
     for step in verify_steps:
         action = str(step.get("action") or "").strip().lower()
         if action in allow_actions and step.get("supported"):
-            chosen_action = action
-            chosen_reason = f"verify dry-run found a supported {action} step"
-            break
+            candidate_actions.append(action)
 
     install_probe = None
-    if not chosen_action and "install" in allow_actions:
+    if not candidate_actions and "install" in allow_actions:
         install_probe = admin_workspace_action({
             "workspace": workspace,
             "action": "install",
@@ -748,8 +748,15 @@ def admin_workspace_autopilot(payload):
             "dry_run": True,
         })
         if install_probe.get("ok"):
-            chosen_action = "install"
-            chosen_reason = "verify found no runnable step, but dependency install is supported"
+            candidate_actions.append("install")
+
+    chosen_action = candidate_actions[0] if candidate_actions else None
+    if chosen_action == "install" and install_probe is not None:
+        chosen_reason = "verify found no runnable step, but dependency install is supported"
+    elif chosen_action:
+        chosen_reason = f"verify dry-run found a supported {chosen_action} step"
+    else:
+        chosen_reason = ""
 
     if not chosen_action:
         return {
@@ -758,11 +765,13 @@ def admin_workspace_autopilot(payload):
             "action": "autopilot",
             "recommend_only": recommend_only,
             "allow_actions": allow_actions,
+            "max_steps": max_steps,
             "chosen_action": "none",
             "reason": "No supported next action was found within the allowed action set.",
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
+            "executed_actions": [],
             "output": "",
         }
 
@@ -773,30 +782,64 @@ def admin_workspace_autopilot(payload):
             "action": "autopilot",
             "recommend_only": True,
             "allow_actions": allow_actions,
+            "max_steps": max_steps,
             "chosen_action": chosen_action,
             "reason": chosen_reason,
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
+            "executed_actions": [],
             "output": "",
         }
 
-    executed = admin_workspace_action({
+    total_started = time.time()
+    executed_actions = []
+    last_result = None
+    for action_name in candidate_actions[:max_steps]:
+        last_result = admin_workspace_action({
+            "workspace": workspace,
+            "action": action_name,
+            "timeout": timeout,
+            "env": env_map,
+            "dry_run": False,
+        })
+        executed_actions.append({
+            "action": action_name,
+            "ok": bool(last_result.get("ok")),
+            "exit_code": last_result.get("exit_code"),
+            "runner_exit_code": last_result.get("runner_exit_code"),
+            "duration_ms": last_result.get("duration_ms"),
+            "resolved_from": last_result.get("resolved_from"),
+            "command": last_result.get("command", []),
+            "output": last_result.get("output", ""),
+            "error": last_result.get("error"),
+        })
+        if not last_result.get("ok"):
+            break
+
+    ok = all(step.get("ok") for step in executed_actions) if executed_actions else False
+    output_parts = []
+    for step in executed_actions:
+        output_parts.append(
+            f"== {step['action']} ==\n{str(step.get('output', '')).rstrip()}"
+        )
+    return {
+        "ok": ok,
         "workspace": workspace,
-        "action": chosen_action,
-        "timeout": timeout,
-        "env": env_map,
-        "dry_run": False,
-    })
-    executed["action"] = "autopilot"
-    executed["chosen_action"] = chosen_action
-    executed["reason"] = chosen_reason
-    executed["recommend_only"] = False
-    executed["allow_actions"] = allow_actions
-    executed["verify_steps"] = verify_steps
-    if install_probe is not None:
-        executed["install_probe"] = install_probe
-    return executed
+        "action": "autopilot",
+        "recommend_only": False,
+        "allow_actions": allow_actions,
+        "max_steps": max_steps,
+        "chosen_action": chosen_action,
+        "reason": chosen_reason,
+        "duration_ms": int((time.time() - total_started) * 1000),
+        "verify_steps": verify_steps,
+        "install_probe": install_probe,
+        "executed_actions": executed_actions,
+        "exit_code": last_result.get("exit_code") if last_result else None,
+        "runner_exit_code": last_result.get("runner_exit_code") if last_result else None,
+        "output": "\n\n".join(output_parts).strip(),
+    }
 
 def pid_running(pid):
     try:
