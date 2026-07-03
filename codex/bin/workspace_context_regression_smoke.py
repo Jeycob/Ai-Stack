@@ -169,6 +169,40 @@ def main() -> int:
         expect("repo: TestCode" in content, "filter-history-workspace", content)
         expect("GATEWAY_ADMIN_AGENT_LOOP TestCode --" in content, "filter-history-loop", content)
 
+        live_like_messages = [
+            {"role": "user", "content": "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic"},
+            {
+                "role": "assistant",
+                "content": (
+                    "AGENT_LOOP_OK\n"
+                    "requested_workspace=ai-stack\n"
+                    "controller_workspace=ai-stack\n"
+                    "workflow=bootstrap\n"
+                    'execution:\n{"action":"create_local_repo","name":"TestCode","workspace":{"name":"TestCode"}}\n'
+                    'plan:\n{"workflow":"bootstrap","workspace":"ai-stack","repo_name":"TestCode"}'
+                ),
+            },
+            {"role": "user", "content": "v repozitart TestCode vytvor ssh klic pro github"},
+            {
+                "role": "assistant",
+                "content": (
+                    "AGENT_LOOP_OK\n"
+                    "requested_workspace=ai-stack\n"
+                    "controller_workspace=ai-stack\n"
+                    "workflow=ssh_key_create\n"
+                    'execution:\n{"action":"workspace_ssh_key_create","workspace":"TestCode"}\n'
+                    'plan:\n{"workflow":"ssh_key_create","workspace":"TestCode"}'
+                ),
+            },
+        ]
+        resolved_live_like = workspace_context.resolve_workspace_context(
+            "vrat mi public key",
+            live_like_messages,
+            workspaces_file,
+            fallback_workspace="ai-stack",
+        )
+        expect(resolved_live_like.workspace == "TestCode", "live-like-history-prefer-execution-workspace", repr(resolved_live_like))
+
         run_add_workspace_idempotence(tmp)
 
     print("WORKSPACE_CONTEXT_REGRESSION_SMOKE_OK")

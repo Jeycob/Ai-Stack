@@ -108,6 +108,32 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         unexpected=("repo: ai-stack",),
     ),
     RouteScenario(
+        name="transcript-public-key-followup-prefers-execution-workspace",
+        messages=(
+            {"role": "user", "content": "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic"},
+            {
+                "role": "assistant",
+                "content": (
+                    "AGENT_LOOP_OK\nrequested_workspace=ai-stack\ncontroller_workspace=ai-stack\nworkflow=bootstrap\n"
+                    'execution:\n{"action":"create_local_repo","name":"TestCode","workspace":{"name":"TestCode"}}\n'
+                    'plan:\n{"workflow":"bootstrap","workspace":"ai-stack","repo_name":"TestCode"}'
+                ),
+            },
+            {"role": "user", "content": "v repozitart TestCode vytvor ssh klic pro github"},
+            {
+                "role": "assistant",
+                "content": (
+                    "AGENT_LOOP_OK\nrequested_workspace=ai-stack\ncontroller_workspace=ai-stack\nworkflow=ssh_key_create\n"
+                    'execution:\n{"action":"workspace_ssh_key_create","workspace":"TestCode"}\n'
+                    'plan:\n{"workflow":"ssh_key_create","workspace":"TestCode"}'
+                ),
+            },
+            {"role": "user", "content": "vrat mi public key"},
+        ),
+        expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "vrat mi public key"),
+        unexpected=("repo: ai-stack",),
+    ),
+    RouteScenario(
         name="transcript-public-key-first-token",
         prompt="TestCode Vrat mi public key SSH klice",
         expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "TestCode Vrat mi public key SSH klice"),

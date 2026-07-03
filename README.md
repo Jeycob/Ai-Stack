@@ -346,6 +346,11 @@ Výchozí scénáře dnes pokrývají:
 - `verify-project`: přirozené “ověř projekt”
 - `explicit-agent-loop`: kontrola, že `GATEWAY_ADMIN_AGENT_LOOP` zachytí capability vrstva, ne plain model
 
+Pro mutační a kontextové regresní testy jsou za `--include-mutating` ještě scénáře jako:
+- `bootstrap-followthrough`: bootstrap + “stáhni co je třeba / pusť to”
+- `safe-edit-verify`: malý edit + verify
+- `bootstrap-ssh-public-key`: skutečný multi-turn follow-up `vytvoř repo -> vytvoř SSH key -> vrať public key`, který hlídá, že se mezi tahy neztratí workspace context a agent nespadne do plain LLM nebo review fallbacku
+
 To je záměrně levnější než plný browser E2E. Neověřuje vzhled UI, ale přímo to, že běžná lidská formulace v audit chatu projde route -> filter -> gateway -> capability -> zpět do viditelné odpovědi.
 
 Pro nested helper flow je navíc k dispozici čistě offline regression smoke:

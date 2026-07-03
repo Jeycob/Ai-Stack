@@ -31,14 +31,21 @@ def main() -> int:
 
     bootstrap = scenarios.SCENARIOS.get("bootstrap-followthrough")
     safe_edit = scenarios.SCENARIOS.get("safe-edit-verify")
-    if bootstrap is None or safe_edit is None:
+    ssh_followup = scenarios.SCENARIOS.get("bootstrap-ssh-public-key")
+    if bootstrap is None or safe_edit is None or ssh_followup is None:
         raise SystemExit("OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\nreason=missing mutating coding scenarios")
-    if not bootstrap.mutating or not safe_edit.mutating:
+    if not bootstrap.mutating or not safe_edit.mutating or not ssh_followup.mutating:
         raise SystemExit("OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\nreason=mutating coding scenarios must be flagged mutating")
     if "workflow=bootstrap" not in bootstrap.expected_substrings:
         raise SystemExit("OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\nreason=bootstrap scenario missing workflow marker")
     if "workflow=edit" not in safe_edit.expected_substrings:
         raise SystemExit("OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\nreason=safe edit scenario missing workflow marker")
+    if len(ssh_followup.turns) != 3:
+        raise SystemExit("OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\nreason=bootstrap ssh follow-up scenario must have exactly 3 turns")
+    if ssh_followup.turns[0].expected_substrings[:2] != ("AGENT_LOOP", "workflow=bootstrap"):
+        raise SystemExit("OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\nreason=bootstrap ssh follow-up first turn must assert bootstrap routing")
+    if "workflow=ssh_key_show_public" not in ssh_followup.turns[-1].expected_substrings:
+        raise SystemExit("OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\nreason=bootstrap ssh follow-up last turn must assert public-key routing")
 
     class Args:
         list = False
@@ -81,12 +88,12 @@ def main() -> int:
 
     class MutatingAllowedArgs:
         list = False
-        scenario = ["bootstrap-followthrough", "safe-edit-verify"]
+        scenario = ["bootstrap-followthrough", "safe-edit-verify", "bootstrap-ssh-public-key"]
         include_mutating = True
 
     allowed = scenarios.selected_scenarios(MutatingAllowedArgs())
     allowed_names = [item.name for item in allowed]
-    if allowed_names != ["bootstrap-followthrough", "safe-edit-verify"]:
+    if allowed_names != ["bootstrap-followthrough", "safe-edit-verify", "bootstrap-ssh-public-key"]:
         raise SystemExit(
             "OWUI_CHAT_SCENARIO_CATALOG_SMOKE_FAILED\n"
             f"reason=unexpected allowed scenario selection {allowed_names!r}"

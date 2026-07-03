@@ -30,11 +30,18 @@ SMOKE = ROOT / "codex/bin/owui_chat_smoke.py"
 class Scenario:
     name: str
     description: str
-    prompt_template: str
-    expected_substrings: tuple[str, ...]
+    prompt_template: str = ""
+    expected_substrings: tuple[str, ...] = ()
     total_timeout: float = 240.0
     status_interval: float = 3.0
     mutating: bool = False
+    turns: tuple["ScenarioTurn", ...] = ()
+
+
+@dataclass(frozen=True)
+class ScenarioTurn:
+    prompt_template: str
+    expected_substrings: tuple[str, ...]
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -91,6 +98,26 @@ SCENARIOS: dict[str, Scenario] = {
         expected_substrings=("AGENT_LOOP", "workflow=edit"),
         total_timeout=480.0,
         mutating=True,
+    ),
+    "bootstrap-ssh-public-key": Scenario(
+        name="bootstrap-ssh-public-key",
+        description="Multi-turn bootstrap follow-up: create or reuse TestCode, then create/show its SSH key without losing workspace context.",
+        mutating=True,
+        total_timeout=720.0,
+        turns=(
+            ScenarioTurn(
+                prompt_template="vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic",
+                expected_substrings=("AGENT_LOOP", "workflow=bootstrap", "TestCode"),
+            ),
+            ScenarioTurn(
+                prompt_template="v repozitart TestCode vytvor ssh klic pro github",
+                expected_substrings=("AGENT_LOOP", "workflow=ssh_key_create", "TestCode"),
+            ),
+            ScenarioTurn(
+                prompt_template="vrat mi public key",
+                expected_substrings=("AGENT_LOOP", "workflow=ssh_key_show_public", "ssh-ed25519"),
+            ),
+        ),
     ),
 }
 
@@ -162,8 +189,18 @@ def scenario_prompt(scenario: Scenario, workspace: str) -> str:
     return scenario.prompt_template.format(workspace=workspace)
 
 
-def scenario_command(args: argparse.Namespace, scenario: Scenario, prompt_path: str) -> list[str]:
-    expected = scenario.expected_substrings[0] if scenario.expected_substrings else ""
+def turn_prompt(turn: ScenarioTurn, workspace: str) -> str:
+    return turn.prompt_template.format(workspace=workspace)
+
+
+def scenario_command(
+    args: argparse.Namespace,
+    scenario: Scenario,
+    prompt_path: str,
+    expected_substrings: tuple[str, ...],
+    turn_key: str,
+) -> list[str]:
+    expected = expected_substrings[0] if expected_substrings else ""
     cmd = [
         sys.executable,
         str(SMOKE),
@@ -196,7 +233,7 @@ def scenario_command(args: argparse.Namespace, scenario: Scenario, prompt_path: 
         "--status-interval",
         str(args.status_interval or scenario.status_interval),
         "--turn-key",
-        f"scenario:{scenario.name}:{args.workspace}",
+        turn_key,
         "--quiet",
     ]
     if expected:
@@ -220,22 +257,27 @@ def summarize(text: str, max_lines: int = 18) -> str:
     return "\n".join(lines[:max_lines] + [f"... ({len(lines) - max_lines} more lines)"])
 
 
-def run_scenario(args: argparse.Namespace, scenario: Scenario) -> dict[str, object]:
-    prompt = scenario_prompt(scenario, args.workspace)
+def run_single_turn(
+    args: argparse.Namespace,
+    scenario: Scenario,
+    *,
+    prompt: str,
+    expected_substrings: tuple[str, ...],
+    turn_key: str,
+) -> dict[str, object]:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(prompt)
         prompt_path = handle.name
-    cmd = scenario_command(args, scenario, prompt_path)
+    cmd = scenario_command(args, scenario, prompt_path, expected_substrings, turn_key)
     started = time.time()
     try:
         if args.dry_run:
             return {
-                "name": scenario.name,
                 "ok": True,
                 "dry_run": True,
-                "description": scenario.description,
                 "prompt": prompt,
                 "command": cmd,
+                "expected_substrings": list(expected_substrings),
             }
 
         try:
@@ -255,20 +297,67 @@ def run_scenario(args: argparse.Namespace, scenario: Scenario) -> dict[str, obje
                 output = output.decode("utf-8", "replace")
             output += "\nOWUI_CHAT_SCENARIO_TIMEOUT\n"
             returncode = 124
-        ok, missing = output_contains_all(output, scenario.expected_substrings)
+        ok, missing = output_contains_all(output, expected_substrings)
         return {
-            "name": scenario.name,
             "ok": returncode == 0 and ok,
             "runner_exit_code": returncode,
             "duration_ms": int((time.time() - started) * 1000),
-            "description": scenario.description,
             "prompt": prompt,
-            "expected_substrings": list(scenario.expected_substrings),
+            "expected_substrings": list(expected_substrings),
             "missing_substrings": missing,
             "output": output,
+            "turn_key": turn_key,
         }
     finally:
         Path(prompt_path).unlink(missing_ok=True)
+
+
+def run_scenario(args: argparse.Namespace, scenario: Scenario) -> dict[str, object]:
+    if scenario.turns:
+        step_results: list[dict[str, object]] = []
+        ok = True
+        started = time.time()
+        for index, turn_spec in enumerate(scenario.turns, start=1):
+            prompt = turn_prompt(turn_spec, args.workspace)
+            turn_key = f"scenario:{scenario.name}:{args.workspace}:turn-{index}"
+            step = run_single_turn(
+                args,
+                scenario,
+                prompt=prompt,
+                expected_substrings=turn_spec.expected_substrings,
+                turn_key=turn_key,
+            )
+            step["step"] = index
+            step_results.append(step)
+            ok = ok and bool(step.get("ok"))
+            if not bool(step.get("ok")):
+                break
+        return {
+            "name": scenario.name,
+            "ok": ok,
+            "dry_run": args.dry_run,
+            "description": scenario.description,
+            "multi_turn": True,
+            "duration_ms": int((time.time() - started) * 1000),
+            "steps": step_results,
+        }
+
+    prompt = scenario_prompt(scenario, args.workspace)
+    step = run_single_turn(
+        args,
+        scenario,
+        prompt=prompt,
+        expected_substrings=scenario.expected_substrings,
+        turn_key=f"scenario:{scenario.name}:{args.workspace}",
+    )
+    step.update(
+        {
+            "name": scenario.name,
+            "description": scenario.description,
+            "multi_turn": False,
+        }
+    )
+    return step
 
 
 def main() -> int:
@@ -304,21 +393,43 @@ def main() -> int:
         print(f"SCENARIO={item['name']}")
         print(f"OK={item['ok']}")
         if item.get("dry_run"):
+            if item.get("multi_turn"):
+                for step in item.get("steps", []):
+                    print(f"STEP={step['step']}")
+                    print("PROMPT:")
+                    print(step["prompt"])
+                    print("COMMAND:")
+                    print(" ".join(str(x) for x in step["command"]))
+            else:
+                print("PROMPT:")
+                print(item["prompt"])
+                print("COMMAND:")
+                print(" ".join(str(x) for x in item["command"]))
+            continue
+        print(f"DURATION_MS={item['duration_ms']}")
+        if item.get("multi_turn"):
+            for step in item.get("steps", []):
+                print(f"STEP={step['step']}")
+                print(f"RUNNER_EXIT_CODE={step['runner_exit_code']}")
+                print(f"STEP_DURATION_MS={step['duration_ms']}")
+                print("PROMPT:")
+                print(step["prompt"])
+                print("OUTPUT:")
+                print(summarize(str(step.get("output", ""))))
+                if step.get("missing_substrings"):
+                    print("MISSING_SUBSTRINGS:")
+                    for value in step["missing_substrings"]:
+                        print(value)
+        else:
+            print(f"RUNNER_EXIT_CODE={item['runner_exit_code']}")
             print("PROMPT:")
             print(item["prompt"])
-            print("COMMAND:")
-            print(" ".join(str(x) for x in item["command"]))
-            continue
-        print(f"RUNNER_EXIT_CODE={item['runner_exit_code']}")
-        print(f"DURATION_MS={item['duration_ms']}")
-        print("PROMPT:")
-        print(item["prompt"])
-        print("OUTPUT:")
-        print(summarize(str(item.get("output", ""))))
-        if item.get("missing_substrings"):
-            print("MISSING_SUBSTRINGS:")
-            for value in item["missing_substrings"]:
-                print(value)
+            print("OUTPUT:")
+            print(summarize(str(item.get("output", ""))))
+            if item.get("missing_substrings"):
+                print("MISSING_SUBSTRINGS:")
+                for value in item["missing_substrings"]:
+                    print(value)
     return 0 if payload["ok"] else 1
 
 

@@ -29,6 +29,19 @@ ASSISTANT_CONTEXT_PATTERNS = (
     rf"(?im)^\s*name\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
     rf"(?im)^\s*repo\s*:\s*({WORKSPACE_NAME_PATTERN})\s*$",
 )
+ASSISTANT_PREFERRED_WORKSPACE_PATTERNS = (
+    rf'(?i)"workspace"\s*:\s*"({WORKSPACE_NAME_PATTERN})"',
+    rf"(?im)^\s*workspace\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
+    rf'(?i)"repo_name"\s*:\s*"({WORKSPACE_NAME_PATTERN})"',
+    rf"(?im)^\s*repo_name\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
+    rf'(?i)"name"\s*:\s*"({WORKSPACE_NAME_PATTERN})"',
+    rf"(?im)^\s*name\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
+)
+ASSISTANT_FALLBACK_WORKSPACE_PATTERNS = (
+    rf"(?im)^\s*requested_workspace\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
+    rf"(?im)^\s*controller_workspace\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
+    rf"(?im)^\s*repo\s*:\s*({WORKSPACE_NAME_PATTERN})\s*$",
+)
 
 
 @dataclass(frozen=True)
@@ -156,6 +169,23 @@ def iter_message_texts(messages: Iterable[dict]) -> list[tuple[str, str]]:
     return out
 
 
+def _assistant_workspace_from_text(text: str, workspaces: dict[str, dict]) -> str | None:
+    value = str(text or "")
+    for pattern in ASSISTANT_PREFERRED_WORKSPACE_PATTERNS:
+        for match in re.finditer(pattern, value):
+            candidate = canonical_workspace_name(match.group(1), workspaces)
+            if candidate:
+                return candidate
+    for pattern in ASSISTANT_FALLBACK_WORKSPACE_PATTERNS:
+        match = re.search(pattern, value)
+        if not match:
+            continue
+        candidate = canonical_workspace_name(match.group(1), workspaces)
+        if candidate:
+            return candidate
+    return None
+
+
 def resolve_workspace_from_history(messages: Iterable[dict], workspaces: dict[str, dict]) -> WorkspaceResolution | None:
     items = iter_message_texts(messages)
     for role, text in reversed(items):
@@ -164,6 +194,10 @@ def resolve_workspace_from_history(messages: Iterable[dict], workspaces: dict[st
         direct = resolve_workspace_from_text(text, workspaces)
         if direct:
             return WorkspaceResolution(direct.workspace, f"history_{role}_{direct.source}", False, True)
+        if role == "assistant":
+            assistant_workspace = _assistant_workspace_from_text(text, workspaces)
+            if assistant_workspace:
+                return WorkspaceResolution(assistant_workspace, "history_assistant_execution", False, True)
         for pattern in ASSISTANT_CONTEXT_PATTERNS:
             match = re.search(pattern, text)
             if not match:
