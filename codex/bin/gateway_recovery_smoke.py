@@ -78,6 +78,72 @@ def assert_bootstrap_followup_inference() -> None:
     print("BOOTSTRAP_FOLLOWUP_INFERENCE_OK")
 
 
+def assert_verify_prefers_action_over_run_without_explicit_command() -> None:
+    task = "Ověř projekt a vrať stručný audit výsledků."
+    with patch.object(
+        gateway,
+        "load_workspace_action_registry",
+        return_value={
+            "verify": {
+                "cues": ["ověř projekt", "over projekt", "verify project"],
+            }
+        },
+    ):
+        normalized = gateway.normalize_agent_plan(
+            {
+                "workflow": "run",
+                "reason": "planner drift smoke",
+                "read_only": False,
+                "workspace": "ai-stack",
+                "command": ["pwd"],
+                "confidence": "medium",
+            },
+            "ai-stack",
+            "ai-stack",
+            True,
+            task,
+        )
+    if normalized.get("workflow") != "action":
+        raise SystemExit(f"expected action workflow for verify prompt, got {normalized!r}")
+    if normalized.get("action") != "verify":
+        raise SystemExit(f"expected verify action for verify prompt, got {normalized!r}")
+    if normalized.get("command") != []:
+        raise SystemExit(f"expected command to be cleared after run->action normalization, got {normalized!r}")
+    print("VERIFY_ACTION_NORMALIZATION_OK")
+
+
+def assert_explicit_command_stays_run() -> None:
+    task = "Spusť příkaz: pwd a vrať výstup."
+    with patch.object(
+        gateway,
+        "load_workspace_action_registry",
+        return_value={
+            "verify": {
+                "cues": ["ověř projekt", "over projekt", "verify project"],
+            }
+        },
+    ):
+        normalized = gateway.normalize_agent_plan(
+            {
+                "workflow": "run",
+                "reason": "explicit command smoke",
+                "read_only": False,
+                "workspace": "ai-stack",
+                "command": ["pwd"],
+                "confidence": "high",
+            },
+            "ai-stack",
+            "ai-stack",
+            True,
+            task,
+        )
+    if normalized.get("workflow") != "run":
+        raise SystemExit(f"explicit command should stay run, got {normalized!r}")
+    if normalized.get("command") != ["pwd"]:
+        raise SystemExit(f"explicit run command changed unexpectedly, got {normalized!r}")
+    print("EXPLICIT_RUN_NORMALIZATION_OK")
+
+
 def assert_agent_loop_prefers_llm_plan() -> None:
     llm_plan = {
         "workflow": "review",
@@ -496,6 +562,8 @@ def main() -> int:
     assert_agent_loop_parse()
     assert_fallback_plans()
     assert_bootstrap_followup_inference()
+    assert_verify_prefers_action_over_run_without_explicit_command()
+    assert_explicit_command_stays_run()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()
     assert_codex_local_payload_routing()

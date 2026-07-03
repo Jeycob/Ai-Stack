@@ -543,20 +543,20 @@ elif [ -z "${OWUI_API_KEY:-}" ] && [ ! -f "$OWUI_KEY_FILE" ]; then
   record_summary "OpenWebUI explicit agent-loop smoke" "SKIP"
 else
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke ...\n'
-  explicit_prompt_file="$(mktemp)"
   explicit_smoke_log="$(mktemp)"
-  printf 'repo: %s\nGATEWAY_ADMIN_AGENT_LOOP %s -- Prohlédni workspace. Nic needituj. Odpověz stručně.\n' "$WORKSPACE" "$WORKSPACE" > "$explicit_prompt_file"
-  if python3 "$SCRIPT_DIR/owui_chat_turn.py" \
-      --stateless \
+  if python3 "$SCRIPT_DIR/owui_chat_turn_codex_local_route_smoke.py" \
       --base-url "$OPENWEBUI_URL" \
+      --api-key-file "$OWUI_KEY_FILE" \
       --model "$MODEL" \
-      --prompt-file "$explicit_prompt_file" \
-      --timeout "$TIMEOUT" \
-      --attempts 2 \
+      --prompt "$(printf 'repo: %s\nGATEWAY_ADMIN_AGENT_LOOP %s -- Prohlédni workspace. Nic needituj. Odpověz stručně.' "$WORKSPACE" "$WORKSPACE")" \
+      --expect "AGENT_LOOP_OK" \
+      --expect "workflow=review" \
+      --expect "read_only=True" \
+      --timeout 30 \
+      --attempts 4 \
       --initial-delay 1 \
-      --max-delay 2 \
-      --total-timeout 90 \
-      --no-follow-scheduled \
+      --max-delay 4 \
+      --total-timeout 180 \
       --quiet >"$explicit_smoke_log" 2>&1 && grep -Fq "AGENT_LOOP" "$explicit_smoke_log"; then
       [ "$SUMMARY_ONLY" != "1" ] && cat "$explicit_smoke_log"
       [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke OK\n'
@@ -567,7 +567,7 @@ else
     failures=$((failures + 1))
     record_summary "OpenWebUI explicit agent-loop smoke" "FAIL"
   fi
-  rm -f "$explicit_prompt_file" "$explicit_smoke_log"
+  rm -f "$explicit_smoke_log"
 fi
 
 if [ "${SKIP_OWUI_STATELESS_ROUTE_SMOKE:-0}" = "1" ]; then
@@ -586,6 +586,11 @@ else
       --base-url "$OPENWEBUI_URL" \
       --api-key-file "$OWUI_KEY_FILE" \
       --model "$MODEL" \
+      --timeout 30 \
+      --attempts 4 \
+      --initial-delay 1 \
+      --max-delay 4 \
+      --total-timeout 180 \
       --quiet >"$stateless_route_log" 2>&1; then
     [ "$SUMMARY_ONLY" != "1" ] && cat "$stateless_route_log"
     [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI stateless natural route smoke OK\n'

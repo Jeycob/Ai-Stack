@@ -951,6 +951,20 @@ def agent_run_requested(task):
     return any(cue in lower for cue in cues)
 
 
+def agent_explicit_command_requested(task):
+    text = str(task or "").strip()
+    lower = text.lower()
+    if re.search(r"(?is)```(?:bash|sh|shell)?\s*\n.+?\n```", text):
+        return True
+    if re.search(r"`([^`\n]{1,300})`", text):
+        return True
+    if re.search(r"(?is)\b(?:spust|spusť|run|execute)\s+(?:prikaz|příkaz|command)\s*:?\s*(.+)$", text):
+        return True
+    if any(token in lower for token in ("git status", "pwd", "ls -", "python --version", "python3 --version", "node --version", "npm --version")):
+        return True
+    return agent_run_requested(task)
+
+
 def agent_infer_command_from_task(task):
     text = str(task or "").strip()
     lower = text.lower()
@@ -1263,6 +1277,7 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     inferred_followups = agent_infer_followup_actions(task)
     bootstrap_requested = agent_bootstrap_requested(task)
     run_requested = agent_run_requested(task)
+    explicit_command_requested = agent_explicit_command_requested(task)
     if workflow == "bootstrap" and not bootstrap_requested:
         if agent_edit_requested(task):
             workflow = "edit"
@@ -1290,6 +1305,10 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         run_after = inferred_action
     if workflow in {"bootstrap", "autopilot"} and not followup_actions:
         followup_actions = inferred_followups
+    if workflow == "run" and inferred_action and not explicit_command_requested:
+        workflow = "action"
+        action = action or inferred_action
+        command = []
     if workflow == "run" and not command:
         command = agent_infer_command_from_task(task)
     if workflow == "run" and not command:
