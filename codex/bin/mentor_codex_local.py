@@ -1550,7 +1550,7 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
         github_flag = " --github" if decision.get("repo_github") == "yes" else ""
         return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
     if workflow == "bootstrap-improve":
-        return f"python3 codex/bin/mentor_codex_local.py bootstrap-improve {workspace} {shlex.quote(task)}"
+        return f"python3 codex/bin/mentor_codex_local.py bootstrap-dispatch {workspace} {shlex.quote(task)} --execute"
     if workflow == "deploy":
         return "python3 codex/bin/mentor_codex_local.py deploy"
     if workflow == "publish-plan":
@@ -1640,6 +1640,70 @@ def scaffold_plan_steps(decision: dict[str, str], task: str) -> list[tuple[str, 
     if not steps:
         steps.append(("fallback", "no scaffold recipe is known; inspect the task and choose the smallest established starter manually"))
     return steps
+
+
+def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -> list[str]:
+    return [
+        sys.executable,
+        "codex/bin/run_check.py",
+        repo_name,
+        "--timeout",
+        str(timeout),
+        "--",
+        "bash",
+        "-lc",
+        recipe,
+    ]
+
+
+def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    repo_name = decision.get("repo_name", "").strip()
+    recipe = decision.get("scaffold_recipe", "").strip()
+    steps = scaffold_plan_steps(decision, args.task)
+
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_WORKSPACE={args.workspace}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_TASK={args.task}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_REPO={repo_name or '(unspecified)'}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_SOLUTION_PROFILE={decision['solution_profile']}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_PUBLIC_STACK={decision['public_stack']}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_SCAFFOLD_RECIPE={recipe}")
+    for idx, (label, value) in enumerate(steps, start=1):
+        print(f"BOOTSTRAP_STEP_{idx}_LABEL={label}")
+        print(f"BOOTSTRAP_STEP_{idx}_VALUE={value}")
+    print(f"BOOTSTRAP_STEP_COUNT={len(steps)}")
+
+    if not repo_name:
+        print("BOOTSTRAP_DISPATCH_BLOCKED")
+        print("reason=repo name could not be inferred from task")
+        return 0
+    if not recipe:
+        print("BOOTSTRAP_DISPATCH_BLOCKED")
+        print("reason=no scaffold recipe is known for the inferred solution profile")
+        return 0
+
+    runner = bootstrap_runner_command(repo_name, recipe, args.timeout)
+    print(f"BOOTSTRAP_DISPATCH_RUNNER={shlex.join(runner)}")
+    print_execution_brief("MENTOR_BOOTSTRAP_DISPATCH", decision, args.workspace, args.task)
+
+    if args.dry_run or not getattr(args, "execute", False):
+        print(f"BOOTSTRAP_DISPATCH_MODE={'dry-run' if args.dry_run else 'recommend-only'}")
+        return 0
+
+    proc = subprocess.run(
+        runner,
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    print("BOOTSTRAP_DISPATCH_EXECUTION_BEGIN")
+    if proc.stdout:
+        print(proc.stdout.strip())
+    print("BOOTSTRAP_DISPATCH_EXECUTION_END")
+    print(f"BOOTSTRAP_DISPATCH_EXIT_CODE={proc.returncode}")
+    return 0
 
 
 def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -> list[str]:
@@ -1934,7 +1998,8 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
         profile_hint = f" using starter profile {decision.get('solution_profile')}" if decision.get("solution_profile") else ""
         steps.append(("bootstrap", f"create and register repository {repo_name or '(unspecified)'}{github_hint}{profile_hint}"))
         steps.append(("scaffold-plan", f"python3 codex/bin/mentor_codex_local.py scaffold-plan {workspace} {shlex.quote(task)}"))
-        steps.append(("improve", recommended_next_step(decision, workspace, task)))
+        steps.append(("bootstrap-dispatch", f"python3 codex/bin/mentor_codex_local.py bootstrap-dispatch {workspace} {shlex.quote(task)} --execute"))
+        steps.append(("improve", f"python3 codex/bin/mentor_codex_local.py improve {repo_name or '(unspecified)'}"))
         steps.append(("post-bootstrap-check", f"verify new workspace {repo_name or '(unspecified)'} status, then continue with install/test/build or a minimal patch"))
         return steps
 
@@ -2240,6 +2305,13 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
 
+    bootstrap_args = argparse.Namespace(**vars(args))
+    bootstrap_args.mode = "bootstrap-dispatch"
+    bootstrap_args.execute = True
+    rc = run_bootstrap_dispatch_sequence(bootstrap_args)
+    if rc != 0:
+        return rc
+
     improve_args = argparse.Namespace(**vars(args))
     improve_args.mode = "improve"
     improve_args.workspace = repo_name
@@ -2255,8 +2327,8 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             + (f"- scaffold recipe: {decision.get('scaffold_recipe')}\n" if decision.get("scaffold_recipe") else "")
             + (f"- scaffold files: {decision.get('scaffold_files')}\n" if decision.get("scaffold_files") else "")
             + (f"- scaffold loop: {decision.get('scaffold_loop')}\n" if decision.get("scaffold_loop") else "")
-            +
-            "- follow-through: continue with audited workspace setup and improvement after repository creation"
+            + "- follow-through: continue with audited workspace setup and improvement after repository creation\n"
+            + "- bootstrap dispatch: the first scaffold command was already attempted locally when a recipe existed"
         ),
     )
     improve_args.mentor_technical_context = prefixed_block(
@@ -2272,8 +2344,8 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             + (f"scaffold_recipe={decision.get('scaffold_recipe')}\n" if decision.get("scaffold_recipe") else "")
             + (f"scaffold_files={decision.get('scaffold_files')}\n" if decision.get("scaffold_files") else "")
             + (f"scaffold_loop={decision.get('scaffold_loop')}\n" if decision.get("scaffold_loop") else "")
-            +
-            "goal=continue from repository bootstrap into audited install/test/build or safe patch progression"
+            + "bootstrap_dispatch=the first scaffold command was already attempted locally when a recipe existed\n"
+            + "goal=continue from repository bootstrap into audited install/test/build or safe patch progression"
         ),
     )
     return run_improve_sequence(improve_args)
@@ -2322,6 +2394,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_release_prep_sequence(args)
     if args.mode == "bootstrap-improve":
         return run_bootstrap_improve_sequence(args)
+    if args.mode == "bootstrap-dispatch":
+        return run_bootstrap_dispatch_sequence(args)
     if args.mode == "push-check":
         visible, technical = build_prompts(args)
         rc, _ = invoke_turn(args, visible, technical)
@@ -2490,6 +2564,13 @@ def parse_args() -> argparse.Namespace:
     scaffold_plan.add_argument("workspace")
     scaffold_plan.add_argument("task")
     scaffold_plan.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; scaffold-plan mode never calls OpenWebUI")
+
+    bootstrap_dispatch = sub.add_parser("bootstrap-dispatch", help="Pick the first concrete scaffold command for a bootstrap-oriented task and optionally execute it in the target workspace")
+    bootstrap_dispatch.add_argument("workspace")
+    bootstrap_dispatch.add_argument("task")
+    bootstrap_dispatch.add_argument("--timeout", type=int, default=1800)
+    bootstrap_dispatch.add_argument("--execute", action="store_true", help="Actually run the selected scaffold command through run_check.py")
+    bootstrap_dispatch.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; print the chosen bootstrap command without executing it")
 
     plan = sub.add_parser("plan", help="Produce a short sequenced mentor plan for a task: report plus the next 2-4 helper/capability steps")
     plan.add_argument("workspace")

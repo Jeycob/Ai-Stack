@@ -118,6 +118,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_report_command(text)
         if not command:
+            command = self._natural_workspace_bootstrap_dispatch_command(text)
+        if not command:
             command = self._natural_workspace_scaffold_plan_command(text)
         if not command:
             command = self._natural_workspace_plan_command(text)
@@ -532,6 +534,55 @@ class Filter:
             task,
         ]
         return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _bootstrap_dispatch_helper_command(self, workspace: str, task: str, execute: bool = True) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "bootstrap-dispatch",
+            workspace,
+            task,
+            "--timeout",
+            "1800",
+        ]
+        if execute:
+            command.append("--execute")
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 1800 -- {shlex.join(command)}"
+
+    def _natural_workspace_bootstrap_dispatch_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        cue_needles = (
+            "bootstrap prvni krok",
+            "bootstrap první krok",
+            "prvni bootstrap krok",
+            "první bootstrap krok",
+            "spust starter",
+            "spusť starter",
+            "rozjed starter",
+            "rozjeď starter",
+            "proveď scaffold",
+            "proved scaffold",
+            "run scaffold",
+            "run starter",
+            "bootstrap dispatch",
+        )
+        if not any(needle in lower for needle in cue_needles):
+            return None
+        task = self._extract_single_task(
+            text,
+            [
+                r"(?is)\b(?:bootstrap\s+(?:prvni|první)\s+krok|prvni\s+bootstrap\s+krok|první\s+bootstrap\s+krok)\b\s*(?:pro|for)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:spust|spusť|rozjed|rozjeď|proved|proveď|run)\b.+?\b(?:starter|scaffold)\b\s*(?:pro|for)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:bootstrap\s+dispatch)\b\s*(?:pro|for)?\s*:?\s*(.+?)\s*$",
+            ],
+            cue_needles,
+        )
+        if not task:
+            return None
+        return self._bootstrap_dispatch_helper_command(workspace, task, execute=True)
 
     def _natural_workspace_scaffold_plan_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)

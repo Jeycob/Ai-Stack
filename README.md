@@ -310,7 +310,7 @@ Když chceš jen rychle zjistit, jakou šířku pravomocí by helper pro úkol z
 
 Ještě důležitější posun je, že širší lidské zadání už nemusí padat rovnou do `autopilot`. Formulace typu `repo: ai-stack` + `Fixni to a dotáhni co zvládneš.`, `Udělej co je potřeba.`, `Proveď to jako Codex.` nebo `Vyber workflow a proveď.` teď filter přeloží na `mentor_codex_local.py delegate`. Teprve ten pak vybere správný runtime workflow, takže broad orchestrace jde přes mentora, ne přes jeden natvrdo zvolený capability krok.
 
-Stejný princip nově platí i pro repo bootstrap. Jednoduché “vytvoř repository Test2” pořád jde nejkratší cestou přes `create-repo`, ale širší zadání typu “vytvoř repository Test2, doinstaluj co chybí, napiš základ a zkus to rozběhnout” už neskončí jen jedním bootstrap markerem. Filter ho pošle do `bootstrap-improve`, který udělá sekvenci `create-repo -> improve` a tím dává agentovi víc samostatnosti bez toho, aby musel dostat neomezený shell.
+Stejný princip nově platí i pro repo bootstrap. Jednoduché “vytvoř repository Test2” pořád jde nejkratší cestou přes `create-repo`, ale širší zadání typu “vytvoř repository Test2, doinstaluj co chybí, napiš základ a zkus to rozběhnout” už neskončí jen jedním bootstrap markerem. Filter ho pošle do `bootstrap-improve`, který udělá sekvenci `create-repo -> bootstrap-dispatch -> improve` a tím dává agentovi víc samostatnosti bez toho, aby musel dostat neomezený shell.
 
 Bootstrap-improve navíc nově nese i lehký `solution_profile` a `starter_hint`. Když tedy zadání zní třeba “vytvoř repository Test2 ve FastAPI”, “založ React appku” nebo “udělej Three.js starter”, mentor si tenhle stackový záměr uloží do execution briefu a posune ho dál do improve flow. Není to ještě plný framework-specific scaffolder, ale agent už díky tomu nepokračuje naslepo bez technologického směru.
 
@@ -319,6 +319,8 @@ K tomu se teď přidává i `public_stack` a `public_stack_rationale`: mentor pr
 Poslední vrstva jsou `scaffold_recipe`, `scaffold_files` a `scaffold_loop`. Tady už mentor pro známé stacky neposílá jen obecné doporučení, ale i konkrétní první bootstrap recipe, klíčové soubory a doporučený ověřovací sled. Například pro React vrátí `npm create vite@latest . -- --template react-ts`, očekávané soubory `package.json, src/main.tsx, src/App.tsx, vite.config.ts, tsconfig.json` a loop `install -> dev server smoke -> test or lint -> build`.
 
 Nad tím je teď i samostatný helper `scaffold-plan`, který z bootstrap-oriented zadání vytáhne právě tenhle konkrétní starter plán bez spuštění jakékoli akce. Je to levný mezikrok mezi čistým profilem a plným `bootstrap-improve`: nejdřív si můžeš nechat vypsat scaffold recipe, očekávané soubory a verifikační sled, a teprve potom pustit samotný bootstrap nebo improve workflow.
+
+Další vrstva je `bootstrap-dispatch`. Ten už z téhož zadání vezme konkrétní scaffold recipe, přeloží ho do spustitelného guardrailed runneru přes `run_check.py` a umí vrátit nebo rovnou provést první bootstrap command v nově založeném workspace. Prakticky to znamená, že codex-local už nemusí po bootstrapu znovu “hádat”, co je první rozumný instalační nebo scaffold krok; dostane ho jako explicitní capability.
 
 Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.
 

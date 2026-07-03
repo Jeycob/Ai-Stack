@@ -233,10 +233,23 @@ Kdyz tenhle mezikrok chceme explicitne a bez dalsi exekuce, je na to helper
 ocekavane soubory a verifikacni sled pred tim, nez se pusti `bootstrap-improve`
 nebo jiny vykonavajici workflow.
 
+Kdyz uz nechceme jen plan, ale i prvni realny bootstrap krok, je na to
+`mentor_codex_local.py bootstrap-dispatch`. Ten vezme inferovany scaffold
+recipe, prelozi ho do guardrailed `run_check.py` commandu a umi ho rovnou
+spustit v nove vytvorenem workspace. `bootstrap-improve` ho pouziva automaticky
+mezi `create-repo` a `improve`, takze lokalni agent neskonci jen u zalozeni
+repozitare, ale zkusi i prvni starter/bootstrap command.
+
 Priklad explicitniho scaffold planu:
 
 ```bash
 python3 codex/bin/mentor_codex_local.py scaffold-plan ai-stack "Vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus to rozbehnout."
+```
+
+Priklad explicitniho bootstrap dispatch kroku:
+
+```bash
+python3 codex/bin/mentor_codex_local.py bootstrap-dispatch ai-stack "Vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus to rozbehnout." --execute
 ```
 
 Priklad profilove klasifikace bez spousteni jakychkoli akci:
