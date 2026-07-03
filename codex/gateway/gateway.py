@@ -696,6 +696,108 @@ def admin_workspace_action(payload):
     result["runner_exit_code"] = proc.returncode
     return result
 
+def admin_workspace_autopilot(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    timeout = int(payload.get("timeout") or 1800)
+    env_map = payload.get("env") or {}
+    recommend_only = bool(payload.get("recommend_only", False))
+    allow_actions = payload.get("allow_actions") or ["install", "test", "build", "lint"]
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
+    if timeout < 1 or timeout > 3600:
+        raise ValueError("timeout must be between 1 and 3600")
+    if not isinstance(env_map, dict):
+        raise ValueError("env must be an object")
+    if isinstance(allow_actions, str):
+        allow_actions = [x.strip().lower() for x in allow_actions.split(",") if x.strip()]
+    if not isinstance(allow_actions, list):
+        raise ValueError("allow_actions must be a list or comma-separated string")
+    allow_actions = [str(x).strip().lower() for x in allow_actions if str(x).strip()]
+    invalid = sorted(set(allow_actions) - {"install", "test", "build", "lint"})
+    if invalid:
+        raise ValueError("allow_actions supports only install, test, build, lint")
+    if not allow_actions:
+        raise ValueError("allow_actions must not be empty")
+
+    verify = admin_workspace_action({
+        "workspace": workspace,
+        "action": "verify",
+        "timeout": timeout,
+        "env": env_map,
+        "dry_run": True,
+    })
+    verify_steps = verify.get("verify_steps") or []
+
+    chosen_action = None
+    chosen_reason = ""
+    for step in verify_steps:
+        action = str(step.get("action") or "").strip().lower()
+        if action in allow_actions and step.get("supported"):
+            chosen_action = action
+            chosen_reason = f"verify dry-run found a supported {action} step"
+            break
+
+    install_probe = None
+    if not chosen_action and "install" in allow_actions:
+        install_probe = admin_workspace_action({
+            "workspace": workspace,
+            "action": "install",
+            "timeout": timeout,
+            "env": env_map,
+            "dry_run": True,
+        })
+        if install_probe.get("ok"):
+            chosen_action = "install"
+            chosen_reason = "verify found no runnable step, but dependency install is supported"
+
+    if not chosen_action:
+        return {
+            "ok": False,
+            "workspace": workspace,
+            "action": "autopilot",
+            "recommend_only": recommend_only,
+            "allow_actions": allow_actions,
+            "chosen_action": "none",
+            "reason": "No supported next action was found within the allowed action set.",
+            "duration_ms": verify.get("duration_ms", 0),
+            "verify_steps": verify_steps,
+            "install_probe": install_probe,
+            "output": "",
+        }
+
+    if recommend_only:
+        return {
+            "ok": True,
+            "workspace": workspace,
+            "action": "autopilot",
+            "recommend_only": True,
+            "allow_actions": allow_actions,
+            "chosen_action": chosen_action,
+            "reason": chosen_reason,
+            "duration_ms": verify.get("duration_ms", 0),
+            "verify_steps": verify_steps,
+            "install_probe": install_probe,
+            "output": "",
+        }
+
+    executed = admin_workspace_action({
+        "workspace": workspace,
+        "action": chosen_action,
+        "timeout": timeout,
+        "env": env_map,
+        "dry_run": False,
+    })
+    executed["action"] = "autopilot"
+    executed["chosen_action"] = chosen_action
+    executed["reason"] = chosen_reason
+    executed["recommend_only"] = False
+    executed["allow_actions"] = allow_actions
+    executed["verify_steps"] = verify_steps
+    if install_probe is not None:
+        executed["install_probe"] = install_probe
+    return executed
+
 def pid_running(pid):
     try:
         os.kill(pid, 0)
@@ -1033,6 +1135,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_workspace_action(payload))
+            if self.path == "/v1/admin/workspace/autopilot":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_workspace_autopilot(payload))
             if self.path == "/v1/admin/stack/deploy":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)

@@ -114,6 +114,8 @@ class Filter:
             return self._direct_response(body, self._check_ai_stack(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
             return self._direct_response(body, self._workspace_action_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT"):
+            return self._direct_response(body, self._workspace_autopilot_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE"):
             return self._direct_response(body, self._run_workspace_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
@@ -1129,6 +1131,103 @@ class Filter:
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
             + ("verify_steps:\n" + "\n".join(step_lines) + "\n" if step_lines else "")
+            + self._details("output", output)
+        )
+
+    def _workspace_autopilot_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_AUTOPILOT\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--recommend-only] [--env KEY=VALUE]")
+        parts = shlex.split(m.group(1))
+        if not parts:
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--recommend-only] [--env KEY=VALUE]")
+
+        workspace = parts.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+
+        timeout = 1800
+        allow_actions = ["install", "test", "build", "lint"]
+        recommend_only = False
+        env_map = {}
+        while parts:
+            opt = parts.pop(0)
+            if opt == "--timeout" and parts:
+                timeout = int(parts.pop(0))
+                continue
+            if opt == "--allow-actions" and parts:
+                allow_actions = [x.strip().lower() for x in parts.pop(0).split(",") if x.strip()]
+                continue
+            if opt == "--recommend-only":
+                recommend_only = True
+                continue
+            if opt == "--env" and parts:
+                item = parts.pop(0)
+                if "=" not in item:
+                    raise ValueError("--env expects KEY=VALUE")
+                key, value = item.split("=", 1)
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key):
+                    raise ValueError(f"Unsafe env key: {key}")
+                env_map[key] = value
+                continue
+            raise ValueError(f"Unknown GATEWAY_ADMIN_WORKSPACE_AUTOPILOT option: {opt}")
+
+        if timeout < 1 or timeout > 3600:
+            raise ValueError("Timeout must be between 1 and 3600 seconds")
+
+        payload = {
+            "workspace": workspace,
+            "timeout": timeout,
+            "allow_actions": allow_actions,
+            "recommend_only": recommend_only,
+        }
+        if env_map:
+            payload["env"] = env_map
+        result = self._gateway_admin_request("/v1/admin/workspace/autopilot", payload, timeout=max(timeout + 45, 90))
+
+        steps = result.get("verify_steps") or []
+        step_lines = []
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                action_name = str(step.get("action", "(unknown)"))
+                if not step.get("supported", True):
+                    step_lines.append(f"- {action_name}: skipped")
+                    continue
+                if step.get("ok") is True:
+                    state = "ok"
+                elif step.get("ok") is False:
+                    state = f"failed ({step.get('error') or step.get('exit_code')})"
+                else:
+                    state = "planned"
+                command = step.get("command") or []
+                command_text = self._shell_join(command) if command else ""
+                if command_text:
+                    step_lines.append(f"- {action_name}: {state} command={command_text}")
+                else:
+                    step_lines.append(f"- {action_name}: {state}")
+
+        install_probe = result.get("install_probe") or {}
+        install_detail = ""
+        if isinstance(install_probe, dict) and install_probe:
+            install_detail = self._details("install_probe", self._trim(str(install_probe.get("output", "")), 12000))
+
+        output = self._trim(str(result.get("output", "")), 24000)
+        status = "WORKSPACE_AUTOPILOT_OK" if result.get("ok") else "WORKSPACE_AUTOPILOT_FAILED"
+        return (
+            f"{status}\n"
+            f"workspace={result.get('workspace', workspace)}\n"
+            f"action=autopilot\n"
+            f"chosen_action={result.get('chosen_action', 'none')}\n"
+            f"recommend_only={result.get('recommend_only', False)}\n"
+            f"allow_actions={','.join(result.get('allow_actions', allow_actions))}\n"
+            f"reason={result.get('reason', '')}\n"
+            f"exit_code={result.get('exit_code')}\n"
+            f"runner_exit_code={result.get('runner_exit_code')}\n"
+            f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
+            + ("verify_steps:\n" + "\n".join(step_lines) + "\n" if step_lines else "")
+            + install_detail
             + self._details("output", output)
         )
 

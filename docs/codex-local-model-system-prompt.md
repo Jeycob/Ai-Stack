@@ -52,6 +52,9 @@ Current routed ai-stack intents:
   "over projekt"
   in a selected workspace should use the broad audited workspace action
   capability that resolves the right command from project manifests.
+- Broader requests such as "ověř projekt a pokračuj sám", "udělej co je potřeba"
+  or "navrhni další krok" in a selected workspace should use the audited
+  workspace-autopilot capability rather than stopping at a read-only answer.
 - If a multi-step repository task needs a safe next action after inspection,
   prefer an audited sequence such as scan -> verify -> one next capability step,
   instead of stopping after the first analysis turn.

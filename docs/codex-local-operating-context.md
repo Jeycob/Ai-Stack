@@ -74,7 +74,7 @@ vygeneruj ssh klic", bezne repo kontroly typu "zkontroluj git status",
 developerske workflow typu "nainstaluj zavislosti" nebo "spust testy", a
 explicitni "repo: X / spust prikaz: ...". Nemel by vyrabet novy marker pro
 kazdou drobnost; cilem jsou sirsi capability workflow: deploy/status,
-workspace-run, workspace-action, create-repo recipe a pozdeji dalsi
+workspace-run, workspace-action, workspace-autopilot, create-repo recipe a pozdeji dalsi
 profile-based schopnosti.
 Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
@@ -98,6 +98,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_REPO_GUARD [workspace] [branch]`: read-only kontrola registrovaneho workspace, branch, dirty stavu a suspicious/sensitive cest bez vypisu obsahu souboru.
 - `GATEWAY_ADMIN_WORKSPACE_SCAN [workspace]`: read-only scan manifestu, jazyku, package script names a navrzenych build/test prikazu bez spousteni prikazu.
 - `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify> [--timeout seconds] [--env KEY=VALUE] [--dry-run]`: capability-based provedeni beznych developerskych akci nad registrovanym workspace. Resolver vybere prikaz z manifestu a scriptu projektu a spusti ho auditovane pres gateway. `verify` se snazi projekt overit agenticky jako sekvenci `lint -> test -> build` s preskakovanim nepodporovanych kroku.
+- `GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--recommend-only] [--env KEY=VALUE]`: vyssi capability nad workspace. Nejdriv si pripravi `verify --dry-run`, z povolenych kroku vybere prave jeden dalsi bezpecny capability krok a bud ho jen doporuci, nebo ho rovnou provede. Je to preferovana cesta pro prirozene pozadavky typu "over projekt a pokracuj sam".
 - `GATEWAY_ADMIN_READ <path>`: precte whitelisted soubor bez cisel radku.
 - `GATEWAY_ADMIN_READ_NUMBERED <path> [start] [end]`: precte whitelisted soubor s realnymi cisly radku. Pouzivat pred presnymi patchemi.
 - `GATEWAY_ADMIN_APPLY_NOW`: aplikuje prilozeny unified diff na whitelisted soubory a provede validaci Python souboru.

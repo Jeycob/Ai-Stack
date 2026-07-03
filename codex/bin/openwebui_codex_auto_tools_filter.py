@@ -1,8 +1,8 @@
 """
 title: Codex Auto Tools Filter
 author: OpenAI Codex
-version: 0.1.7
-description: Dynamically attaches Codex toolsets and routes safe codex-local natural-language admin intents.
+version: 0.1.8
+description: Dynamically attaches Codex toolsets and routes broader codex-local natural-language admin intents.
 """
 
 from pydantic import BaseModel, Field
@@ -105,6 +105,8 @@ class Filter:
         command = self._natural_workspace_run_command(text)
         if not command:
             command = self._natural_workspace_common_command(text)
+        if not command:
+            command = self._natural_workspace_autopilot_command(text)
         if not command:
             command = self._natural_workspace_action_command(text)
         if not command:
@@ -231,6 +233,44 @@ class Filter:
         for needles, action, timeout in actions:
             if any(needle in lower for needle in needles):
                 return f"GATEWAY_ADMIN_WORKSPACE_ACTION {workspace} {action} --timeout {timeout}"
+        return None
+
+    def _natural_workspace_autopilot_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        recommend_only = [
+            "co bys udelal dal",
+            "co bys udělal dál",
+            "co doporucujes dal",
+            "co doporučuješ dál",
+            "navrhni dalsi krok",
+            "navrhni další krok",
+            "doporuč další krok",
+            "recommend next step",
+        ]
+        autopilot = [
+            "pokracuj sam",
+            "pokračuj sám",
+            "pokračuj sam",
+            "udelej co je potreba",
+            "udělej co je potřeba",
+            "zkus to rozbehat",
+            "zkus to rozběhat",
+            "over a pokracuj",
+            "ověř a pokračuj",
+            "autonomne",
+            "autonomně",
+            "sam vyber dalsi krok",
+            "sám vyber další krok",
+            "sam pokracuj",
+            "sám pokračuj",
+        ]
+        if any(needle in lower for needle in recommend_only):
+            return f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --recommend-only --timeout 2400"
+        if any(needle in lower for needle in autopilot):
+            return f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --timeout 2400"
         return None
 
     def _workspace_from_text(self, text: str) -> str | None:
