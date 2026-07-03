@@ -681,6 +681,203 @@ def admin_explain_file(payload):
         "usage": resp.get("usage", {}),
     }
 
+def extract_unified_diff(text):
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Model did not return any patch text")
+    fenced = re.search(r"(?is)```(?:diff|patch)?\s*\n(.*?)\n```", text)
+    diff = fenced.group(1).strip() if fenced else text.strip()
+    if "diff --git " in diff:
+        start = diff.find("diff --git ")
+        diff = diff[start:].strip()
+    else:
+        start = diff.find("--- ")
+        if start >= 0:
+            diff = diff[start:].strip()
+    if not diff.startswith(("diff --git ", "--- ")):
+        raise ValueError("Model response did not contain a unified diff")
+    return diff + ("\n" if not diff.endswith("\n") else "")
+
+def diff_target_paths(diff_text):
+    paths = set()
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split()
+            if len(parts) >= 4:
+                for item in parts[2:4]:
+                    if item.startswith(("a/", "b/")):
+                        rel = item[2:]
+                        if rel != "/dev/null":
+                            paths.add(rel)
+            continue
+        if line.startswith(("--- ", "+++ ")):
+            rel = line[4:].strip().split("\t", 1)[0]
+            if rel == "/dev/null":
+                continue
+            if rel.startswith(("a/", "b/")):
+                rel = rel[2:]
+            paths.add(rel)
+    return sorted(paths)
+
+def validate_edit_paths(root, paths, max_files):
+    if not paths:
+        raise ValueError("Patch does not reference any workspace file")
+    if len(paths) > max_files:
+        raise ValueError(f"Patch touches too many files: {len(paths)} > {max_files}")
+    safe_paths = []
+    root_resolved = root.resolve(strict=False)
+    for rel in paths:
+        rel = rel.strip().replace("\\", "/").lstrip("/")
+        if not rel or rel == ".":
+            raise ValueError("Patch contains an empty path")
+        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+            raise PermissionError(f"Refusing unsafe patch path: {rel}")
+        if Path(rel).name in SENSITIVE_FILE_NAMES:
+            raise PermissionError(f"Refusing sensitive patch path: {rel}")
+        if any(rel.startswith(prefix) for prefix in SENSITIVE_FILE_PREFIXES):
+            raise PermissionError(f"Refusing runtime/ignored patch path: {rel}")
+        target = (root / rel).resolve(strict=False)
+        try:
+            target.relative_to(root_resolved)
+        except ValueError as exc:
+            raise PermissionError(f"Patch path escapes workspace: {rel}") from exc
+        safe_paths.append(rel)
+    return safe_paths
+
+def workspace_edit_snapshot(root, max_bytes=18000):
+    files = list_files(root)
+    status = run_ro(["git", "status", "--short", "--branch"], root, 10) if (root / ".git").exists() else "not a git repo"
+    snippets = []
+    total = 0
+    preferred_names = {
+        "README.md", "README", "package.json", "pyproject.toml", "requirements.txt",
+        "index.html", "src/main.js", "src/App.jsx", "main.py", "app.py",
+    }
+    for rel in files:
+        include = Path(rel).name in preferred_names or rel.lower().startswith("readme")
+        if include or len(snippets) < 8:
+            text = read_small(root, rel, 3000)
+            if text:
+                block = f"--- {rel} ---\n{text[:3000]}"
+                snippets.append(block)
+                total += len(block)
+        if total >= max_bytes:
+            break
+    return "\n".join([
+        "GIT STATUS:",
+        status[:4000],
+        "",
+        "FILES:",
+        "\n".join(files[:300]),
+        "",
+        "SNIPPETS:",
+        "\n\n".join(snippets)[:max_bytes],
+    ])
+
+def admin_workspace_edit(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    task = str(payload.get("task") or "").strip()
+    model = str(payload.get("model") or "qwen2.5-coder:14b").strip()
+    timeout = int(payload.get("timeout") or 600)
+    max_files = int(payload.get("max_files") or 6)
+    max_diff_chars = int(payload.get("max_diff_chars") or 80_000)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
+    if not task or len(task) > 4000:
+        raise ValueError("task must be 1..4000 characters")
+    if model not in {"qwen2.5-coder:14b", "qwen2.5-coder:32b"}:
+        raise ValueError("Unsupported edit model")
+    if timeout < 30 or timeout > 1800:
+        raise ValueError("timeout must be between 30 and 1800")
+    if max_files < 1 or max_files > 20:
+        raise ValueError("max_files must be between 1 and 20")
+    if max_diff_chars < 1000 or max_diff_chars > 300_000:
+        raise ValueError("max_diff_chars must be between 1000 and 300000")
+
+    root = workspace_root(workspace)
+    if not (root / ".git").exists():
+        raise ValueError("workspace edit currently requires a git repository")
+
+    snapshot = workspace_edit_snapshot(root)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an autonomous local coding agent. Produce exactly one unified diff for the requested repository edit. "
+                "Do not explain, do not use markdown except an optional ```diff fenced block, and do not include commands. "
+                "Touch only files needed for the task. Do not edit secrets, .git, runtime state, audit logs, dependency folders, or build outputs. "
+                "For a simple standalone web visual request in an otherwise empty/minimal repo, create or update index.html with complete runnable HTML/CSS/JS."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Workspace: {workspace}\n"
+                f"Root: {root}\n"
+                f"Task:\n{task}\n\n"
+                f"Repository snapshot:\n{snapshot}\n\n"
+                "Return only a unified diff."
+            ),
+        },
+    ]
+    started = time.time()
+    resp = ollama_chat(model, messages, timeout=timeout)
+    model_text = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    diff = extract_unified_diff(model_text)
+    if len(diff) > max_diff_chars:
+        raise ValueError(f"Patch is too large: {len(diff)} > {max_diff_chars}")
+    paths = validate_edit_paths(root, diff_target_paths(diff), max_files)
+
+    check = subprocess.run(
+        ["git", "apply", "--check", "--whitespace=nowarn"],
+        cwd=root,
+        input=diff,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=60,
+    )
+    if check.returncode != 0:
+        return {
+            "ok": False,
+            "action": "workspace_edit",
+            "workspace": workspace,
+            "root": str(root),
+            "model": model,
+            "files": paths,
+            "status": "patch_check_failed",
+            "error": check.stdout.strip(),
+            "diff": diff,
+            "model_text": model_text,
+            "usage": resp.get("usage", {}),
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+
+    apply = subprocess.run(
+        ["git", "apply", "--whitespace=nowarn"],
+        cwd=root,
+        input=diff,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=60,
+    )
+    status = run_ro(["git", "status", "--short", "--branch"], root, 10)
+    return {
+        "ok": apply.returncode == 0,
+        "action": "workspace_edit",
+        "workspace": workspace,
+        "root": str(root),
+        "model": model,
+        "files": paths,
+        "status": "applied" if apply.returncode == 0 else "apply_failed",
+        "apply_output": apply.stdout.strip(),
+        "diff": diff,
+        "model_text": model_text,
+        "git_status": status,
+        "usage": resp.get("usage", {}),
+        "duration_ms": int((time.time() - started) * 1000),
+    }
+
 def run_text(cmd, cwd, timeout=60):
     proc = subprocess.run(
         cmd,
@@ -1688,6 +1885,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_run_workspace(payload))
+            if self.path == "/v1/admin/workspace/edit":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_workspace_edit(payload))
             if self.path == "/v1/admin/workspace/action":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)

@@ -6,7 +6,6 @@ description: Applies explicitly marked, guarded ai-stack gateway patches from Op
 """
 
 from pathlib import Path
-from pydantic import BaseModel, Field
 from typing import Optional
 import json
 import os
@@ -20,6 +19,19 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
+try:
+    from pydantic import BaseModel, Field
+except ModuleNotFoundError:  # pragma: no cover - used by lightweight local smoke tests
+    def Field(default=None, **_: object):
+        return default
+
+    class BaseModel:
+        def __init__(self, **kwargs):
+            for name, value in self.__class__.__dict__.items():
+                if name.startswith("_") or callable(value):
+                    continue
+                setattr(self, name, kwargs.get(name, value))
 
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
 FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
@@ -128,6 +140,8 @@ class Filter:
             return self._direct_response(body, self._workspace_action_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT"):
             return self._direct_response(body, self._workspace_autopilot_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_EDIT"):
+            return self._direct_response(body, self._workspace_edit_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE"):
             return self._direct_response(body, self._run_workspace_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
@@ -197,6 +211,8 @@ class Filter:
             return self._ssh_keygen(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
             return self._workspace_action_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_WORKSPACE_EDIT"):
+            return self._workspace_edit_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_RUN_WORKSPACE"):
             return self._run_workspace_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_ANSWER"):
@@ -395,22 +411,11 @@ class Filter:
             return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
 
         if workspace:
+            if self._looks_like_edit_request(task_text):
+                return f"GATEWAY_ADMIN_WORKSPACE_EDIT {shlex.quote(workspace)} --timeout 900 -- {shlex.quote(task_text[:1800])}"
             action = self._looks_like_workspace_action(task_text)
             if action:
                 return f"GATEWAY_ADMIN_WORKSPACE_ACTION {shlex.quote(workspace)} {action} --runner container --timeout 900"
-            if self._looks_like_edit_request(task_text):
-                command = [
-                    "python3",
-                    "codex/bin/mentor_codex_local.py",
-                    "delegate",
-                    workspace,
-                    task_text[:1200],
-                    "--timeout",
-                    "1200",
-                    "--max-steps",
-                    "3",
-                ]
-                return f"GATEWAY_ADMIN_RUN_WORKSPACE ai-stack --runner host --timeout 1500 -- {shlex.join(command)}"
 
         url = self._natural_web_url(text)
         if url and any(cue in lower for cue in ("stahni", "stáhni", "nacti", "načti", "precti", "přečti", "podivej", "podívej", "svatek", "svátek", "?")):
@@ -1325,6 +1330,74 @@ class Filter:
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
             + self._details("output", output)
+        )
+
+    def _workspace_edit_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_EDIT\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_EDIT <workspace> [--timeout seconds] [--model qwen2.5-coder:14b|qwen2.5-coder:32b] [--max-files N] -- <task>")
+        parts = shlex.split(m.group(1))
+        if not parts:
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_EDIT <workspace> [--timeout seconds] [--model qwen2.5-coder:14b|qwen2.5-coder:32b] [--max-files N] -- <task>")
+
+        workspace = parts.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+
+        timeout = 900
+        model = "qwen2.5-coder:14b"
+        max_files = 6
+        while parts and parts[0] != "--":
+            opt = parts.pop(0)
+            if opt == "--timeout" and parts:
+                timeout = int(parts.pop(0))
+                continue
+            if opt == "--model" and parts:
+                model = parts.pop(0)
+                if model not in {"qwen2.5-coder:14b", "qwen2.5-coder:32b"}:
+                    raise ValueError("Unsupported edit model")
+                continue
+            if opt == "--max-files" and parts:
+                max_files = int(parts.pop(0))
+                continue
+            raise ValueError(f"Unknown GATEWAY_ADMIN_WORKSPACE_EDIT option before --: {opt}")
+
+        if not parts or parts[0] != "--":
+            raise ValueError("GATEWAY_ADMIN_WORKSPACE_EDIT requires -- before the task")
+        task = " ".join(parts[1:]).strip()
+        if not task:
+            raise ValueError("GATEWAY_ADMIN_WORKSPACE_EDIT task is empty")
+        if timeout < 30 or timeout > 1800:
+            raise ValueError("Timeout must be between 30 and 1800 seconds")
+        if max_files < 1 or max_files > 20:
+            raise ValueError("max-files must be between 1 and 20")
+
+        payload = {
+            "workspace": workspace,
+            "task": task,
+            "timeout": timeout,
+            "model": model,
+            "max_files": max_files,
+        }
+        result = self._gateway_admin_request("/v1/admin/workspace/edit", payload, timeout=max(timeout + 90, 180))
+        status = "WORKSPACE_EDIT_OK" if result.get("ok") else "WORKSPACE_EDIT_FAILED"
+        files = result.get("files") or []
+        files_text = "\n".join(f"- {item}" for item in files) if isinstance(files, list) else str(files)
+        git_status = str(result.get("git_status", ""))
+        diff = str(result.get("diff", ""))
+        model_text = str(result.get("model_text", ""))
+        error = str(result.get("error", "") or result.get("apply_output", ""))
+        return (
+            f"{status}\n"
+            f"workspace={result.get('workspace', workspace)}\n"
+            f"status={result.get('status', '(unknown)')}\n"
+            f"model={result.get('model', model)}\n"
+            f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
+            + (self._details("files", files_text) if files_text else "")
+            + (self._details("git_status", git_status) if git_status else "")
+            + (self._details("error", self._trim(error, 8000)) if error else "")
+            + self._details("diff", self._trim(diff, 24000))
+            + (self._details("model_text", self._trim(model_text, 12000)) if not result.get("ok") and model_text else "")
         )
 
     def _workspace_action_admin(self, text: str) -> str:

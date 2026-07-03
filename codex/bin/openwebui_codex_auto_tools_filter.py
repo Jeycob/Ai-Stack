@@ -165,6 +165,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_common_command(text)
         if not command:
+            command = self._natural_workspace_edit_command(text)
+        if not command:
             command = self._natural_workspace_delegate_command(text)
         if not command:
             command = self._natural_workspace_autopilot_command(text)
@@ -1517,6 +1519,43 @@ class Filter:
             if any(needle in lower for needle in needles):
                 return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {command}"
         return None
+
+    def _looks_like_workspace_edit(self, text: str) -> bool:
+        lower = text.lower()
+        return any(
+            cue in lower
+            for cue in (
+                "pridej",
+                "přidej",
+                "vytvor",
+                "vytvoř",
+                "uprav",
+                "edituj",
+                "napis",
+                "napiš",
+                "implementuj",
+                "dopln",
+                "doplň",
+                "add ",
+                "create ",
+                "modify ",
+                "implement ",
+                "webgl",
+                "canvas",
+                "html",
+                "kouli",
+                "sphere",
+            )
+        )
+
+    def _natural_workspace_edit_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace or not self._looks_like_workspace_edit(text):
+            return None
+        task = " ".join(self._non_repo_lines(text)).strip() or text.strip()
+        if not task:
+            return None
+        return f"GATEWAY_ADMIN_WORKSPACE_EDIT {workspace} --timeout 900 -- {shlex.quote(task[:1800])}"
 
     def _natural_workspace_action_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)

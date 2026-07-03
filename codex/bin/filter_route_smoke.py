@@ -114,6 +114,12 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         expected=("GATEWAY_ADMIN_EXPLAIN_FILE ai-stack README.md 1 400",),
         unexpected=("GATEWAY_ADMIN_READ_NUMBERED", "nemohl najít"),
     ),
+    RouteScenario(
+        name="workspace-direct-edit-webgl",
+        prompt="repozitar: Test2\npridej webgl soubor s kouli",
+        expected=("GATEWAY_ADMIN_WORKSPACE_EDIT Test2 --timeout 900", "webgl soubor s kouli"),
+        unexpected=("mentor_codex_local.py delegate", "Tuhle akci jsem sam"),
+    ),
 )
 
 
