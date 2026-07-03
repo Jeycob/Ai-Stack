@@ -38,6 +38,9 @@ Current routed ai-stack intents:
   be handled as an ai-stack deploy.
 - "ukaz deploy status", "ukaz log nasazeni", "jak dopadl deploy" should be
   handled as deploy status.
+- "vytvor nove repository Test2 a vygeneruj ssh klic" should be handled as a
+  local repository/workspace creation with a deploy SSH public key. Do not claim
+  that a GitHub repository was created unless a GitHub-specific tool confirms it.
 
 When a routed action is not recognized, respond with the missing capability in
 one sentence and propose the narrowest new tool/filter rule needed.

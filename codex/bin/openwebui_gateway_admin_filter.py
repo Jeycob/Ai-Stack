@@ -116,6 +116,8 @@ class Filter:
             return self._direct_response(body, self._run_workspace_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
             return self._direct_response(body, self._add_workspace_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CREATE_LOCAL_REPO"):
+            return self._direct_response(body, self._create_local_repo_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DEPLOY_STACK"):
             return self._direct_response(body, self._deploy_stack_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DEPLOY_STATUS"):
@@ -1093,6 +1095,65 @@ class Filter:
                 f"restart_exit_code={result.get('restart_exit_code')}",
                 self._details("restart_output", self._trim(str(result.get("restart_output", "")), 12000)),
             ])
+        return "\n".join(lines).rstrip()
+
+    def _create_local_repo_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_CREATE_LOCAL_REPO\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
+        parts = shlex.split(m.group(1))
+        if not parts:
+            raise ValueError("Usage: GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
+
+        name = parts.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+            raise ValueError("Unsafe repository name")
+        payload = {"name": name}
+
+        while parts:
+            opt = parts.pop(0)
+            if opt == "--path" and parts:
+                payload["path"] = parts.pop(0)
+                continue
+            if opt == "--port" and parts:
+                payload["port"] = int(parts.pop(0))
+                continue
+            if opt == "--cpus" and parts:
+                payload["cpus"] = int(parts.pop(0))
+                continue
+            if opt == "--memory" and parts:
+                payload["memory"] = parts.pop(0)
+                continue
+            if opt == "--default":
+                payload["default"] = True
+                continue
+            if opt == "--restart":
+                payload["restart"] = True
+                continue
+            raise ValueError(f"Unknown GATEWAY_ADMIN_CREATE_LOCAL_REPO option: {opt}")
+
+        result = self._gateway_admin_request("/v1/admin/repository/create-local", payload, timeout=420 if payload.get("restart") else 120)
+        workspace = result.get("workspace") or {}
+        key = result.get("ssh_key") or {}
+        status = "LOCAL_REPO_CREATE_OK" if result.get("ok") else "LOCAL_REPO_CREATE_FAILED"
+        lines = [
+            status,
+            f"name={result.get('name', name)}",
+            f"path={result.get('path', '(unknown)')}",
+            f"workspace_exit_code={workspace.get('exit_code')}",
+            f"workspace_restart_exit_code={workspace.get('restart_exit_code', '(not requested)')}",
+            f"ssh_key_status={key.get('status', '(unknown)')}",
+            f"private_key_path={key.get('private_key_path', '(unknown)')}",
+            f"public_key_path={key.get('public_key_path', '(unknown)')}",
+            f"private_key_value=NOT_PRINTED",
+            f"github_repo_created={result.get('github_repo_created', False)}",
+            f"github_note={result.get('github_note', '')}",
+            self._details("public_key", str(key.get("public_key", ""))),
+            self._details("git_status", str(result.get("git_status", ""))),
+            self._details("workspace_output", self._trim(str(workspace.get("output", "")), 12000)),
+        ]
+        if workspace.get("restart_output"):
+            lines.append(self._details("restart_output", self._trim(str(workspace.get("restart_output", "")), 12000)))
         return "\n".join(lines).rstrip()
 
     def _deploy_stack_admin(self, text: str) -> str:

@@ -1,7 +1,7 @@
 """
 title: Codex Auto Tools Filter
 author: OpenAI Codex
-version: 0.1.2
+version: 0.1.3
 description: Dynamically attaches Codex toolsets and routes safe codex-local natural-language admin intents.
 """
 
@@ -101,10 +101,10 @@ class Filter:
             return None
         if "GATEWAY_ADMIN_" in text:
             return None
-        if not self._mentions_ai_stack(text):
-            return None
 
-        command = self._natural_ai_stack_command(text)
+        command = self._natural_create_repo_command(text)
+        if not command and self._mentions_ai_stack(text):
+            command = self._natural_ai_stack_command(text)
         if not command:
             return None
 
@@ -148,6 +148,27 @@ class Filter:
             return "GATEWAY_ADMIN_DEPLOY_STATUS"
         if any(word in lower for word in deploy_words):
             return "GATEWAY_ADMIN_DEPLOY_STACK"
+        return None
+
+    def _natural_create_repo_command(self, text: str) -> str | None:
+        lower = text.lower()
+        has_create = any(word in lower for word in ["vytvor", "vytvoř", "zaloz", "založ", "create"])
+        has_repo = any(word in lower for word in ["repository", "repozitar", "repozitář", "repo "])
+        if not (has_create and has_repo):
+            return None
+
+        patterns = [
+            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:nove|nové|new\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            name = match.group(1)
+            if name.lower() in {"ai-stack", "smoke"}:
+                return None
+            return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {name} --restart"
         return None
 
     def _default_tool_ids(self, model: str, text: str) -> list[str]:

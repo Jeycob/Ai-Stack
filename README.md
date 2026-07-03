@@ -91,9 +91,16 @@ Příklad rychlého read-only scanu workspace:
 
 Proč se běžný chat sám nepustí do akce: modely `codex-local-*` mají normální chat cestu schválně read-only. Umí číst snapshot workspace, vysvětlovat a navrhovat plán nebo patch. Rizikové akce jako shell, instalace balíčků, generování SSH klíčů, vytváření GitHub repozitářů, push a reálné editace souborů musí jít přes explicitní whitelisted admin/tool workflow. Gateway takový požadavek v běžném chatu zachytí a místo prázdné nebo zavádějící odpovědi vysvětlí, že nic neprovedla.
 
-Příklad požadavku na nový úzký tool:
+Příklad vytvoření nového lokálního repozitáře, deploy SSH klíče a workspace:
 
-    Dopln whitelisted admin tool pro přípravu nového GitHub repozitáře: vytvoř pouze lokální složku, git init, README, vygeneruj public SSH key a vrať public key k ručnímu vložení do GitHubu. Nepushuj bez potvrzení.
+    Vytvoř nové repository Test2 a vygeneruj mi ssh klíč pro něj.
+
+Auto-tools filter tento přirozený prompt přeloží na:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart
+
+Tento workflow vytvoří pouze lokální repo pod `/mnt/c/Repositories`, inicializuje Git, přidá README, vygeneruje private key do ignorovaného `codex/state/ssh/`, vrátí public key a zaregistruje workspace. Skutečné GitHub repo nevytváří; na to je potřeba GitHub API token nebo autentizovaný `gh` tool. SSH klíč sám o sobě neumí zakládat GitHub repozitáře.
 
 Příklad čtení whitelisted souboru:
 
@@ -144,7 +151,7 @@ Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a 
 
 Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `tail` nebo `log_tail` balí do rozbalovacích `<details>` bloků, aby chat zůstal čitelný. OpenWebUI raw HTML v Markdownu escapuje, proto `openwebui/loader.js` tyto doslovné bloky po vykreslení zprávy převádí na skutečné lokální dropdowny.
 
-`Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat úzké přirozené požadavky nad `ai-stack`. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá explicitní whitelisted admin workflow.
+`Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat úzké přirozené požadavky. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`; “vytvoř nové repository Test2 a vygeneruj ssh klíč” přepíše na `GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá explicitní whitelisted admin workflow.
 
 System prompt pro stránku nastavení modelu v OpenWebUI je verzovaný v `docs/codex-local-model-system-prompt.md`. Jeho úloha je naučit model mluvit lidsky a nepodsouvat uživateli interní markery; skutečné provedení akcí má stále zajišťovat filter/tool vrstva.
 

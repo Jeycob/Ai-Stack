@@ -52,9 +52,9 @@ OpenWebUI model settings prompt pro `codex-local-*` je verzovany v
 lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
 
 `Codex Auto Tools Filter` ma rozpoznavat uzke prirozene intenty typu "pullni
-ai-stack a nasad" nebo "ukaz deploy status" a prelozit je na auditovatelne
-whitelisted admin flow. Cilem je, aby uzivatel nemusel znat interni
-`GATEWAY_ADMIN_*` markery.
+ai-stack a nasad", "ukaz deploy status" nebo "vytvor nove repository Test2 a
+vygeneruj ssh klic" a prelozit je na auditovatelne whitelisted admin flow.
+Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
 ## Bezpecnostni pravidla
 
@@ -82,6 +82,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_SMOKE [workspace]`: spusti gateway smoke test.
 - `GATEWAY_ADMIN_GIT_PUSH <branch> <message>`: commitne a pushne pouze allowed cesty.
 - `GATEWAY_ADMIN_SSH_KEYGEN`: vygeneruje SSH klic do ignorovane runtime cesty.
+- `GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]`: vytvori lokalni repo pod `/mnt/c/Repositories`, inicializuje Git, prida README, vygeneruje ignorovany deploy SSH klic, vrati public key a zaregistruje workspace. Nevytvari GitHub repo; k tomu je potreba GitHub API token nebo autentizovany `gh` tool.
 - `GATEWAY_ADMIN_GIT_UNTRACK_IGNORED`: pomuze odstranit ignorovane runtime soubory z indexu, pokud se tam omylem dostaly.
 
 ## Workflow zmeny

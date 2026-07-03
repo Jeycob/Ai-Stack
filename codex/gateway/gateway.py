@@ -306,6 +306,172 @@ def admin_add_workspace(payload):
         result["ok"] = result["ok"] and bash.returncode == 0
     return result
 
+def safe_child_path(base_root, path):
+    base = Path(base_root).resolve(strict=False)
+    target = Path(path)
+    if not target.is_absolute():
+        target = base / target
+    target = target.resolve(strict=False)
+    try:
+        target.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"Path must stay under {base}") from exc
+    return target
+
+def run_text(cmd, cwd, timeout=60):
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
+    return proc.returncode, proc.stdout.strip()
+
+def generate_repo_ssh_key(name, comment):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+        raise ValueError("Unsafe SSH key name")
+    if "\n" in comment or len(comment) > 160:
+        raise ValueError("SSH key comment must be one line up to 160 chars")
+
+    key_dir = REPO_ROOT / "codex/state/ssh"
+    key_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(key_dir, 0o700)
+    except OSError:
+        pass
+
+    key_path = key_dir / f"{name}_ed25519"
+    pub_path = Path(str(key_path) + ".pub")
+    if key_path.exists():
+        if not pub_path.exists():
+            rc, out = run_text(["ssh-keygen", "-y", "-f", str(key_path)], REPO_ROOT, 20)
+            if rc != 0:
+                raise RuntimeError("Existing private key found, but public key could not be derived:\n" + out)
+            pub_path.write_text(out.strip() + "\n", encoding="utf-8")
+        status = "SSH_KEY_EXISTS"
+    else:
+        if pub_path.exists():
+            raise FileExistsError(f"Public key already exists without private key: {pub_path}")
+        rc, out = run_text(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(key_path)],
+            REPO_ROOT,
+            30,
+        )
+        if rc != 0:
+            raise RuntimeError("ssh-keygen failed:\n" + out)
+        status = "SSH_KEY_READY"
+
+    for path, mode in [(key_path, 0o600), (pub_path, 0o644)]:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+
+    return {
+        "status": status,
+        "private_key_path": key_path.relative_to(REPO_ROOT).as_posix(),
+        "public_key_path": pub_path.relative_to(REPO_ROOT).as_posix(),
+        "private_key_mode": oct(key_path.stat().st_mode & 0o777),
+        "public_key_mode": oct(pub_path.stat().st_mode & 0o777),
+        "public_key": pub_path.read_text(encoding="utf-8").strip(),
+    }
+
+def admin_create_local_repo(payload):
+    name = str(payload.get("name") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+        raise ValueError("Unsafe repository name")
+
+    base_root = os.getenv("CODEX_REPOSITORIES_ROOT", "/mnt/c/Repositories")
+    repo_path = safe_child_path(base_root, payload.get("path") or name)
+    restart = bool(payload.get("restart", False))
+    cpus = int(payload.get("cpus", 8))
+    memory = str(payload.get("memory", "16g"))
+    port = payload.get("port")
+    default = bool(payload.get("default", False))
+
+    if repo_path.exists() and not repo_path.is_dir():
+        raise FileExistsError(f"Repository path exists but is not a directory: {repo_path}")
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    existing_entries = [p.name for p in repo_path.iterdir() if p.name != ".git"]
+    git_dir = repo_path / ".git"
+    if existing_entries and not git_dir.is_dir():
+        raise FileExistsError(f"Repository path is not empty and is not a git repo: {repo_path}")
+
+    commands = []
+    if not git_dir.is_dir():
+        rc, out = run_text(["git", "init", "-b", "main"], repo_path, 60)
+        if rc != 0:
+            rc, out = run_text(["git", "init"], repo_path, 60)
+            if rc == 0:
+                branch_rc, branch_out = run_text(["git", "branch", "-M", "main"], repo_path, 30)
+                out = out + ("\n" + branch_out if branch_out else "")
+                rc = branch_rc
+        commands.append(["git init", rc, out])
+        if rc != 0:
+            raise RuntimeError("git init failed:\n" + out)
+
+    readme = repo_path / "README.md"
+    if not readme.exists():
+        readme.write_text(
+            f"# {name}\n\nLocal workspace created by ai-stack codex-local.\n",
+            encoding="utf-8",
+        )
+
+    gitignore = repo_path / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(".env\n__pycache__/\n*.pyc\nnode_modules/\ndist/\nbuild/\n", encoding="utf-8")
+
+    for cmd in [
+        ["git", "config", "user.email", "ai-sandbox@local"],
+        ["git", "config", "user.name", "AI Sandbox"],
+    ]:
+        rc, out = run_text(cmd, repo_path, 30)
+        commands.append([" ".join(cmd), rc, out])
+        if rc != 0:
+            raise RuntimeError(f"{' '.join(cmd)} failed:\n{out}")
+
+    rc, head_out = run_text(["git", "rev-parse", "--verify", "HEAD"], repo_path, 20)
+    initial_commit = rc != 0
+    if initial_commit:
+        for cmd in [
+            ["git", "add", "README.md", ".gitignore"],
+            ["git", "commit", "-m", "Initial commit"],
+        ]:
+            rc, out = run_text(cmd, repo_path, 60)
+            commands.append([" ".join(cmd), rc, out])
+            if rc != 0:
+                raise RuntimeError(f"{' '.join(cmd)} failed:\n{out}")
+
+    key = generate_repo_ssh_key(f"github-{name}", f"{name}@local")
+    workspace_payload = {
+        "name": name,
+        "path": str(repo_path),
+        "cpus": cpus,
+        "memory": memory,
+        "default": default,
+        "restart": restart,
+    }
+    if port is not None:
+        workspace_payload["port"] = int(port)
+    workspace_result = admin_add_workspace(workspace_payload)
+
+    rc, status_out = run_text(["git", "status", "--short", "--branch"], repo_path, 30)
+    return {
+        "ok": bool(workspace_result.get("ok")) and rc == 0,
+        "action": "create_local_repo",
+        "name": name,
+        "path": str(repo_path),
+        "workspace": workspace_result,
+        "ssh_key": key,
+        "github_repo_created": False,
+        "github_note": "GitHub repo creation needs a GitHub API token or an authenticated gh tool; SSH keys alone cannot create GitHub repositories.",
+        "git_status": status_out,
+        "commands": commands,
+    }
+
 def admin_run_workspace(payload):
     workspace = str(payload.get("workspace") or "").strip()
     command = payload.get("command") or []
@@ -669,6 +835,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_add_workspace(payload))
+            if self.path == "/v1/admin/repository/create-local":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_create_local_repo(payload))
             if self.path == "/v1/admin/workspace/run":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)
