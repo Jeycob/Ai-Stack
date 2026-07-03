@@ -13,8 +13,11 @@ OWUI_CHAT_SMOKE_PROMPT="${OWUI_CHAT_SMOKE_PROMPT:-repo: ${WORKSPACE}\nOdpovez je
 OWUI_CHAT_SCENARIOS="${OWUI_CHAT_SCENARIOS:-git-status,next-step}"
 SUMMARY_ONLY="${CHECK_AI_STACK_SUMMARY_ONLY:-0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEFAULT_KEY_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/state/openwebui-api.key"
 OWUI_KEY_FILE="${OWUI_API_KEY_FILE:-$DEFAULT_KEY_FILE}"
+WSL_BOOT_WRAPPER="${WSL_BOOT_WRAPPER:-$REPO_ROOT/codex/bin/wsl_boot_ai_stack.sh}"
+WSL_CONF="${WSL_CONF:-/etc/wsl.conf}"
 
 failures=0
 total_checks=0
@@ -80,6 +83,47 @@ check_json_contains() {
   fi
 }
 
+is_wsl() {
+  grep -qi microsoft /proc/version 2>/dev/null
+}
+
+check_file_exists() {
+  local label="$1"
+  local path="$2"
+  if [ "$SUMMARY_ONLY" != "1" ]; then
+    printf '[check] %s ... ' "$label"
+  fi
+  if [ -f "$path" ]; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf 'OK\n'
+    record_summary "$label" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && printf 'FAIL (%s missing)\n' "$path"
+    failures=$((failures + 1))
+    record_summary "$label" "FAIL"
+  fi
+}
+
+check_wsl_boot_config() {
+  local label="WSL boot config"
+  if ! is_wsl; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] %s ... SKIP (not WSL)\n' "$label"
+    record_summary "$label" "SKIP"
+    return
+  fi
+  if [ ! -f "$WSL_CONF" ]; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] %s ... SKIP (%s missing)\n' "$label" "$WSL_CONF"
+    record_summary "$label" "SKIP"
+    return
+  fi
+  if grep -Fq "wsl_boot_ai_stack.sh" "$WSL_CONF"; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] %s ... OK\n' "$label"
+    record_summary "$label" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] %s ... SKIP (wrapper not configured)\n' "$label"
+    record_summary "$label" "SKIP"
+  fi
+}
+
 emit_summary() {
   local verdict="OK"
   if [ "$failures" -ne 0 ]; then
@@ -105,6 +149,15 @@ if [ "$SUMMARY_ONLY" != "1" ]; then
   printf 'workspace=%s model=%s\n' "$WORKSPACE" "$MODEL"
 fi
 
+if [ "${SKIP_WSL_BOOT_CHECK:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] WSL boot wrapper ... SKIP (disabled)\n'
+  record_summary "WSL boot wrapper" "SKIP"
+  record_summary "WSL boot config" "SKIP"
+else
+  check_file_exists "WSL boot wrapper" "$WSL_BOOT_WRAPPER"
+  check_wsl_boot_config
+fi
+
 if [ "${SKIP_OPENWEBUI:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI config endpoint ... SKIP (self-check disabled)\n'
   record_summary "OpenWebUI config endpoint" "SKIP"
@@ -116,7 +169,10 @@ check_json_contains 'Codex gateway health' "$CODEX_GATEWAY_URL/health" '"ok": tr
 check_json_contains 'Codex gateway model alias' "$CODEX_GATEWAY_URL/v1/models" "$MODEL"
 check_json_contains 'Codex gateway workspace registry' "$CODEX_GATEWAY_URL/v1/workspaces" "$WORKSPACE"
 
-if command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/codex_gateway_smoke.py" ]; then
+if [ "${SKIP_GATEWAY_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke ... SKIP (disabled)\n'
+  record_summary "Codex gateway smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/codex_gateway_smoke.py" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke ...\n'
   gateway_smoke_log="$(mktemp)"
   if python3 "$SCRIPT_DIR/codex_gateway_smoke.py" --base-url "$CODEX_GATEWAY_URL" --workspace "$WORKSPACE" --model "$MODEL" --timeout 60 >"$gateway_smoke_log" 2>&1; then

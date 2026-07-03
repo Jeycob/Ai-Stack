@@ -123,6 +123,12 @@ stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po
 gateway smoke pusti i `owui_chat_smoke.py`. Bez key se tenhle krok jen preskoci
 misto failu. Vypnout ho jde pres `SKIP_OWUI_CHAT_SMOKE=1`.
 
+Stejny healthcheck kontroluje i pritomnost WSL boot wrapperu a jestli
+`/etc/wsl.conf` wrapper zminuje. Chybejici autostart config je jen `SKIP`,
+protoze primarni start muze porad resit Windows Task Scheduler.
+Pro levne endpoint-only kontroly bez modeloveho smoke pouzij
+`SKIP_GATEWAY_SMOKE=1 SKIP_OWUI_CHAT_SMOKE=1 SKIP_OWUI_CHAT_SCENARIOS=1`.
+
 Healthcheck umi volitelne pridat i levne user-like scenare pres
 `owui_chat_scenarios.py`. Vychozi sada je zamerne kratka (`git-status,next-step`),
 aby se overil prirozeny route -> filter -> gateway -> capability -> visible
