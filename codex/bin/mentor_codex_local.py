@@ -630,6 +630,7 @@ def infer_workspace_action(task: str) -> str:
         ("build", ("postav projekt", "build project", "udělej build", "udelej build", "spust build", "spusť build")),
         ("lint", ("spust lint", "spusť lint", "run lint", "zkontroluj lint", "lint projekt")),
         ("verify", ("over projekt", "ověř projekt", "zkontroluj projekt", "verify project", "proveď ověření", "proveď overeni")),
+        ("smoke", ("zkus to rozbehnout", "zkus to rozběhnout", "rozbehni projekt", "rozběhni projekt", "run smoke", "smoke test", "startup smoke", "ověř startup", "over startup")),
     ]
     for action, needles in action_map:
         if any(needle in lower for needle in needles):
@@ -907,7 +908,7 @@ def classify_task(task: str) -> dict[str, str]:
             "action",
             "The task explicitly requests a standard workspace capability step, so we can route it directly instead of stopping at audit-only review.",
             "high",
-            "Install/test/build/lint/verify are already bounded workspace capabilities, so broader runtime access is unnecessary here.",
+            "Install/test/build/lint/verify/smoke are already bounded workspace capabilities, so broader runtime access is unnecessary here.",
             "next_workspace_capability",
             "If the requested step needs more than the standard workspace capability set, expose that next capability explicitly instead of widening action flow.",
             action_name=action_name,
@@ -980,11 +981,11 @@ def classify_task(task: str) -> dict[str, str]:
         return result(
             "capability",
             "autopilot",
-            "The task is primarily about audited install/test/build/lint progression inside the workspace.",
+            "The task is primarily about audited install/test/build/lint/smoke progression inside the workspace.",
             "medium",
             "Execution is requested, but standard capability steps should be tried before any patch-oriented or broader runtime action.",
             "next_workspace_capability",
-            "If the next useful step is outside install/test/build/lint, expose that next step as a named audited capability instead of widening autopilot blindly.",
+            "If the next useful step is outside install/test/build/lint/smoke, expose that next step as a named audited capability instead of widening autopilot blindly.",
         )
     return result(
         "review",
@@ -1584,6 +1585,7 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
             "build": "Spusť build a vrať stručný výsledek.",
             "lint": "Spusť lint a vrať stručný výsledek.",
             "verify": "Ověř projekt a vrať stručný audit výsledků.",
+            "smoke": "Zkus projekt auditovaně rozběhnout a vrať stručný startup výsledek.",
         }
         return f"repo: {workspace}\n{action_prompts.get(action_name, task)}"
     if workflow == "create-repo":
@@ -1687,7 +1689,9 @@ def scaffold_loop_followup_candidates(loop: str, recipe: str) -> list[str]:
             mapped = ["test"]
         elif "build" in part or "configure" in part or "package" in part:
             mapped = ["build"]
-        elif "smoke" in part or "run" in part or "import" in part or "typecheck" in part:
+        elif "smoke" in part or "run" in part:
+            mapped = ["smoke", "verify"]
+        elif "import" in part or "typecheck" in part:
             mapped = ["verify"]
         for action in mapped:
             if bootstrap_recipe_covers_action(recipe, action):

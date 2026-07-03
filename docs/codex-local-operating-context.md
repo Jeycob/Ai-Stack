@@ -109,7 +109,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_GIT_DIFF [path]`: ukaze diff jen pro whitelisted commitovatelne soubory. Bezpecne pred pushem.
 - `GATEWAY_ADMIN_REPO_GUARD [workspace] [branch]`: read-only kontrola registrovaneho workspace, branch, dirty stavu a suspicious/sensitive cest bez vypisu obsahu souboru.
 - `GATEWAY_ADMIN_WORKSPACE_SCAN [workspace]`: read-only scan manifestu, jazyku, package script names a navrzenych build/test prikazu bez spousteni prikazu.
-- `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify> [--timeout seconds] [--env KEY=VALUE] [--dry-run]`: capability-based provedeni beznych developerskych akci nad registrovanym workspace. Resolver vybere prikaz z manifestu a scriptu projektu a spusti ho auditovane pres gateway. `verify` se snazi projekt overit agenticky jako sekvenci `lint -> test -> build` s preskakovanim nepodporovanych kroku.
+- `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--env KEY=VALUE] [--dry-run]`: capability-based provedeni beznych developerskych akci nad registrovanym workspace. Resolver vybere prikaz z manifestu a scriptu projektu a spusti ho auditovane pres gateway. `verify` se snazi projekt overit agenticky jako sekvenci `lint -> test -> build` s preskakovanim nepodporovanych kroku. `smoke` zkusi najit standardni startup entrypoint a pusti ho jen v kratkem auditovanem okne, aby slo bezpecne odpovedet i na use-case "zkus to rozbehnout a vrat vysledek".
 - `GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]`: vyssi capability nad workspace. Nejdriv si pripravi `verify --dry-run`, z povolenych kroku vybere dalsi bezpecne capability kroky a bud je jen doporuci, nebo je rovnou provede. Po kazdem uspesnem kroku si plan prepocita a vraci `stop_reason`, aby bylo jasne, jestli skoncil kvuli limitu kroku, chybe nebo tomu, ze uz neni co delat. Pokud nenajde nic spustitelneho, vraci i `recommendation` odvozenou ze scanneru projektu, plus `patch_target`, `patch_hint`, `patch_summary` a `read_command`, aby agent neskoncil jen prazdnym "nic nejde", ale mel i smer k dalsimu patche a pripraveny dalsi read-only krok. Pro prirozene pozadavky typu "over projekt a pokracuj sam" je to preferovana cesta; bezny guardrail je `max_steps=2`.
 - `GATEWAY_ADMIN_READ <path>`: precte whitelisted soubor bez cisel radku.
 - `GATEWAY_ADMIN_READ_NUMBERED <path> [start] [end]`: precte whitelisted soubor s realnymi cisly radku. Pouzivat pred presnymi patchemi.
@@ -140,7 +140,7 @@ auditovanych capabilities. Prakticky to znamena:
 
 - pouzivat `workspace-run` pro read-only a explicitni prikazy uvnitr
   registrovaneho workspace,
-- pouzivat `workspace-action` pro install/test/build/lint/verify,
+- pouzivat `workspace-action` pro install/test/build/lint/verify/smoke,
 - pro vicekrokovou praci pouzivat `mentor_codex_local.py audit` nebo
   `mentor_codex_local.py autopilot`,
 - pro nove repo/workspace use-casy, kde bootstrap hned prechazi do dalsi prace,

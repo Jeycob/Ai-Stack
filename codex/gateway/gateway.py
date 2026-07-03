@@ -656,8 +656,8 @@ def admin_workspace_action(payload):
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
-    if action not in {"install", "test", "build", "lint", "verify"}:
-        raise ValueError("action must be one of install, test, build, lint, verify")
+    if action not in {"install", "test", "build", "lint", "verify", "smoke"}:
+        raise ValueError("action must be one of install, test, build, lint, verify, smoke")
     if timeout < 1 or timeout > 3600:
         raise ValueError("timeout must be between 1 and 3600")
     if not isinstance(env_map, dict):

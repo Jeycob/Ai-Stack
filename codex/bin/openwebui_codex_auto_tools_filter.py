@@ -1275,6 +1275,7 @@ class Filter:
             (["postav projekt", "build project", "udělej build", "udelej build", "spust build", "spusť build"], "build", 1800),
             (["spust lint", "spusť lint", "run lint", "zkontroluj lint", "lint projekt"], "lint", 1200),
             (["over projekt", "ověř projekt", "zkontroluj projekt", "verify project", "proveď ověření", "proveď overeni"], "verify", 2400),
+            (["zkus to rozbehnout", "zkus to rozběhnout", "rozbehni projekt", "rozběhni projekt", "run smoke", "smoke test", "startup smoke", "ověř startup", "over startup"], "smoke", 900),
         ]
         for needles, action, timeout in actions:
             if any(needle in lower for needle in needles):

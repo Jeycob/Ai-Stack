@@ -48,8 +48,8 @@ Current routed ai-stack intents:
   that a GitHub repository was created unless a GitHub-specific tool confirms it.
 - "zkontroluj git status", "ukaz git remote", and "ukaz posledni commity" in a
   selected workspace should use the broad audited workspace runner.
-- "nainstaluj zavislosti", "spust testy", "postav projekt", "spust lint", and
-  "over projekt"
+- "nainstaluj zavislosti", "spust testy", "postav projekt", "spust lint",
+  "over projekt", and "zkus to rozbehnout"
   in a selected workspace should use the broad audited workspace action
   capability that resolves the right command from project manifests.
 - Broader requests such as "ověř projekt a pokračuj sám", "udělej co je potřeba"
@@ -62,7 +62,7 @@ Current routed ai-stack intents:
   the safe ai-stack scope, prefer preparing and applying that patch through the
   audited apply-safe loop instead of replying that you are only read-only.
 - For broader "dotáhni to" repository requests, prefer a layered workflow:
-  first run capability steps such as install/test/build/lint, and only if they
+  first run capability steps such as install/test/build/lint/smoke, and only if they
   no longer move the task forward, switch into read -> patch-plan -> safe apply.
 - When an external mentor/helper chooses an orchestration layer for you, follow
   it cleanly instead of reverting to a generic read-only explanation.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +17,22 @@ from workspace_scan import collect, load_workspace
 
 
 DEFAULT_WORKSPACES_FILE = "codex/workspaces.json"
-ALLOWED_ACTIONS = {"install", "test", "build", "lint", "verify"}
+ALLOWED_ACTIONS = {"install", "test", "build", "lint", "verify", "smoke"}
+SMOKE_READY_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"http://127\.0\.0\.1",
+        r"http://localhost",
+        r"listening on",
+        r"running on",
+        r"running at",
+        r"ready in",
+        r"ready on",
+        r"compiled successfully",
+        r"development server at",
+        r"uvicorn running on",
+    )
+]
 
 
 class ActionError(RuntimeError):
@@ -59,6 +75,16 @@ def package_script_command(script_name: str, package_scripts: list[str]) -> list
     return ["npm", "run", script_name]
 
 
+def smoke_package_script_command(package_scripts: list[str]) -> list[str] | None:
+    if "smoke" in package_scripts:
+        return ["npm", "run", "smoke"]
+    if "dev" in package_scripts:
+        return ["npm", "run", "dev", "--", "--host", "127.0.0.1"]
+    if "start" in package_scripts:
+        return ["npm", "run", "start", "--", "--host", "127.0.0.1"]
+    return None
+
+
 def python_test_command(root: Path, manifest_set: set[str]) -> list[str] | None:
     if not {"pyproject.toml", "requirements.txt"} & manifest_set:
         return None
@@ -78,6 +104,37 @@ def python_lint_command(root: Path) -> list[str] | None:
     return None
 
 
+def read_small_text(path: Path) -> str:
+    if not path.is_file() or path.stat().st_size > 512_000:
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def fastapi_smoke_command(root: Path) -> list[str] | None:
+    for stem in ("main", "app"):
+        candidate = root / f"{stem}.py"
+        text = read_small_text(candidate)
+        if "FastAPI(" in text and re.search(r"(?m)^\s*app\s*=", text):
+            return [sys.executable, "-m", "uvicorn", f"{stem}:app", "--host", "127.0.0.1", "--port", "8000"]
+    return None
+
+
+def flask_smoke_command(root: Path) -> list[str] | None:
+    for stem in ("app", "main"):
+        candidate = root / f"{stem}.py"
+        text = read_small_text(candidate)
+        if "Flask(" in text:
+            return [sys.executable, "-m", "flask", "--app", stem, "run", "--host", "127.0.0.1", "--port", "5000"]
+    return None
+
+
+def django_smoke_command(root: Path) -> list[str] | None:
+    manage = root / "manage.py"
+    if manage.is_file():
+        return [sys.executable, "manage.py", "runserver", "127.0.0.1:8000"]
+    return None
+
+
 def gradle_command(root: Path, task: str) -> list[str] | None:
     wrapper = root / "gradlew"
     if wrapper.is_file():
@@ -91,6 +148,34 @@ def mvn_command(task: str) -> list[str] | None:
     if shutil.which("mvn") is None:
         return None
     return ["mvn", task]
+
+
+def resolve_smoke(root: Path, manifest_set: set[str], package_scripts: list[str]) -> tuple[list[str], str]:
+    checks = [
+        ("node-smoke-script", smoke_package_script_command(package_scripts) if "package.json" in manifest_set and command_available(["npm"], root) else None),
+        ("django-runserver", django_smoke_command(root)),
+        ("fastapi-uvicorn", fastapi_smoke_command(root)),
+        ("flask-run", flask_smoke_command(root)),
+    ]
+    for label, command in checks:
+        if command and command_available(command, root):
+            return command, label
+    raise ActionError(
+        "No supported smoke command found. "
+        "Expected one of: package.json script smoke/dev/start, manage.py for Django, or main.py/app.py with FastAPI or Flask app."
+    )
+
+
+def smoke_ready(output: str) -> bool:
+    return any(pattern.search(output) for pattern in SMOKE_READY_PATTERNS)
+
+
+def normalize_output(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def resolve_action(root: Path, action: str) -> tuple[list[str], str]:
@@ -133,6 +218,8 @@ def resolve_action(root: Path, action: str) -> tuple[list[str], str]:
             ("node", package_script_command("lint", package_scripts)),
             ("python", python_lint_command(root)),
         ]
+    elif action == "smoke":
+        return resolve_smoke(root, manifest_set, package_scripts)
     else:
         raise ActionError(f"Unsupported action: {action}")
 
@@ -271,6 +358,63 @@ def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> 
     }
 
 
+def run_smoke(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> dict[str, object]:
+    started = time.time()
+    result = collect(root, 80)
+    manifest_set = {Path(rel).name for rel in result["manifests"]}
+    package_scripts = result["package_scripts"]
+    command, resolved_from = resolve_smoke(root, manifest_set, package_scripts)
+    smoke_window = max(8, min(timeout, 25))
+
+    if dry_run:
+        return {
+            "ok": True,
+            "planned_only": True,
+            "action": "smoke",
+            "root": str(root),
+            "command": command,
+            "resolved_from": resolved_from,
+            "smoke_window_s": smoke_window,
+            "duration_ms": int((time.time() - started) * 1000),
+            "output": "",
+        }
+
+    smoke_env = env.copy()
+    smoke_env.setdefault("HOST", "127.0.0.1")
+    smoke_env.setdefault("CI", "1")
+    smoke_env.setdefault("PYTHONUNBUFFERED", "1")
+
+    wrapped_command = ["timeout", "--signal=TERM", f"{smoke_window}s", *command]
+    proc = subprocess.run(
+        wrapped_command,
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=max(timeout + 5, smoke_window + 5),
+        env=smoke_env,
+    )
+    output = normalize_output(proc.stdout)
+    startup_detected = smoke_ready(output)
+    ok = startup_detected and proc.returncode in {0, 124, 143}
+
+    return {
+        "ok": ok,
+        "planned_only": False,
+        "action": "smoke",
+        "root": str(root),
+        "command": command,
+        "resolved_from": resolved_from,
+        "wrapped_command": wrapped_command,
+        "smoke_window_s": smoke_window,
+        "startup_detected": startup_detected,
+        "timed_window_exit": proc.returncode == 124,
+        "duration_ms": int((time.time() - started) * 1000),
+        "exit_code": proc.returncode,
+        "output": output,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Resolve and run a common developer action in a workspace.")
     parser.add_argument("action", choices=sorted(ALLOWED_ACTIONS))
@@ -298,6 +442,8 @@ def main() -> int:
     try:
         if args.action == "verify":
             result = run_verify(root, args.timeout, env, args.dry_run)
+        elif args.action == "smoke":
+            result = run_smoke(root, args.timeout, env, args.dry_run)
         else:
             command, resolved_from = resolve_action(root, args.action)
             if args.dry_run:
@@ -341,7 +487,7 @@ def main() -> int:
             "command": exc.cmd if isinstance(exc.cmd, list) else [str(exc.cmd)],
             "duration_ms": int((time.time() - started) * 1000),
             "timeout": args.timeout,
-            "output": (exc.stdout or "") + (exc.stderr or ""),
+            "output": normalize_output(exc.stdout) + normalize_output(exc.stderr),
             "error": "timeout",
         }
     except ActionError as exc:
@@ -366,6 +512,8 @@ def main() -> int:
             print(f"resolved_from={result['resolved_from']}")
         if "command" in result:
             print(f"command={' '.join(result['command'])}")
+        if "wrapped_command" in result:
+            print(f"wrapped_command={' '.join(result['wrapped_command'])}")
         if "verify_steps" in result:
             print("verify_steps:")
             for step in result["verify_steps"]:
@@ -384,6 +532,12 @@ def main() -> int:
                 print(line)
         print(f"planned_only={result.get('planned_only', False)}")
         print(f"duration_ms={result['duration_ms']}")
+        if "smoke_window_s" in result:
+            print(f"smoke_window_s={result['smoke_window_s']}")
+        if "startup_detected" in result:
+            print(f"startup_detected={result['startup_detected']}")
+        if "timed_window_exit" in result:
+            print(f"timed_window_exit={result['timed_window_exit']}")
         if "exit_code" in result:
             print(f"exit_code={result['exit_code']}")
         if "timeout" in result:
