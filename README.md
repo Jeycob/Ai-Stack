@@ -324,6 +324,8 @@ Další vrstva je `bootstrap-dispatch`. Ten už z téhož zadání vezme konkré
 
 Nově navíc `bootstrap-dispatch` nekončí jen u prvního scaffold commandu. Ze `scaffold_loop` si odvodí další kandidátní capability kroky (`install`, `verify`, `build`, `test`, `lint`), zohlední co už pokryl samotný recipe, a po úspěšném bootstrapu zkusí najít krátkou podporovanou posloupnost dalších workspace akcí přes existující `workspace_action.py`. Tím se další kroky opírají o reuse už hotových capability resolverů místo nové bespoke logiky. Sekvence zůstává krátká a guardrailed; při prvním failu se zastaví.
 
+Kvůli tokenům má mentor nově i lehčí `compact execution brief` větev. Používá se tam, kde jde hlavně o orchestration handoff mezi helpery a není potřeba znovu posílat celý reasoning blok. Zachovává jen minimum: `workspace`, `workflow`, případně `solution_profile`, `public_stack`, `scaffold_recipe`, `scaffold_loop`, `next_scope_hint` a `next_helper`.
+
 Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.
 
 `Codex Auto Tools Filter` teď navíc umí pro některé přirozené požadavky, které jsou širší než dnešní safe runtime scope, propsat do audit stopy i capability-roadmap doporučení. Typicky u GitHub/release nebo host-runtime úkolů zapíše `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`, místo aby jen mlčky selhal nebo přehnaně rozšířil runtime.

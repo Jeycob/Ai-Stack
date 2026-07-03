@@ -1511,7 +1511,7 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
     else:
         routed.mode = workflow
     routed.mentor_visible_context = visible_brief_block(decision, args.workspace, args.task)
-    routed.mentor_technical_context = "MENTOR_EXECUTION_BRIEF\n" + execution_brief_block(decision, args.workspace, args.task)
+    routed.mentor_technical_context = "MENTOR_EXECUTION_BRIEF_COMPACT\n" + compact_execution_brief_block(decision, args.workspace, args.task)
     return build_and_invoke_mode(routed)
 
 
@@ -1915,6 +1915,26 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
     return lines
 
 
+def compact_execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -> list[str]:
+    lines = [
+        f"workspace={workspace}",
+        f"workflow={decision['workflow']}",
+    ]
+    if decision.get("solution_profile"):
+        lines.append(f"solution_profile={decision['solution_profile']}")
+    if decision.get("public_stack"):
+        lines.append(f"public_stack={decision['public_stack']}")
+    if decision.get("scaffold_recipe"):
+        lines.append(f"scaffold_recipe={decision['scaffold_recipe']}")
+    if decision.get("scaffold_loop"):
+        lines.append(f"scaffold_loop={decision['scaffold_loop']}")
+    missing = decision.get("missing_capability_hint", "")
+    if missing:
+        lines.append(f"next_scope_hint={missing}")
+    lines.append(f"next_helper={recommended_next_step(decision, workspace, task)}")
+    return lines
+
+
 def print_execution_brief(prefix: str, decision: dict[str, str], workspace: str, task: str) -> None:
     print(f"{prefix}_EXECUTION_BRIEF<<EOF")
     for line in execution_brief_lines(decision, workspace, task):
@@ -1924,6 +1944,10 @@ def print_execution_brief(prefix: str, decision: dict[str, str], workspace: str,
 
 def execution_brief_block(decision: dict[str, str], workspace: str, task: str) -> str:
     return "\n".join(execution_brief_lines(decision, workspace, task))
+
+
+def compact_execution_brief_block(decision: dict[str, str], workspace: str, task: str) -> str:
+    return "\n".join(compact_execution_brief_lines(decision, workspace, task))
 
 
 def visible_brief_block(decision: dict[str, str], workspace: str, task: str) -> str:
@@ -2438,38 +2462,18 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
     improve_args = argparse.Namespace(**vars(args))
     improve_args.mode = "improve"
     improve_args.workspace = repo_name
-    improve_args.mentor_visible_context = prefixed_block(
-        "Mentor brief:",
-        (
-            f"- bootstrap source task: {args.task}\n"
-            f"- bootstrap repo: {repo_name}\n"
-            + (f"- starter profile: {decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
-            + (f"- starter hint: {decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
-            + (f"- public stack: {decision.get('public_stack')}\n" if decision.get("public_stack") else "")
-            + (f"- stack rationale: {decision.get('public_stack_rationale')}\n" if decision.get("public_stack_rationale") else "")
-            + (f"- scaffold recipe: {decision.get('scaffold_recipe')}\n" if decision.get("scaffold_recipe") else "")
-            + (f"- scaffold files: {decision.get('scaffold_files')}\n" if decision.get("scaffold_files") else "")
-            + (f"- scaffold loop: {decision.get('scaffold_loop')}\n" if decision.get("scaffold_loop") else "")
-            + "- follow-through: continue with audited workspace setup and improvement after repository creation\n"
-            + "- bootstrap dispatch: the first scaffold command was already attempted locally when a recipe existed"
-        ),
+    improve_args.mentor_visible_context = (
+        "Mentor brief:\n"
+        f"- bootstrap repo: {repo_name}\n"
+        f"- workflow: {decision['workflow']}\n"
+        + (f"- starter profile: {decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
+        + (f"- public stack: {decision.get('public_stack')}\n" if decision.get("public_stack") else "")
+        + "- bootstrap dispatch already ran; continue with the next audited workspace steps"
     )
-    improve_args.mentor_technical_context = prefixed_block(
-        "MENTOR_EXECUTION_BRIEF",
-        (
-            f"workspace={repo_name}\n"
-            f"bootstrap_source_task={args.task}\n"
-            "workflow=bootstrap-improve\n"
-            + (f"solution_profile={decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
-            + (f"starter_hint={decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
-            + (f"public_stack={decision.get('public_stack')}\n" if decision.get("public_stack") else "")
-            + (f"public_stack_rationale={decision.get('public_stack_rationale')}\n" if decision.get("public_stack_rationale") else "")
-            + (f"scaffold_recipe={decision.get('scaffold_recipe')}\n" if decision.get("scaffold_recipe") else "")
-            + (f"scaffold_files={decision.get('scaffold_files')}\n" if decision.get("scaffold_files") else "")
-            + (f"scaffold_loop={decision.get('scaffold_loop')}\n" if decision.get("scaffold_loop") else "")
-            + "bootstrap_dispatch=the first scaffold command was already attempted locally when a recipe existed\n"
-            + "goal=continue from repository bootstrap into audited install/test/build or safe patch progression"
-        ),
+    improve_args.mentor_technical_context = (
+        "MENTOR_EXECUTION_BRIEF_COMPACT\n"
+        + compact_execution_brief_block(decision, repo_name, args.task)
+        + "\nbootstrap_dispatch=completed"
     )
     return run_improve_sequence(improve_args)
 
@@ -2498,7 +2502,10 @@ def run_brief_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_BRIEF_TASK={args.task}")
     print(f"MENTOR_BRIEF_WORKFLOW={decision['workflow']}")
     print(f"MENTOR_BRIEF_NEXT_HELPER={recommended_next_step(decision, args.workspace, args.task)}")
-    print_execution_brief("MENTOR_BRIEF", decision, args.workspace, args.task)
+    print("MENTOR_BRIEF_EXECUTION_BRIEF<<EOF")
+    for line in compact_execution_brief_lines(decision, args.workspace, args.task):
+        print(line)
+    print("EOF")
     return 0
 
 

@@ -248,6 +248,12 @@ realne podporovanou posloupnost workspace akci. Sekvence je zamerne kratka a
 guardrailed, a pri prvnim failu se zastavi. Tohle je porad reuse stavajici
 capability vrstvy, ne dalsi paralelni executor.
 
+Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
+execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
+Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen
+minimum kontextu nutne pro pokracovani v dalsim capability kroku a neposila
+znovu cely reasoning blok.
+
 Priklad explicitniho scaffold planu:
 
 ```bash
