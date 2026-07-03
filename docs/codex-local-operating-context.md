@@ -136,6 +136,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pro maly auditovany patch v bezpecnem scope pouzivat `mentor_codex_local.py apply-safe`,
 - pro sirsi "dotahni to co nejdal" workflow pouzivat `mentor_codex_local.py improve`,
 - pro bezne mentor orchestracni volani bez rucni volby modu pouzivat `mentor_codex_local.py delegate`,
+- pro rychle rozhodnuti o sirce pravomoci pouzivat `mentor_codex_local.py profile`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
 Priklad doporucovaciho autopilota:
@@ -183,6 +184,19 @@ Priklad delegacniho loopu, ktery z textu ukolu sam zvoli nejvhodnejsi orchestrac
 ```bash
 python3 codex/bin/mentor_codex_local.py delegate ai-stack "Fixni to a dotahni co zvladnes."
 ```
+
+Priklad profilove klasifikace bez spousteni jakychkoli akci:
+
+```bash
+python3 codex/bin/mentor_codex_local.py profile ai-stack "Uprav README a aplikuj maly patch"
+```
+
+Aktualni runtime profily:
+
+- `review`: read-only analyza a dalsi krok bez spousteni.
+- `capability`: auditovane capability kroky typu `run`, `install`, `test`, `build`, `lint`, `verify`, `autopilot`.
+- `safe_patch`: maly patch v omezenem ai-stack safe scope.
+- `runtime`: sirsi agenticky posun projektu, typicky `improve`, tedy capability first a patch az kdyz je to potreba.
 
 ## Pro nove nastroje
 

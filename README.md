@@ -292,6 +292,10 @@ Když nechceš ručně přemýšlet, který mód zvolit, použij `delegate`: hel
 
     python3 codex/bin/mentor_codex_local.py delegate ai-stack "Fixni to a dotáhni co zvládneš."
 
+Když chceš jen rychle zjistit, jakou šířku pravomocí by helper pro úkol zvolil, použij `profile`. Vrátí `runtime_profile`, vybraný workflow a důvod, ale nic nespouští:
+
+    python3 codex/bin/mentor_codex_local.py profile ai-stack "Uprav README a aplikuj malý patch"
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

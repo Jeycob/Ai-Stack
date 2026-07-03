@@ -255,18 +255,26 @@ def request_diff_only(args: argparse.Namespace, workspace: str, target: str, sum
 
 
 def choose_workflow(task: str) -> str:
+    return classify_task(task)["workflow"]
+
+
+def classify_task(task: str) -> dict[str, str]:
     lower = task.lower()
+
+    def result(profile: str, workflow: str, reason: str) -> dict[str, str]:
+        return {"runtime_profile": profile, "workflow": workflow, "reason": reason}
+
     if any(token in lower for token in ("git status", "git remote", "git log", "spusť příkaz:", "spust prikaz:", "run command")):
-        return "run"
+        return result("capability", "run", "Explicit command inside a registered workspace is best handled by the audited workspace runner.")
     if any(token in lower for token in ("navrhni další krok", "navrhni dalsi krok", "co dál", "co dal", "audit", "analyzuj")):
-        return "audit"
+        return result("review", "audit", "The task asks for analysis or next-step reasoning without an explicit execution request.")
     if any(token in lower for token in ("apply patch", "aplikuj patch", "malý patch", "maly patch", "uprav readme", "uprav dokumentaci")):
-        return "apply-safe"
+        return result("safe_patch", "apply-safe", "The task points to a small documentation/config/helper change that fits the guarded safe-patch scope.")
     if any(token in lower for token in ("fixni to", "rozběhni to", "rozbehni to", "dotáhni to", "dotahni to", "dokonči to", "dokonci to")):
-        return "improve"
+        return result("runtime", "improve", "The task asks to push the project forward agentically and may need both capability steps and a follow-up patch.")
     if any(token in lower for token in ("ověř projekt", "over projekt", "pokračuj sám", "pokracuj sam", "udělej co je potřeba", "udelej co je potreba")):
-        return "autopilot"
-    return "audit"
+        return result("capability", "autopilot", "The task is primarily about audited install/test/build/lint progression inside the workspace.")
+    return result("review", "audit", "Defaulting to the narrowest safe mentoring workflow because the task does not clearly require execution.")
 
 
 def extract_run_command(task: str) -> str:
@@ -758,8 +766,11 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
 
 
 def run_delegate_sequence(args: argparse.Namespace) -> int:
-    workflow = choose_workflow(args.task)
+    decision = classify_task(args.task)
+    workflow = decision["workflow"]
+    print(f"DELEGATE_RUNTIME_PROFILE={decision['runtime_profile']}")
     print(f"DELEGATE_WORKFLOW={workflow}")
+    print(f"DELEGATE_REASON={decision['reason']}")
 
     if workflow == "run":
         command_text = extract_run_command(args.task)
@@ -777,6 +788,14 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
     return build_and_invoke_mode(routed)
 
 
+def run_profile_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    print(f"RUNTIME_PROFILE={decision['runtime_profile']}")
+    print(f"WORKFLOW={decision['workflow']}")
+    print(f"REASON={decision['reason']}")
+    return 0
+
+
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
     if args.mode == "audit":
         return run_audit_sequence(args)
@@ -792,6 +811,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_improve_sequence(args)
     if args.mode == "delegate":
         return run_delegate_sequence(args)
+    if args.mode == "profile":
+        return run_profile_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)
@@ -883,6 +904,11 @@ def parse_args() -> argparse.Namespace:
     delegate.add_argument("--max-steps", type=int, default=2)
     delegate.add_argument("--allow-actions", default="install,test,build,lint")
     delegate.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
+    profile = sub.add_parser("profile", help="Classify a workspace task into a runtime profile and recommended workflow without executing it")
+    profile.add_argument("workspace")
+    profile.add_argument("task")
+    profile.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; profile mode never calls OpenWebUI")
 
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")

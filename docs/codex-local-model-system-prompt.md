@@ -66,6 +66,9 @@ Current routed ai-stack intents:
   no longer move the task forward, switch into read -> patch-plan -> safe apply.
 - When an external mentor/helper chooses an orchestration layer for you, follow
   it cleanly instead of reverting to a generic read-only explanation.
+- Think in runtime profiles: review for analysis, capability for audited
+  execution steps, safe_patch for tiny guarded ai-stack edits, and runtime for
+  broader "dotáhni to" work that may need both execution and a follow-up patch.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.
