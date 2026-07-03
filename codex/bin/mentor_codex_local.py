@@ -47,6 +47,7 @@ WORKFLOW_PRIORITY = {
     "apply-safe": 75,
     "action": 70,
     "run": 65,
+    "review": 55,
     "audit": 45,
 }
 
@@ -174,6 +175,22 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
             f"{repo_prefix(args.workspace)}\n"
             "Proveď technický audit na základě předchozích výsledků. "
             "Stručně shrň architekturu, rizika a navrhni právě jeden další krok. "
+            "Nic nespouštěj a nic needituj."
+        )
+        return visible, technical
+
+    if args.mode == "review":
+        visible = (
+            f"repo: {args.workspace}\n"
+            "Proveď senior code review nebo architektonické review z dostupného kontextu. "
+            "Zaměř se na rizika, možné regrese, test gaps a potom navrhni jeden nejlepší další krok. "
+            "Nic nespouštěj a nic needituj."
+        )
+        technical = (
+            f"{repo_prefix(args.workspace)}\n"
+            "Na základě předchozí historie a dostupného snapshotu proveď review ve stylu senior developera. "
+            "Prioritizuj bugy, rizika, behavioral regressions a missing tests. "
+            "Na konci navrhni právě jeden další auditovaný krok. "
             "Nic nespouštěj a nic needituj."
         )
         return visible, technical
@@ -469,6 +486,31 @@ def classify_task(task: str) -> dict[str, str]:
             "Explicit command inside a registered workspace is best handled by the audited workspace runner.",
             "high",
             "Command stays inside a registered workspace, so audited workspace-run is sufficient and broader patch/runtime scope is unnecessary.",
+            "",
+        )
+    if any(
+        token in lower
+        for token in (
+            "code review",
+            "udělej review",
+            "udelej review",
+            "review kodu",
+            "review kódu",
+            "zkontroluj rizika",
+            "najdi rizika",
+            "najdi regres",
+            "architektonicke review",
+            "architektonické review",
+            "kritika navrhu",
+            "kritika návrhu",
+        )
+    ):
+        return result(
+            "review",
+            "review",
+            "The task explicitly asks for a review-style pass focused on risks, regressions, and missing tests.",
+            "high",
+            "This is a read-only senior review task, so we should stay in a narrow review scope and avoid execution until findings are clear.",
             "",
         )
     if any(token in lower for token in ("navrhni další krok", "navrhni dalsi krok", "co dál", "co dal", "audit", "analyzuj")):
@@ -1063,6 +1105,8 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
         return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
     if workflow == "deploy":
         return "python3 codex/bin/mentor_codex_local.py deploy"
+    if workflow == "review":
+        return f"python3 codex/bin/mentor_codex_local.py review {workspace}"
     if workflow == "apply-safe":
         return f"python3 codex/bin/mentor_codex_local.py apply-safe {workspace}"
     if workflow == "improve":
@@ -1093,6 +1137,8 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
             return f"repo: ai-stack\nVytvoř nové repository {repo_name}{suffix}"
     if workflow == "deploy":
         return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
+    if workflow == "review":
+        return f"repo: {workspace}\nProveď review, najdi hlavní rizika a navrhni další krok. Nic needituj."
     if workflow == "apply-safe":
         return f"repo: {workspace}\nUprav malý bezpečný patch a auditovaně ho aplikuj."
     if workflow == "improve":
@@ -1134,6 +1180,9 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
     elif workflow == "deploy":
         lines.append("goal=run the audited ai-stack deploy flow with pull, restart, and smoke checks")
         lines.append("guardrail=prefer named deploy flow over ad-hoc docker or root commands")
+    elif workflow == "review":
+        lines.append("goal=perform a senior review pass and surface the highest-risk findings")
+        lines.append("guardrail=stay read-only, prioritize regressions and missing tests, and recommend one next audited step")
     elif workflow == "apply-safe":
         lines.append("goal=prepare and apply a minimal safe patch inside the guarded ai-stack scope")
         lines.append("guardrail=stay inside safe files and validate the diff before apply")
@@ -1308,7 +1357,8 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
     capability_id = decision["capability_id"]
     steps: list[tuple[str, str]] = []
 
-    steps.append(("report", f"python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(task)}"))
+    if workflow != "review":
+        steps.append(("report", f"python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(task)}"))
 
     if workflow == "run":
         steps.append(("delegate", recommended_next_step(decision, workspace, task)))
@@ -1331,6 +1381,11 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
     if workflow == "deploy":
         steps.append(("deploy", "python3 codex/bin/mentor_codex_local.py deploy"))
         steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        return steps
+
+    if workflow == "review":
+        steps.append(("review", f"python3 codex/bin/mentor_codex_local.py review {workspace}"))
+        steps.append(("report", f"python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(task)}"))
         return steps
 
     if workflow == "apply-safe":
@@ -1498,6 +1553,10 @@ def run_brief_sequence(args: argparse.Namespace) -> int:
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
     if args.mode == "audit":
         return run_audit_sequence(args)
+    if args.mode == "review":
+        visible, technical = build_prompts(args)
+        rc, _ = invoke_turn(args, visible, technical)
+        return rc
     if args.mode == "autopilot":
         return run_autopilot_sequence(args)
     if args.mode == "patch-plan":
@@ -1582,6 +1641,10 @@ def parse_args() -> argparse.Namespace:
     audit.add_argument("workspace")
     audit.add_argument("--timeout", type=int, default=2400)
     audit.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
+    review = sub.add_parser("review", help="Ask codex-local for a senior read-only review over a workspace")
+    review.add_argument("workspace")
+    review.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
     autopilot = sub.add_parser("autopilot", help="Run scan + verify + choose and optionally execute one safe next action")
     autopilot.add_argument("workspace")

@@ -288,6 +288,8 @@ Boundary vraci:
 - `MENTOR_BOUNDARY_MISSING_CAPABILITY_HINT`: jaky dalsi capability scope by daval smysl pridat nebo explicitne pouzit.
 - `MENTOR_BOUNDARY_NEXT_HELPER`: jaky helper ma smysl pustit dal misto slepeho rozsirovani pravomoci.
 
+Review vraci stejny execution brief pattern, ale s workflow `review`; je urceny pro senior read-only pass nad riziky, regreseni a chybejicimi testy pred dalsim capability nebo patch krokem.
+
 `delegate` navic tenhle execution brief nese dal i do dalsich helper promptu. Prakticky to znamena, ze pri prechodu z `dispatch` nebo `delegate` do `audit`/`autopilot`/`improve` uz dalsi modelovy krok nedostane jen obecny workflow prompt, ale i maly stabilni kontext ve visible casti (`Mentor brief:`) a v technicke casti (`MENTOR_EXECUTION_BRIEF`).
 
 Stejny princip plati i pro sirsi capability flow: helper nema zustavat zbytecne uzky u tasku, ktere uz umi auditovane provest. Proto dnes umi klasifikovat i prime capability pozadavky typu `spust testy`, `nainstaluj zavislosti`, `over projekt`, `vytvor repository Test2` nebo `pullni ai-stack a nasad` rovnou na workflow `action`, `create-repo` nebo `deploy`, misto toho aby vsechno shazoval do obecneho `audit`.
@@ -298,6 +300,7 @@ Pro opravdu siroka lidska zadani je preferovana dalsi vrstva `delegate`: pokud p
 
 Stejne tak uz umi prirozene routovat i dalsi levne mentor vrstvy:
 
+- `Udelej code review`, `Review kodu` nebo `Najdi rizika` -> `mentor_codex_local.py review`
 - `Jaky workflow bys zvolil pro ...?` nebo `Jaky runtime profile bys zvolil pro ...?` -> `mentor_codex_local.py profile`
 - `Udelej mentor report pro ...` nebo `Shrn workflow pro ...` -> `mentor_codex_local.py report`
 - `Priprav kratky plan pro ...` nebo `Jaky plan bys zvolil pro ...?` -> `mentor_codex_local.py plan`

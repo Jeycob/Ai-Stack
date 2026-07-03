@@ -368,6 +368,7 @@ Stejně tak už jde přirozeně vyžádat i guardrail vysvětlení: formulace ty
 
 Podobně už jde přirozeně routovat i levná mentor analytika nad jedním taskem:
 
+- `Udělej code review`, `Review kódu` nebo `Najdi rizika` -> `mentor_codex_local.py review`
 - `Jaký workflow bys zvolil pro ...?` nebo `Jaký runtime profile bys zvolil pro ...?` -> `mentor_codex_local.py profile`
 - `Udělej mentor report pro ...` nebo `Shrň workflow pro ...` -> `mentor_codex_local.py report`
 - `Připrav krátký plán pro ...` nebo `Jaký plán bys zvolil pro ...?` -> `mentor_codex_local.py plan`

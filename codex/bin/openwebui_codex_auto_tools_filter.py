@@ -108,6 +108,8 @@ class Filter:
 
         command = self._natural_workspace_brief_command(text)
         if not command:
+            command = self._natural_workspace_review_command(text)
+        if not command:
             command = self._natural_workspace_boundary_command(text)
         if not command:
             command = self._natural_workspace_next_helper_command(text)
@@ -247,6 +249,39 @@ class Filter:
         if not task:
             return None
         return self._brief_helper_command(workspace, task)
+
+    def _review_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "review",
+            workspace,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _natural_workspace_review_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        cue_needles = (
+            "code review",
+            "udělej review",
+            "udelej review",
+            "review kodu",
+            "review kódu",
+            "zkontroluj rizika",
+            "najdi rizika",
+            "najdi regrese",
+            "najdi regres",
+            "architektonicke review",
+            "architektonické review",
+            "kritika navrhu",
+            "kritika návrhu",
+        )
+        if not any(needle in lower for needle in cue_needles):
+            return None
+        return self._review_helper_command(workspace, "review")
 
     def _extract_single_task(self, text: str, patterns: list[str], cue_needles: tuple[str, ...]) -> str | None:
         for pattern in patterns:
