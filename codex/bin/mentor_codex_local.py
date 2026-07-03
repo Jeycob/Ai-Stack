@@ -571,6 +571,57 @@ def public_stack_hint_for_profile(solution_profile: str) -> tuple[str, str]:
     return hints.get(solution_profile, ("", ""))
 
 
+def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
+    recipes = {
+        "nextjs-app": (
+            "npx create-next-app@latest . --ts --eslint --app --src-dir --import-alias '@/*'",
+            "package.json, src/app/page.tsx, src/app/layout.tsx, eslint.config.*, tsconfig.json",
+            "install -> dev server smoke -> lint -> build",
+        ),
+        "react-app": (
+            "npm create vite@latest . -- --template react-ts",
+            "package.json, src/main.tsx, src/App.tsx, vite.config.ts, tsconfig.json",
+            "install -> dev server smoke -> test or lint -> build",
+        ),
+        "fastapi-service": (
+            "python -m venv .venv && . .venv/bin/activate && python -m pip install fastapi uvicorn pydantic-settings pytest httpx",
+            "app/main.py, app/config.py, tests/test_health.py, pyproject.toml or requirements.txt",
+            "venv setup -> import smoke -> pytest -> uvicorn run smoke",
+        ),
+        "flask-service": (
+            "python -m venv .venv && . .venv/bin/activate && python -m pip install flask pytest",
+            "app.py or app/__init__.py, tests/test_app.py, requirements.txt",
+            "venv setup -> import smoke -> pytest -> flask run smoke",
+        ),
+        "django-app": (
+            "python -m venv .venv && . .venv/bin/activate && python -m pip install django pytest-django && django-admin startproject app .",
+            "manage.py, app/settings.py, app/urls.py, pytest.ini",
+            "venv setup -> migrate smoke -> pytest -> runserver smoke",
+        ),
+        "node-service": (
+            "npm init -y && npm install express && npm install -D typescript tsx @types/node @types/express vitest",
+            "package.json, src/index.ts, tsconfig.json, vitest.config.*",
+            "install -> typecheck or test -> run smoke",
+        ),
+        "threejs-app": (
+            "npm create vite@latest . -- --template vanilla-ts && npm install three",
+            "package.json, src/main.ts, index.html, vite.config.ts",
+            "install -> dev server smoke -> build",
+        ),
+        "opengl-native": (
+            "use CMake scaffold plus glfw and glad packages available on the target system",
+            "CMakeLists.txt, src/main.cpp, include/ or third_party/glad as needed, README build notes",
+            "configure -> build -> run sample window smoke",
+        ),
+        "electron-app": (
+            "npm init -y && npm install electron && npm install -D vite typescript",
+            "package.json, main.ts or main.js, preload.ts, renderer entry, vite.config.ts",
+            "install -> electron run smoke -> build",
+        ),
+    }
+    return recipes.get(solution_profile, ("", "", ""))
+
+
 def infer_workspace_action(task: str) -> str:
     lower = task.lower()
     action_map = [
@@ -605,6 +656,9 @@ def classify_task(task: str) -> dict[str, str]:
         starter_hint: str = "",
         public_stack: str = "",
         public_stack_rationale: str = "",
+        scaffold_recipe: str = "",
+        scaffold_files: str = "",
+        scaffold_loop: str = "",
     ) -> dict[str, str]:
         capability = roadmap.get(capability_id, {}) if capability_id else {}
         return {
@@ -624,11 +678,15 @@ def classify_task(task: str) -> dict[str, str]:
             "starter_hint": starter_hint,
             "public_stack": public_stack,
             "public_stack_rationale": public_stack_rationale,
+            "scaffold_recipe": scaffold_recipe,
+            "scaffold_files": scaffold_files,
+            "scaffold_loop": scaffold_loop,
         }
 
     repo_name = extract_create_repo_name(task)
     solution_profile, starter_hint = infer_solution_profile(task)
     public_stack, public_stack_rationale = public_stack_hint_for_profile(solution_profile)
+    scaffold_recipe, scaffold_files, scaffold_loop = scaffold_recipe_for_profile(solution_profile)
     if repo_name and wants_repo_followthrough(task):
         return result(
             "capability",
@@ -644,6 +702,9 @@ def classify_task(task: str) -> dict[str, str]:
             starter_hint=starter_hint,
             public_stack=public_stack,
             public_stack_rationale=public_stack_rationale,
+            scaffold_recipe=scaffold_recipe,
+            scaffold_files=scaffold_files,
+            scaffold_loop=scaffold_loop,
         )
     if repo_name:
         return result(
@@ -660,6 +721,9 @@ def classify_task(task: str) -> dict[str, str]:
             starter_hint=starter_hint,
             public_stack=public_stack,
             public_stack_rationale=public_stack_rationale,
+            scaffold_recipe=scaffold_recipe,
+            scaffold_files=scaffold_files,
+            scaffold_loop=scaffold_loop,
         )
     if any(
         token in lower
@@ -1466,6 +1530,9 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
     print(f"STARTER_HINT={decision['starter_hint']}")
     print(f"PUBLIC_STACK={decision['public_stack']}")
     print(f"PUBLIC_STACK_RATIONALE={decision['public_stack_rationale']}")
+    print(f"SCAFFOLD_RECIPE={decision['scaffold_recipe']}")
+    print(f"SCAFFOLD_FILES={decision['scaffold_files']}")
+    print(f"SCAFFOLD_LOOP={decision['scaffold_loop']}")
     return 0
 
 
@@ -1574,6 +1641,12 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
         lines.append(f"public_stack={decision['public_stack']}")
     if decision.get("public_stack_rationale"):
         lines.append(f"public_stack_rationale={decision['public_stack_rationale']}")
+    if decision.get("scaffold_recipe"):
+        lines.append(f"scaffold_recipe={decision['scaffold_recipe']}")
+    if decision.get("scaffold_files"):
+        lines.append(f"scaffold_files={decision['scaffold_files']}")
+    if decision.get("scaffold_loop"):
+        lines.append(f"scaffold_loop={decision['scaffold_loop']}")
 
     if workflow == "run":
         command = extract_run_command(task)
@@ -1775,6 +1848,9 @@ def run_report_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_REPORT_STARTER_HINT={decision['starter_hint']}")
     print(f"MENTOR_REPORT_PUBLIC_STACK={decision['public_stack']}")
     print(f"MENTOR_REPORT_PUBLIC_STACK_RATIONALE={decision['public_stack_rationale']}")
+    print(f"MENTOR_REPORT_SCAFFOLD_RECIPE={decision['scaffold_recipe']}")
+    print(f"MENTOR_REPORT_SCAFFOLD_FILES={decision['scaffold_files']}")
+    print(f"MENTOR_REPORT_SCAFFOLD_LOOP={decision['scaffold_loop']}")
     print(f"MENTOR_REPORT_NEXT_HELPER={recommended_next_step(decision, args.workspace, args.task)}")
     print("MENTOR_REPORT_AUDIT_CHAT_PROMPT<<EOF")
     print(audit_chat_prompt_suggestion(decision, args.workspace, args.task))
@@ -2132,6 +2208,9 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             + (f"- starter hint: {decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
             + (f"- public stack: {decision.get('public_stack')}\n" if decision.get("public_stack") else "")
             + (f"- stack rationale: {decision.get('public_stack_rationale')}\n" if decision.get("public_stack_rationale") else "")
+            + (f"- scaffold recipe: {decision.get('scaffold_recipe')}\n" if decision.get("scaffold_recipe") else "")
+            + (f"- scaffold files: {decision.get('scaffold_files')}\n" if decision.get("scaffold_files") else "")
+            + (f"- scaffold loop: {decision.get('scaffold_loop')}\n" if decision.get("scaffold_loop") else "")
             +
             "- follow-through: continue with audited workspace setup and improvement after repository creation"
         ),
@@ -2146,6 +2225,9 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             + (f"starter_hint={decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
             + (f"public_stack={decision.get('public_stack')}\n" if decision.get("public_stack") else "")
             + (f"public_stack_rationale={decision.get('public_stack_rationale')}\n" if decision.get("public_stack_rationale") else "")
+            + (f"scaffold_recipe={decision.get('scaffold_recipe')}\n" if decision.get("scaffold_recipe") else "")
+            + (f"scaffold_files={decision.get('scaffold_files')}\n" if decision.get("scaffold_files") else "")
+            + (f"scaffold_loop={decision.get('scaffold_loop')}\n" if decision.get("scaffold_loop") else "")
             +
             "goal=continue from repository bootstrap into audited install/test/build or safe patch progression"
         ),

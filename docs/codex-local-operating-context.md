@@ -220,6 +220,13 @@ toolingu, ktere maji byt preferovane pred vlastnim boilerplatem. Tohle je
 dulezite pro cely smer projektu: codex-local ma byt vic orchestrace a reuse,
 min vlastni framework.
 
+Pro nejbeznejsi stacky uz helper umi i `scaffold_recipe`, `scaffold_files` a
+`scaffold_loop`. To znamena, ze execution brief muze obsahovat nejen "tohle je
+asi FastAPI" nebo "tohle vypada jako React", ale i prvni konkretni bootstrap
+krok, seznam klicovych souboru a doporuceny smoke/test/build sled. Presne tohle
+ma lokalni modelu pomahat, aby se choval vic jako vedena implementace a min
+jako neurcite improvizovani.
+
 Priklad profilove klasifikace bez spousteni jakychkoli akci:
 
 ```bash
