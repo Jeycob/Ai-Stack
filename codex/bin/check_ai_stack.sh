@@ -10,6 +10,7 @@ TIMEOUT="${TIMEOUT:-10}"
 OWUI_CHAT_SMOKE_EXPECTED="${OWUI_CHAT_SMOKE_EXPECTED:-smoke}"
 OWUI_CHAT_SMOKE_VISIBLE="${OWUI_CHAT_SMOKE_VISIBLE:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
 OWUI_CHAT_SMOKE_PROMPT="${OWUI_CHAT_SMOKE_PROMPT:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
+OWUI_CHAT_SCENARIOS="${OWUI_CHAT_SCENARIOS:-git-status,next-step}"
 SUMMARY_ONLY="${CHECK_AI_STACK_SUMMARY_ONLY:-0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_KEY_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/state/openwebui-api.key"
@@ -169,6 +170,46 @@ else
     record_summary "OpenWebUI audit chat smoke" "FAIL"
   fi
   rm -f "$visible_file" "$prompt_file" "$chat_smoke_log"
+fi
+
+if [ "${SKIP_OWUI_CHAT_SCENARIOS:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenarios ... SKIP (disabled)\n'
+  record_summary "OpenWebUI chat scenarios" "SKIP"
+elif ! command -v python3 >/dev/null 2>&1 || [ ! -f "$SCRIPT_DIR/owui_chat_scenarios.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenarios ... SKIP (python3 or owui_chat_scenarios.py missing)\n'
+  record_summary "OpenWebUI chat scenarios" "SKIP"
+elif [ -z "${OWUI_API_KEY:-}" ] && [ ! -f "$OWUI_KEY_FILE" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenarios ... SKIP (no API key)\n'
+  record_summary "OpenWebUI chat scenarios" "SKIP"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenarios ...\n'
+  scenario_log="$(mktemp)"
+  scenario_args=()
+  IFS=',' read -r -a scenario_names <<< "$OWUI_CHAT_SCENARIOS"
+  for scenario_name in "${scenario_names[@]}"; do
+    scenario_name="${scenario_name#"${scenario_name%%[![:space:]]*}"}"
+    scenario_name="${scenario_name%"${scenario_name##*[![:space:]]}"}"
+    [ -n "$scenario_name" ] || continue
+    scenario_args+=(--scenario "$scenario_name")
+  done
+  if python3 "$SCRIPT_DIR/owui_chat_scenarios.py" \
+      --base-url "$OPENWEBUI_URL" \
+      --chat-id "${OWUI_AUDIT_CHAT_ID:-57529037-84b9-42e1-8bae-9eab35b601bd}" \
+      --model "$MODEL" \
+      --workspace "$WORKSPACE" \
+      --status-interval 2 \
+      --quiet \
+      "${scenario_args[@]}" >"$scenario_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$scenario_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenarios OK\n'
+    record_summary "OpenWebUI chat scenarios" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$scenario_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenarios FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI chat scenarios" "FAIL"
+  fi
+  rm -f "$scenario_log"
 fi
 
 if [ "$failures" -eq 0 ]; then

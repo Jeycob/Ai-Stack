@@ -72,6 +72,13 @@ stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po
 gateway smoke pusti i `owui_chat_smoke.py`. Bez key se tenhle krok jen preskoci
 misto failu. Vypnout ho jde pres `SKIP_OWUI_CHAT_SMOKE=1`.
 
+Healthcheck umi volitelne pridat i levne user-like scenare pres
+`owui_chat_scenarios.py`. Vychozi sada je zamerne kratka (`git-status,next-step`),
+aby se overil prirozeny route -> filter -> gateway -> capability -> visible
+reply bez zbytecneho cekani. Ovlada se to pres:
+- `OWUI_CHAT_SCENARIOS=git-status,deploy-status,next-step`
+- `SKIP_OWUI_CHAT_SCENARIOS=1`
+
 Pro opakovane mentor workflow nad auditem pouzivej helper
 `codex/bin/mentor_codex_local.py`. Ten sklada visible a technical prompt za
 tebe a vola `owui_chat_turn.py` pod kapotou. Je vhodny pro bezne operace typu

@@ -138,6 +138,7 @@ python3 -m py_compile \
   codex/bin/openwebui_codex_auto_tools_filter.py \
   codex/bin/http_retry.py \
   codex/bin/owui_chat_turn.py \
+  codex/bin/owui_chat_scenarios.py \
   codex/bin/run_check.py \
   codex/bin/add_workspace.py \
   codex/bin/workspace_scan.py \
@@ -147,6 +148,7 @@ python3 -m py_compile \
 
 section "Validating shell helpers"
 bash -n \
+  codex/bin/check_ai_stack.sh \
   codex/bin/store_runtime_secret.sh \
   codex/bin/store_openwebui_api_key.sh \
   codex/bin/owui_request.sh \

@@ -282,6 +282,10 @@ To je záměrně levnější než plný browser E2E. Neověřuje vzhled UI, ale 
 
 `codex/bin/check_ai_stack.sh` to teď umí použít i automaticky. Když je dostupný OpenWebUI API key přes `OWUI_API_KEY` nebo ignorovaný `codex/state/openwebui-api.key`, healthcheck po gateway smoke přidá i audit-chat smoke. Pokud key chybí, krok se jen korektně přeskočí. Vypnout ho jde přes `SKIP_OWUI_CHAT_SMOKE=1`.
 
+Stejný healthcheck teď umí po základním audit-chat smoke spustit i lehké user-like scénáře přes `owui_chat_scenarios.py`. Výchozí sada je záměrně levná (`git-status,next-step`), aby šlo rychle ověřit, že pořád funguje i přirozený route přes filter a capability vrstvu, ne jen úzký technický smoke. Chování jde řídit přes:
+- `OWUI_CHAT_SCENARIOS=git-status,deploy-status,next-step`
+- `SKIP_OWUI_CHAT_SCENARIOS=1`
+
 Pro admin nebo patch operace používej oddělený viditelný a technický prompt. Viditelný prompt je lidský popis práce pro audit chat; technický prompt může obsahovat interní gateway/admin marker a diff, ale do viditelné historie se nezapisuje:
 
     python3 codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --visible-prompt-file /tmp/visible.txt --prompt-file /tmp/technical.txt --status-interval 3 --quiet
