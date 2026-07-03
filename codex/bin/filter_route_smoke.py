@@ -28,7 +28,7 @@ class RouteScenario:
     expected: tuple[str, ...]
     prompt: str = ""
     unexpected: tuple[str, ...] = ()
-    model: str = "codex-local-plan-qwen14b"
+    model: str = "codex-local"
     messages: tuple[dict[str, str], ...] = ()
 
 

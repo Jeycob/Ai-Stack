@@ -33,7 +33,7 @@ from urllib.parse import urlparse, urlunparse
 
 DEFAULT_BASE_URL = "http://192.168.0.48:9090"
 DEFAULT_CHAT_ID = "57529037-84b9-42e1-8bae-9eab35b601bd"
-DEFAULT_MODEL = "codex-local-plan-qwen14b"
+DEFAULT_MODEL = "codex-local"
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 DEFAULT_API_KEY_FILE = Path(__file__).resolve().parents[1] / "state/openwebui-api.key"
 ROOT = Path(__file__).resolve().parents[2]

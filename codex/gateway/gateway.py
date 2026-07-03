@@ -23,6 +23,19 @@ from workspace_context import (
     resolve_workspace_context,
     strip_workspace_routing,
 )
+from codex_local_config import (
+    DEFAULT_MODEL_ALIAS,
+    ROLE_AGENT,
+    ROLE_DIRECT,
+    ROLE_EXECUTOR,
+    ROLE_PLANNER,
+    ROLE_RECOVERY,
+    ROLE_REVIEWER,
+    codex_local_model_aliases,
+    is_codex_local_model_name,
+    load_codex_local_config,
+    resolve_runtime_model,
+)
 from openwebui_runtime import discover_openwebui_base_urls
 from workspace_scan import collect, load_workspace
 
@@ -37,12 +50,8 @@ if not ADMIN_TOKEN and ADMIN_TOKEN_FILE:
     except OSError:
         ADMIN_TOKEN = ""
 
-MODELS = {
-    "codex-local-plan-qwen14b": {"model": "qwen2.5-coder:14b", "mode": "plan"},
-    "codex-local-build-qwen14b": {"model": "qwen2.5-coder:14b", "mode": "build"},
-    "codex-local-plan-qwen32b": {"model": "qwen2.5-coder:32b", "mode": "plan"},
-    "codex-local-build-qwen32b": {"model": "qwen2.5-coder:32b", "mode": "build"},
-}
+CODEX_LOCAL_CONFIG = load_codex_local_config()
+MODELS = codex_local_model_aliases(CODEX_LOCAL_CONFIG)
 
 
 def _repo_root_candidates():
@@ -319,9 +328,16 @@ def repo_snapshot(name, cfg):
     ])
 
 def direct_messages(payload_messages, workspace_name, snapshot, mode):
+    role_hint = {
+        ROLE_PLANNER: "planner mode: return a concise plan only",
+        ROLE_EXECUTOR: "executor mode: explain the nearest safe execution path without claiming actions you did not run",
+        ROLE_REVIEWER: "reviewer mode: validate outcome and point to concrete blockers or evidence",
+        ROLE_RECOVERY: "recovery mode: focus on root cause and next safe recovery step",
+    }.get(str(mode or ""), "agent mode: answer directly from the snapshot")
     system = (
         "You are a local coding assistant. A trusted gateway has provided a repository snapshot for analysis. "
         "Use only that snapshot unless the user asks for a general explanation. "
+        f"Current role: {role_hint}. "
         "Do not output tool calls, task calls, JSON function calls, or subagent markup. "
         "If the snapshot is insufficient, say exactly what extra file or command output is needed. "
         "Reply in the user's language. When asked for exact file content, quote it exactly and do not translate it. "
@@ -339,8 +355,13 @@ def direct_messages(payload_messages, workspace_name, snapshot, mode):
             msgs.append({"role": role if role in ("system", "user", "assistant") else "user", "content": content})
     return msgs
 
-def ollama_chat(model_id, messages, timeout=300):
-    body = json.dumps({"model": model_id, "messages": messages, "stream": False}).encode()
+def ollama_chat(model_id, messages, timeout=300, response_format=None, extra_body=None):
+    body_payload = {"model": model_id, "messages": messages, "stream": False}
+    if response_format:
+        body_payload["response_format"] = response_format
+    if extra_body:
+        body_payload.update(extra_body)
+    body = json.dumps(body_payload).encode()
     req = urllib.request.Request(f"{OLLAMA_OPENAI_URL}/chat/completions", data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", "Bearer local")
@@ -555,6 +576,17 @@ def runtime_health():
         "codex_local_ready": codex_local_ready,
         "capability_mode": "agent-first",
         "natural_codex_local_route": "agent_loop",
+        "model_runtime": {
+            "default_alias": DEFAULT_MODEL_ALIAS,
+            "default_model": CODEX_LOCAL_CONFIG.default_model,
+            "heavy_alias": "codex-local-heavy",
+            "heavy_model": CODEX_LOCAL_CONFIG.heavy_model,
+            "model_mode": CODEX_LOCAL_CONFIG.model_mode,
+            "allow_heavy_escalation": CODEX_LOCAL_CONFIG.allow_heavy_escalation,
+            "structured_output": CODEX_LOCAL_CONFIG.structured_output,
+            "structured_backend": CODEX_LOCAL_CONFIG.structured_backend,
+            "experimental_planner_model": CODEX_LOCAL_CONFIG.experimental_planner_model,
+        },
         "runtime_repo_root": str(REPO_ROOT),
         "runtime_commit": git_head,
         "runtime_fingerprint": runtime_fingerprint(),
@@ -729,7 +761,7 @@ def admin_web_answer(payload):
                 ),
             },
         ]
-        response = ollama_chat(MODELS["codex-local-plan-qwen14b"]["model"], messages, timeout=180)
+        response = ollama_chat(codex_local_runtime_model_name(role=ROLE_REVIEWER), messages, timeout=180)
         answer = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         if not answer:
             answer = "Model nevrátil odpověď nad načteným zdrojem."
@@ -912,6 +944,100 @@ def extract_json_object(text):
             if depth == 0:
                 return json.loads(source[start : idx + 1])
     raise ValueError("AGENT_PLAN_JSON_UNCLOSED")
+
+
+def codex_local_model_runtime(requested_model_name="", *, task="", role=ROLE_AGENT):
+    return resolve_runtime_model(
+        requested_model_name or DEFAULT_MODEL_ALIAS,
+        task=task,
+        role=role,
+        config=CODEX_LOCAL_CONFIG,
+    )
+
+
+def codex_local_runtime_model_name(requested_model_name="", *, task="", role=ROLE_AGENT):
+    runtime = codex_local_model_runtime(requested_model_name, task=task, role=role)
+    return str(runtime.get("model") or CODEX_LOCAL_CONFIG.default_model)
+
+
+def codex_local_runtime_surface(requested_model_name="", *, task="", role=ROLE_AGENT):
+    runtime = codex_local_model_runtime(requested_model_name, task=task, role=role)
+    return {
+        "requested_model": str(runtime.get("requested_model") or ""),
+        "resolved_alias": str(runtime.get("resolved_alias") or ""),
+        "role": str(runtime.get("role") or role),
+        "model": str(runtime.get("model") or ""),
+        "heavy_requested": bool(runtime.get("heavy_requested")),
+        "heavy_available": bool(runtime.get("heavy_available")),
+        "used_experimental_planner": bool(runtime.get("used_experimental_planner")),
+        "structured_output": CODEX_LOCAL_CONFIG.structured_output,
+        "structured_backend": CODEX_LOCAL_CONFIG.structured_backend,
+    }
+
+
+def codex_local_structured_response_format(schema_name, schema):
+    backend = CODEX_LOCAL_CONFIG.structured_backend
+    mode = CODEX_LOCAL_CONFIG.structured_output
+    if mode == "none" or backend == "none":
+        return None
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_name,
+            "schema": schema,
+        },
+    }
+
+
+def structured_json_repair_messages(raw_text, schema_name, schema):
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Repair the assistant output into valid JSON only. "
+                "Do not add commentary. Preserve intent, drop unsupported fields, "
+                "and fit the target schema as closely as possible."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Schema name: {schema_name}\n"
+                f"Schema:\n{json.dumps(schema, ensure_ascii=False)}\n\n"
+                f"Broken output:\n{raw_text}"
+            ),
+        },
+    ]
+
+
+def structured_json_chat(model_id, messages, schema_name, schema, timeout=240):
+    attempts = []
+    response_format = codex_local_structured_response_format(schema_name, schema)
+    if CODEX_LOCAL_CONFIG.structured_output == "auto" and response_format:
+        try:
+            response = ollama_chat(model_id, messages, timeout=timeout, response_format=response_format)
+            raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            attempts.append({"stage": "structured", "ok": True})
+            return extract_json_object(raw), raw, {"strategy": "structured", "attempts": attempts}
+        except Exception as exc:
+            attempts.append({"stage": "structured", "ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    response = ollama_chat(model_id, messages, timeout=timeout)
+    raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    try:
+        parsed = extract_json_object(raw)
+        attempts.append({"stage": "plain_json", "ok": True})
+        return parsed, raw, {"strategy": "plain_json", "attempts": attempts}
+    except Exception as exc:
+        attempts.append({"stage": "plain_json", "ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    repair_response = ollama_chat(
+        model_id,
+        structured_json_repair_messages(raw, schema_name, schema),
+        timeout=timeout,
+    )
+    repaired_raw = repair_response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    repaired = extract_json_object(repaired_raw)
+    attempts.append({"stage": "repair_retry", "ok": True})
+    return repaired, repaired_raw, {"strategy": "repair_retry", "attempts": attempts}
 
 
 def agent_read_only_requested(task):
@@ -1623,7 +1749,7 @@ def agent_capability_hints_from_task(task, workspace_exists):
         capabilities.append("workspace_ssh_key_create")
     if agent_deploy_requested(task):
         capabilities.append("stack_deploy")
-    if agent_public_url_from_task(task):
+    if agent_public_url_from_task(task) and not remote_url:
         capabilities.append("public_web_access")
     inferred_action = agent_infer_action_from_task(task)
     if inferred_action:
@@ -1633,11 +1759,202 @@ def agent_capability_hints_from_task(task, workspace_exists):
     explicit_command = agent_infer_command_from_task(task)
     if explicit_command:
         capabilities.append("workspace_run")
-    elif agent_executable_task_requested(task):
+    elif agent_executable_task_requested(task) and not capabilities:
         capabilities.append("workspace_autopilot")
     if not capabilities:
         capabilities.append("clarify_or_infer_capability")
     return capabilities
+
+
+def agent_capability_selector_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "required_capabilities": {"type": "array", "items": {"type": "string"}},
+            "missing_inputs": {"type": "array", "items": {"type": "string"}},
+            "desired_end_state": {"type": "string"},
+            "action": {"type": "string"},
+            "run_after": {"type": "string"},
+            "followup_actions": {"type": "array", "items": {"type": "string"}},
+            "confidence": {"type": "string"},
+            "recovery_plan": {"type": "string"},
+        },
+        "required": [
+            "required_capabilities",
+            "missing_inputs",
+            "desired_end_state",
+            "action",
+            "run_after",
+            "followup_actions",
+            "confidence",
+            "recovery_plan",
+        ],
+    }
+
+
+def agent_taskspec_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "current_workspace": {"type": "string"},
+            "user_goal": {"type": "string"},
+            "is_new_workspace_request": {"type": "boolean"},
+            "is_existing_workspace_task": {"type": "boolean"},
+            "target_repo_name": {"type": "string"},
+            "remote_url": {"type": "string"},
+            "desired_end_state": {"type": "string"},
+            "required_capabilities": {"type": "array", "items": {"type": "string"}},
+            "missing_inputs": {"type": "array", "items": {"type": "string"}},
+            "risk_level": {"type": "string"},
+            "recovery_plan": {"type": "string"},
+            "read_only": {"type": "boolean"},
+            "command": {"type": "array", "items": {"type": "string"}},
+            "action": {"type": "string"},
+            "run_after": {"type": "string"},
+            "followup_actions": {"type": "array", "items": {"type": "string"}},
+            "url": {"type": "string"},
+            "question": {"type": "string"},
+            "ssh_comment": {"type": "string"},
+            "confidence": {"type": "string"},
+        },
+        "required": [
+            "current_workspace",
+            "user_goal",
+            "is_new_workspace_request",
+            "is_existing_workspace_task",
+            "target_repo_name",
+            "remote_url",
+            "desired_end_state",
+            "required_capabilities",
+            "missing_inputs",
+            "risk_level",
+            "recovery_plan",
+            "read_only",
+            "command",
+            "action",
+            "run_after",
+            "followup_actions",
+            "url",
+            "question",
+            "ssh_comment",
+            "confidence",
+        ],
+    }
+
+
+def agent_capability_selector_messages(
+    partial_spec,
+    requested_workspace,
+    controller_workspace,
+    workspace_exists,
+    task,
+):
+    capability_registry = agent_capability_registry()
+    capability_names = sorted(
+        name
+        for name, meta in capability_registry.items()
+        if isinstance(meta, dict) and meta.get("implemented")
+    )
+    partial_json = json.dumps(partial_spec or {}, ensure_ascii=False)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a bounded capability selector for a local Codex-like engineering agent. "
+                "Return compact JSON only. Do not output workflow names unless they are represented as capabilities. "
+                "Choose only from implemented capabilities that appear in the provided capability list. "
+                "Prefer existing-workspace capabilities over bootstrap when the target workspace already exists. "
+                "If the user provided a concrete git remote URL for an existing workspace, prefer workspace_git_publish. "
+                "If the user asks for read-only analysis, prefer review/read_only_review. "
+                "If the user asks for explicit shell command execution, prefer workspace_run. "
+                "If information is truly missing, keep required_capabilities empty and put the missing fields into missing_inputs.\n\n"
+                "Output schema:\n"
+                "{\n"
+                '  "required_capabilities": ["workspace_git_publish"],\n'
+                '  "missing_inputs": [],\n'
+                '  "desired_end_state": "short concrete end state or empty",\n'
+                '  "action": "install|verify|smoke|test|build|lint or empty",\n'
+                '  "run_after": "install|verify|smoke|test|build|lint or empty",\n'
+                '  "followup_actions": ["install","smoke"],\n'
+                '  "confidence": "high|medium|low",\n'
+                '  "recovery_plan": "one-line recovery plan"\n'
+                "}"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Requested workspace: {requested_workspace}\n"
+                f"Controller workspace: {controller_workspace}\n"
+                f"Requested workspace exists: {workspace_exists}\n"
+                f"Implemented capabilities: {', '.join(capability_names)}\n"
+                f"Partial TaskSpec:\n{partial_json}\n\n"
+                f"User task:\n{task}"
+            ),
+        },
+    ]
+
+
+def agent_select_capabilities_with_llm(
+    partial_spec,
+    requested_workspace,
+    controller_workspace,
+    workspace_exists,
+    task,
+):
+    model_id = codex_local_runtime_model_name(task=task, role=ROLE_PLANNER)
+    parsed, raw, _meta = structured_json_chat(
+        model_id,
+        agent_capability_selector_messages(
+            partial_spec,
+            requested_workspace,
+            controller_workspace,
+            workspace_exists,
+            task,
+        ),
+        "capability_selector",
+        agent_capability_selector_schema(),
+        timeout=180,
+    )
+    registry = agent_capability_registry()
+    selected_capabilities = []
+    seen_capabilities = set()
+    for item in _string_list(parsed.get("required_capabilities")):
+        if item in seen_capabilities:
+            continue
+        meta = registry.get(item) or {}
+        if meta.get("implemented"):
+            selected_capabilities.append(item)
+            seen_capabilities.add(item)
+
+    action = str(parsed.get("action") or "").strip().lower()
+    if action not in AGENT_LOOP_ACTIONS:
+        action = ""
+    run_after = str(parsed.get("run_after") or "").strip().lower()
+    if run_after not in AGENT_LOOP_ACTIONS:
+        run_after = ""
+    followup_actions = [
+        item.lower()
+        for item in _string_list(parsed.get("followup_actions"))
+        if item.lower() in AGENT_LOOP_ACTIONS
+    ]
+    confidence = str(parsed.get("confidence") or "").strip().lower()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "medium"
+
+    return {
+        "required_capabilities": selected_capabilities,
+        "missing_inputs": _string_list(parsed.get("missing_inputs")),
+        "desired_end_state": str(parsed.get("desired_end_state") or "").strip(),
+        "action": action,
+        "run_after": run_after,
+        "followup_actions": followup_actions,
+        "confidence": confidence,
+        "recovery_plan": str(parsed.get("recovery_plan") or "").strip(),
+        "raw": raw,
+    }
 
 
 def split_agent_capabilities(capabilities):
@@ -1759,7 +2076,36 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
             desired_end_state = "explicit_command_completed"
         else:
             desired_end_state = "intent_clarified"
-    required_capabilities = _string_list(spec.get("required_capabilities")) or agent_capability_hints_from_task(task, workspace_exists)
+    planner_required_capabilities = _string_list(spec.get("required_capabilities"))
+    selector_source = "planner" if planner_required_capabilities else "none"
+    llm_capability_selection = None
+    if (
+        not planner_required_capabilities
+        or (
+            planner_required_capabilities == ["clarify_or_infer_capability"]
+            and not _string_list(spec.get("missing_inputs"))
+        )
+    ):
+        try:
+            llm_capability_selection = agent_select_capabilities_with_llm(
+                spec,
+                requested_workspace,
+                controller_workspace,
+                workspace_exists,
+                task,
+            )
+        except Exception:
+            llm_capability_selection = None
+    llm_required_capabilities = (
+        llm_capability_selection.get("required_capabilities") if isinstance(llm_capability_selection, dict) else []
+    ) or []
+    if llm_required_capabilities:
+        required_capabilities = llm_required_capabilities
+        selector_source = "llm_capability_selector"
+    else:
+        required_capabilities = planner_required_capabilities or agent_capability_hints_from_task(task, workspace_exists)
+        if not planner_required_capabilities:
+            selector_source = "heuristic_fallback"
     if is_new_workspace_request and "workspace_repo_bootstrap" not in required_capabilities:
         required_capabilities.insert(0, "workspace_repo_bootstrap")
     if remote_url and workspace_exists and not is_new_workspace_request and "workspace_git_publish" not in required_capabilities:
@@ -1769,6 +2115,13 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     elif agent_ssh_key_create_requested(task) and "workspace_ssh_key_create" not in required_capabilities:
         required_capabilities.insert(0, "workspace_ssh_key_create")
     missing_inputs = _string_list(spec.get("missing_inputs"))
+    if (
+        not missing_inputs
+        and isinstance(llm_capability_selection, dict)
+        and llm_capability_selection.get("missing_inputs")
+        and not llm_required_capabilities
+    ):
+        missing_inputs = _string_list(llm_capability_selection.get("missing_inputs"))
     if is_new_workspace_request and not target_repo_name:
         missing_inputs.append("target_repo_name")
     if remote_url and not workspace_exists and not is_new_workspace_request:
@@ -1777,6 +2130,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if risk_level not in {"low", "medium", "high"}:
         risk_level = "low" if read_only else ("medium" if remote_url or agent_edit_requested(task) else "low")
     recovery_plan = str(spec.get("recovery_plan") or "").strip()
+    if not recovery_plan and isinstance(llm_capability_selection, dict):
+        recovery_plan = str(llm_capability_selection.get("recovery_plan") or "").strip()
     if not recovery_plan:
         if remote_url and workspace_exists:
             recovery_plan = (
@@ -1787,20 +2142,32 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         else:
             recovery_plan = "If the capability is missing or blocked, return NEEDS_ATTENTION with the missing capability and a concrete recovery step."
     action = str(spec.get("action") or "").strip().lower()
+    if not action and isinstance(llm_capability_selection, dict):
+        action = str(llm_capability_selection.get("action") or "").strip().lower()
     if action not in AGENT_LOOP_ACTIONS:
         action = agent_infer_action_from_task(task)
     run_after = str(spec.get("run_after") or "").strip().lower()
+    if not run_after and isinstance(llm_capability_selection, dict):
+        run_after = str(llm_capability_selection.get("run_after") or "").strip().lower()
     if run_after not in AGENT_LOOP_ACTIONS:
         run_after = ""
     followup_actions = [
         item.lower() for item in _string_list(spec.get("followup_actions")) if item.lower() in AGENT_LOOP_ACTIONS
     ]
+    if not followup_actions and isinstance(llm_capability_selection, dict):
+        followup_actions = [
+            item.lower()
+            for item in _string_list(llm_capability_selection.get("followup_actions"))
+            if item.lower() in AGENT_LOOP_ACTIONS
+        ]
     if is_new_workspace_request and not followup_actions:
         followup_actions = agent_infer_followup_actions(task)
     url = str(spec.get("url") or "").strip() or agent_public_url_from_task(task)
     question = str(spec.get("question") or "").strip() or (str(task or "").strip() if agent_web_question_requested(task) else "")
     ssh_comment = str(spec.get("ssh_comment") or "").strip() or agent_workspace_ssh_comment(task, target_repo_name or fallback_workspace)
     confidence = str(spec.get("confidence") or "medium").strip().lower()
+    if confidence == "medium" and isinstance(llm_capability_selection, dict) and llm_capability_selection.get("confidence"):
+        confidence = str(llm_capability_selection.get("confidence") or "medium").strip().lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"
     command = []
@@ -1832,6 +2199,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         "question": question,
         "ssh_comment": ssh_comment,
         "confidence": confidence,
+        "capability_selector_source": selector_source,
     }
 
 
@@ -2096,7 +2464,7 @@ def agent_review_response(workspace, task):
             "content": f"Úkol:\n{task}\n\nSnapshot:\n{snapshot[:22000]}",
         },
     ]
-    response = ollama_chat(MODELS["codex-local-plan-qwen14b"]["model"], messages, timeout=240)
+    response = ollama_chat(codex_local_runtime_model_name(task=task, role=ROLE_REVIEWER), messages, timeout=240)
     return response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
 
@@ -2107,19 +2475,22 @@ def agent_plan(task, requested_workspace, controller_workspace, workspace_exists
         snapshot = repo_snapshot(controller_workspace, cfg) if cfg else ""
     except Exception as exc:
         snapshot = f"SNAPSHOT_UNAVAILABLE: {exc}"
-    response = ollama_chat(
-        MODELS["codex-local-plan-qwen14b"]["model"],
+    model_id = codex_local_runtime_model_name(task=task, role=ROLE_PLANNER)
+    parsed, raw, _meta = structured_json_chat(
+        model_id,
         agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot),
+        "agent_taskspec",
+        agent_taskspec_schema(),
         timeout=240,
     )
-    raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    taskspec = normalize_agent_taskspec(extract_json_object(raw), requested_workspace, controller_workspace, workspace_exists, task)
+    taskspec = normalize_agent_taskspec(parsed, requested_workspace, controller_workspace, workspace_exists, task)
     plan = agent_taskspec_to_plan(taskspec, requested_workspace, controller_workspace, workspace_exists, task)
     return plan, taskspec, raw
 
 
 def admin_agent_loop(payload):
     requested_workspace = str(payload.get("workspace") or "").strip() or "ai-stack"
+    requested_model = str(payload.get("model") or DEFAULT_MODEL_ALIAS).strip() or DEFAULT_MODEL_ALIAS
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", requested_workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
     task = str(payload.get("task") or "").strip()
@@ -2163,6 +2534,7 @@ def admin_agent_loop(payload):
         "requested_workspace": requested_workspace,
         "controller_workspace": controller_workspace,
         "workspace_exists": workspace_exists,
+        "model_runtime": codex_local_runtime_surface(requested_model, task=task, role=ROLE_AGENT),
         "task": task,
         "plan": plan,
         "taskspec": taskspec,
@@ -3812,7 +4184,7 @@ def workspace_autopilot_choose_candidate(
     allowed = {str(item.get("action") or "").strip().lower() for item in candidates}
     try:
         response = ollama_chat(
-            MODELS["codex-local-plan-qwen14b"]["model"],
+            codex_local_runtime_model_name(task=task, role=ROLE_RECOVERY),
             workspace_autopilot_candidate_messages(
                 workspace,
                 task,
@@ -4459,7 +4831,7 @@ def agent_loop_response_text(result):
     if answer:
         lines.append("")
         lines.append(answer)
-    for key in ("execution", "followup", "recovery", "plan", "taskspec"):
+    for key in ("model_runtime", "execution", "followup", "recovery", "plan", "taskspec"):
         value = result.get(key)
         if value in (None, {}, []):
             continue
@@ -4496,7 +4868,7 @@ def explicit_agent_loop_request(text):
 
 def codex_local_model_requested(payload):
     model_name = str((payload or {}).get("model") or "").strip()
-    return model_name.startswith("codex-local-")
+    return is_codex_local_model_name(model_name)
 
 def codex_local_agent_loop_payload(payload):
     """Route natural codex-local prompts through the agent loop by default.
@@ -4516,6 +4888,7 @@ def codex_local_agent_loop_payload(payload):
     return {
         "workspace": agent_requested_workspace_from_text(admin_text, messages),
         "task": text[:6000],
+        "model": str(payload.get("model") or DEFAULT_MODEL_ALIAS),
     }
 
 def normal_chat_requires_tool(payload):
@@ -4564,13 +4937,22 @@ def sse_chunk(result_id, created, model_name, content="", finish_reason=None):
     }
 
 def model_request(payload, model_name):
-    spec = MODELS.get(model_name, MODELS["codex-local-plan-qwen14b"])
+    runtime = codex_local_model_runtime(
+        model_name,
+        task=gateway_admin_text(payload),
+        role=ROLE_DIRECT,
+    )
     workspace_name, workspace = select_workspace(payload.get("messages", []))
     snapshot = repo_snapshot(workspace_name, workspace)
+    spec = {
+        "model": str(runtime.get("model") or CODEX_LOCAL_CONFIG.default_model),
+        "mode": str(runtime.get("role") or ROLE_DIRECT),
+        "resolved_alias": str(runtime.get("resolved_alias") or DEFAULT_MODEL_ALIAS),
+    }
     return spec, direct_messages(payload.get("messages", []), workspace_name, snapshot, spec["mode"])
 
 def completion(payload):
-    model_name = payload.get("model") or "codex-local-plan-qwen14b"
+    model_name = payload.get("model") or DEFAULT_MODEL_ALIAS
     admin_text = gateway_admin_text(payload)
     direct_prefix = "GATEWAY_ADMIN_DIRECT_RESPONSE"
     direct_match = re.search(rf"(?ims)^\s*{re.escape(direct_prefix)}\s*\n(.*)", admin_text)
@@ -4654,6 +5036,7 @@ def completion(payload):
             result = admin_agent_loop({
                 "workspace": agent_requested_workspace_from_text(admin_text, payload.get("messages") or []),
                 "task": task,
+                "model": str(payload.get("model") or DEFAULT_MODEL_ALIAS),
             })
             text = agent_loop_response_text(result)
         except Exception as exc:
@@ -4738,7 +5121,7 @@ class H(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def proxy_ollama_sse(self, payload):
-        model_name = payload.get("model") or "codex-local-plan-qwen14b"
+        model_name = payload.get("model") or DEFAULT_MODEL_ALIAS
         result_id = "chatcmpl-" + uuid.uuid4().hex
         created = int(time.time())
         spec, messages = model_request(payload, model_name)

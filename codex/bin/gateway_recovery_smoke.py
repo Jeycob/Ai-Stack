@@ -293,6 +293,37 @@ def assert_workspace_action_capability_registry_mapping() -> None:
     print("WORKSPACE_ACTION_CAPABILITY_REGISTRY_OK")
 
 
+def assert_taskspec_capability_selector_repairs_existing_workspace_publish() -> None:
+    task = "repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git"
+    selector_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"required_capabilities":["workspace_git_publish"],"desired_end_state":"git_init_origin_commit_push_main","confidence":"high","recovery_plan":"If auth fails, return MANUAL_STEP_REQUIRED with the public key."}'
+                }
+            }
+        ]
+    }
+    with patch.object(gateway, "ollama_chat", return_value=selector_response):
+        taskspec = gateway.normalize_agent_taskspec({}, "TestCode", "ai-stack", True, task)
+    if taskspec.get("required_capabilities") != ["workspace_git_publish"]:
+        raise SystemExit(f"expected LLM selector to repair required_capabilities, got {taskspec!r}")
+    if taskspec.get("capability_selector_source") != "llm_capability_selector":
+        raise SystemExit(f"expected capability_selector_source=llm_capability_selector, got {taskspec!r}")
+    print("TASKSPEC_CAPABILITY_SELECTOR_PUBLISH_OK")
+
+
+def assert_taskspec_capability_selector_falls_back_to_heuristics() -> None:
+    task = "repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git"
+    with patch.object(gateway, "ollama_chat", side_effect=RuntimeError("selector offline")):
+        taskspec = gateway.normalize_agent_taskspec({}, "TestCode", "ai-stack", True, task)
+    if taskspec.get("required_capabilities") != ["workspace_git_publish"]:
+        raise SystemExit(f"expected heuristic fallback to keep git publish capability, got {taskspec!r}")
+    if taskspec.get("capability_selector_source") != "heuristic_fallback":
+        raise SystemExit(f"expected capability_selector_source=heuristic_fallback, got {taskspec!r}")
+    print("TASKSPEC_CAPABILITY_SELECTOR_FALLBACK_OK")
+
+
 def assert_autopilot_llm_candidate_selection() -> None:
     def fake_action(payload):
         action = str(payload.get("action") or "")
@@ -557,6 +588,7 @@ def assert_codex_local_payload_routing() -> None:
     expected = {
         "workspace": "ai-stack",
         "task": "Prohlédni architekturu gateway/filter/helper vrstvy. Nic needituj.",
+        "model": "codex-local-plan-qwen14b",
     }
     if routed != expected:
         raise SystemExit(f"expected codex-local payload routing {expected!r}, got {routed!r}")
@@ -898,6 +930,8 @@ def main() -> int:
     assert_workspace_git_publish_manual_recovery()
     assert_capability_locked_plan_stays_on_taskspec_workflow()
     assert_workspace_action_capability_registry_mapping()
+    assert_taskspec_capability_selector_repairs_existing_workspace_publish()
+    assert_taskspec_capability_selector_falls_back_to_heuristics()
     assert_autopilot_llm_candidate_selection()
     assert_autopilot_planner_fallback()
     assert_unknown_capability_needs_attention()

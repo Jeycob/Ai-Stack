@@ -46,6 +46,11 @@ def assert_ready_payload() -> None:
         raise SystemExit(f"expected runtime_commit=abc1234, got {payload!r}")
     if not payload.get("runtime_fingerprint"):
         raise SystemExit(f"expected runtime_fingerprint in ready payload, got {payload!r}")
+    model_runtime = payload.get("model_runtime") or {}
+    if model_runtime.get("default_alias") != "codex-local":
+        raise SystemExit(f"expected default codex-local alias in health payload, got {payload!r}")
+    if model_runtime.get("structured_output") != "auto":
+        raise SystemExit(f"expected structured_output=auto in health payload, got {payload!r}")
     if payload.get("readiness_issues") != []:
         raise SystemExit(f"expected no readiness issues, got {payload!r}")
     if (payload.get("openwebui") or {}).get("base_url") != "http://127.0.0.1:9090":

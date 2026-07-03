@@ -26,7 +26,7 @@ def load_turn_module():
 
 
 class SmokeArgs:
-    model = "codex-local-plan-qwen14b"
+    model = "codex-local"
     stateless = False
     skip_codex_preflight = True
     no_follow_scheduled = True

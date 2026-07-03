@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_MODEL = "codex-local-plan-qwen14b"
+DEFAULT_MODEL = "codex-local"
 DEFAULT_TITLE = "Codex audit log - OpenWebUI visible history"
 CAPABILITY_ROADMAP = Path(__file__).resolve().parents[2] / "docs/codex-local-capability-roadmap.json"
 SAFE_PATCH_ROOT_FILES = {

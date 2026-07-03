@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, help="Chat JSON response from /api/v1/chats/{id}")
     parser.add_argument("--out", required=True, help="Output payload JSON for POST /api/v1/chats/{id}")
     parser.add_argument("--title", help="Optional chat title")
-    parser.add_argument("--model", default="codex-local-plan-qwen14b", help="Model metadata for appended assistant messages")
+    parser.add_argument("--model", default="codex-local", help="Model metadata for appended assistant messages")
     parser.add_argument("--user", action="append", default=[], help="Append user message text")
     parser.add_argument("--user-file", action="append", default=[], help="Append user message from file")
     parser.add_argument("--assistant", action="append", default=[], help="Append assistant message text")

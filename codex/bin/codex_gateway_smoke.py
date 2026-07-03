@@ -13,7 +13,7 @@ from typing import Any
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:9101"
-DEFAULT_MODEL = "codex-local-plan-qwen14b"
+DEFAULT_MODEL = "codex-local"
 
 
 class SmokeError(RuntimeError):

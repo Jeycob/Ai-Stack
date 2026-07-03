@@ -8,7 +8,7 @@ OPENWEBUI_URL="${OPENWEBUI_URL:-http://127.0.0.1:9090}"
 CODEX_GATEWAY_URL="${CODEX_GATEWAY_URL:-http://127.0.0.1:9101}"
 OLLAMA_URL="${OLLAMA_URL:-http://192.168.0.48:11434}"
 WORKSPACE="${WORKSPACE:-ai-stack}"
-MODEL="${MODEL:-codex-local-plan-qwen14b}"
+MODEL="${MODEL:-codex-local}"
 TIMEOUT="${TIMEOUT:-10}"
 OWUI_CHAT_SMOKE_EXPECTED="${OWUI_CHAT_SMOKE_EXPECTED:-smoke}"
 OWUI_CHAT_SMOKE_VISIBLE="${OWUI_CHAT_SMOKE_VISIBLE:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
@@ -275,6 +275,28 @@ elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_recovery_sm
 else
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway recovery smoke ... SKIP (python3 or gateway_recovery_smoke.py missing)\n'
   record_summary "Codex gateway recovery smoke" "SKIP"
+fi
+
+if [ "${SKIP_CODEX_LOCAL_MODEL_RUNTIME_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex local model runtime smoke ... SKIP (disabled)\n'
+  record_summary "Codex local model runtime smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/codex_local_model_runtime_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex local model runtime smoke ...\n'
+  codex_local_model_runtime_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/codex_local_model_runtime_smoke.py" >"$codex_local_model_runtime_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$codex_local_model_runtime_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex local model runtime smoke OK\n'
+    record_summary "Codex local model runtime smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$codex_local_model_runtime_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex local model runtime smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex local model runtime smoke" "FAIL"
+  fi
+  rm -f "$codex_local_model_runtime_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex local model runtime smoke ... SKIP (python3 or codex_local_model_runtime_smoke.py missing)\n'
+  record_summary "Codex local model runtime smoke" "SKIP"
 fi
 
 if [ "${SKIP_GATEWAY_ADMIN_WORKSPACE_RUN_SMOKE:-0}" = "1" ]; then

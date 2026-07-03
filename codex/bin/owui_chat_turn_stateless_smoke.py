@@ -46,7 +46,7 @@ def main() -> int:
     turn.http_request = fake_http
 
     class SmokeArgs:
-        model = "codex-local-plan-qwen14b"
+        model = "codex-local"
         no_follow_scheduled = True
         response_json_out = ""
         out = ""

@@ -269,7 +269,7 @@ class Filter:
     def _is_ai_stack_request(self, body: dict) -> bool:
         model = str(body.get("model") or "")
         text = "\n".join(self._message_texts(body)[-8:]).lower()
-        return "codex-local-" in model and (
+        return "codex-local" in model and (
             re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*ai-stack\s*$", text) is not None
             or "ai-stack" in text
         )
@@ -538,7 +538,7 @@ class Filter:
 
     def _natural_admin_command(self, body: dict, text: str) -> str | None:
         model = str(body.get("model") or "")
-        if not model.startswith("codex-local-") or not text or "GATEWAY_ADMIN_" in text:
+        if not model.startswith("codex-local") or not text or "GATEWAY_ADMIN_" in text:
             return None
         return self._agent_loop_command_for_text(text)
 
@@ -1353,7 +1353,7 @@ class Filter:
         if not m:
             raise ValueError("Usage: GATEWAY_ADMIN_CHECK_STACK [workspace] [model]")
         workspace = (m.group(1) or "ai-stack").strip()
-        model = (m.group(2) or "codex-local-plan-qwen14b").strip()
+        model = (m.group(2) or "codex-local").strip()
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
             raise ValueError("Unsafe workspace name")
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", model):

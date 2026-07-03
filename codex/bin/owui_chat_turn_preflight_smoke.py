@@ -19,7 +19,7 @@ TURN_PATH = ROOT / "codex/bin/owui_chat_turn.py"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline regression smoke for owui_chat_turn codex-local preflight.")
-    parser.add_argument("--model", default="codex-local-plan-qwen14b")
+    parser.add_argument("--model", default="codex-local")
     return parser.parse_args()
 
 
@@ -33,7 +33,7 @@ def load_turn_module():
 
 
 class SmokeArgs:
-    model = "codex-local-plan-qwen14b"
+    model = "codex-local"
     no_follow_scheduled = True
     response_json_out = ""
     out = ""

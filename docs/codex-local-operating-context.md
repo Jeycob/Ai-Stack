@@ -35,7 +35,7 @@ Doporuceny vzor:
 
 ```bash
 python3 codex/bin/owui_chat_turn.py \
-  --model codex-local-plan-qwen14b \
+  --model codex-local \
   --visible-prompt-file /tmp/visible.txt \
   --prompt-file /tmp/technical.txt \
   --status-interval 3 \
@@ -177,12 +177,22 @@ GitHub API token pro volitelne zakladani GitHub repozitaru ukladej pres
 
 ## Modely
 
-- `codex-local-plan-qwen14b`: vychozi rychly model pro analyzy a mensi navrhy.
-- `codex-local-build-qwen14b`: rychly model pro mensi editacni ulohy.
-- `codex-local-plan-qwen32b`: pomalejsi deep mode pro slozitejsi uvazovani.
-- `codex-local-build-qwen32b`: pomalejsi build/edit deep mode.
+- `codex-local`: vychozi persistentni alias pro bezny agent loop.
+- `codex-local-heavy`: rucni deep/heavy alias.
+- `codex-local-planner-exp`: volitelny experimental planner alias; kdyz neni nastaveny planner experiment, vraci se na default model.
+- Stare aliasy `codex-local-plan-qwen14b`, `codex-local-build-qwen14b`, `codex-local-plan-qwen32b` a `codex-local-build-qwen32b` zustavaji jen kvuli kompatibilite.
 
-Na RTX 4080 16 GB je 14B prakticky vychozi volba. 32B muze byt pomaly, protoze cast bezi pres CPU.
+Na RTX 4080 16 GB / 64 GB RAM je 14B prakticky vychozi model. Heavy 32B/30B nech jako explicitni deep mode, jinak zbytecne rozbije latenci a VRAM churn.
+
+Doporucene env:
+
+- `CODEX_LOCAL_DEFAULT_MODEL=qwen2.5-coder:14b`
+- `CODEX_LOCAL_HEAVY_MODEL=qwen2.5-coder:32b`
+- `CODEX_LOCAL_MODEL_MODE=single`
+- `CODEX_LOCAL_ALLOW_HEAVY_ESCALATION=false`
+- `CODEX_LOCAL_STRUCTURED_OUTPUT=auto`
+- `CODEX_LOCAL_STRUCTURED_BACKEND=auto`
+- `CODEX_LOCAL_EXPERIMENTAL_PLANNER_MODEL=` ponechat prazdne, pokud jen netestujes planner experiment.
 
 OpenWebUI model settings prompt pro `codex-local-*` je verzovany v
 `docs/codex-local-model-system-prompt.md`. Prompt ma model smerovat k normalni
@@ -265,7 +275,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 3. Nech lokalni model navrhnout zmenu nebo patch, ale over faktickou spravnost.
 4. Aplikuj jen maly whitelisted patch pres `GATEWAY_ADMIN_APPLY_NOW`.
 5. Spust `GATEWAY_ADMIN_GIT_DIFF` a zkontroluj, ze diff odpovida zameru.
-6. Spust `GATEWAY_ADMIN_CHECK_STACK ai-stack codex-local-plan-qwen14b`.
+6. Spust `GATEWAY_ADMIN_CHECK_STACK ai-stack codex-local`.
 7. Spust `GATEWAY_ADMIN_GIT_STATUS` a over `(none)` u blocked/sensitive cest.
 8. Pushni pres `GATEWAY_ADMIN_GIT_PUSH main <message>`.
 9. Po pushi zkontroluj cisty status.

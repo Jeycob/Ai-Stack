@@ -109,7 +109,7 @@ class Filter:
         if not model:
             return body
 
-        if self.valves.enable_codex_local_intent_router and str(model).startswith("codex-local-"):
+        if self.valves.enable_codex_local_intent_router and str(model).startswith("codex-local"):
             routed = self._route_codex_local_admin_intent(body)
             if routed:
                 return routed
