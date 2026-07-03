@@ -8,6 +8,7 @@
 import json, os, re, subprocess, time, uuid, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workspace_scan import collect, load_workspace
 
 WORKSPACES_FILE = os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json")
 OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1")
@@ -696,6 +697,31 @@ def admin_workspace_action(payload):
     result["runner_exit_code"] = proc.returncode
     return result
 
+def workspace_autopilot_recommendation(workspace: str) -> str:
+    try:
+        root = load_workspace(WORKSPACES_FILE, workspace)
+        scan = collect(root, 60)
+    except Exception as exc:
+        return f"Workspace needs manual review because scan data is unavailable: {exc}"
+
+    manifests = scan.get("manifests") or []
+    languages = scan.get("languages") or []
+    package_scripts = scan.get("package_scripts") or []
+    candidate_commands = scan.get("candidate_commands") or []
+    manifest_names = {Path(rel).name for rel in manifests}
+
+    if not manifests:
+        return "Workspace has no recognized project manifest yet; first add build or package metadata for the detected stack."
+    if "package.json" in manifest_names and not package_scripts:
+        return "Node workspace has package.json but no scripts; add at least build, test or lint scripts so codex-local can continue automatically."
+    if {"pyproject.toml", "requirements.txt"} & manifest_names and not any("pytest" in cmd for cmd in candidate_commands):
+        return "Python workspace is missing an obvious test entrypoint; consider adding tests/ or a pytest-compatible setup."
+    if any(lang in {"javascript/typescript", "python", "rust", "go", "jvm", "c/cpp"} for lang in languages) and not candidate_commands:
+        return "Project shape is recognized, but no runnable lint/test/build command was inferred; expose one through standard manifests or scripts."
+    if candidate_commands:
+        return f"No safe next capability matched the current allowlist. The first inferred manual command to review is: {candidate_commands[0]}"
+    return "No safe next capability was inferred; inspect manifests and add a standard lint, test or build entrypoint."
+
 def admin_workspace_autopilot(payload):
     workspace = str(payload.get("workspace") or "").strip()
     timeout = int(payload.get("timeout") or 1800)
@@ -771,6 +797,7 @@ def admin_workspace_autopilot(payload):
             "max_steps": max_steps,
             "chosen_action": "none",
             "reason": "No supported next action was found within the allowed action set.",
+            "recommendation": workspace_autopilot_recommendation(workspace),
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
@@ -789,6 +816,7 @@ def admin_workspace_autopilot(payload):
             "max_steps": max_steps,
             "chosen_action": chosen_action,
             "reason": chosen_reason,
+            "recommendation": "",
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
@@ -859,6 +887,7 @@ def admin_workspace_autopilot(payload):
         "max_steps": max_steps,
         "chosen_action": chosen_action,
         "reason": chosen_reason,
+        "recommendation": "",
         "duration_ms": int((time.time() - total_started) * 1000),
         "verify_steps": current_verify_steps,
         "install_probe": current_install_probe,
