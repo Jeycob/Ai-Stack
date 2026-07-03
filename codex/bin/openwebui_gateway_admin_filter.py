@@ -412,7 +412,9 @@ class Filter:
 
         if workspace:
             if self._looks_like_edit_request(task_text):
-                return f"GATEWAY_ADMIN_WORKSPACE_EDIT {shlex.quote(workspace)} --timeout 900 -- {shlex.quote(task_text[:1800])}"
+                action = self._looks_like_workspace_action(task_text)
+                run_after = f" --run-after {action}" if action else ""
+                return f"GATEWAY_ADMIN_WORKSPACE_EDIT {shlex.quote(workspace)} --timeout 900{run_after} -- {shlex.quote(task_text[:1800])}"
             action = self._looks_like_workspace_action(task_text)
             if action:
                 return f"GATEWAY_ADMIN_WORKSPACE_ACTION {shlex.quote(workspace)} {action} --runner container --timeout 900"
@@ -1347,6 +1349,9 @@ class Filter:
         timeout = 900
         model = "qwen2.5-coder:14b"
         max_files = 6
+        run_after = ""
+        run_timeout = 900
+        runner = "container"
         while parts and parts[0] != "--":
             opt = parts.pop(0)
             if opt == "--timeout" and parts:
@@ -1359,6 +1364,19 @@ class Filter:
                 continue
             if opt == "--max-files" and parts:
                 max_files = int(parts.pop(0))
+                continue
+            if opt == "--run-after" and parts:
+                run_after = parts.pop(0).strip().lower()
+                if run_after not in {"install", "verify", "smoke", "test", "build", "lint"}:
+                    raise ValueError("run-after must be one of install, verify, smoke, test, build, lint")
+                continue
+            if opt == "--run-timeout" and parts:
+                run_timeout = int(parts.pop(0))
+                continue
+            if opt == "--runner" and parts:
+                runner = parts.pop(0)
+                if runner not in {"container", "host"}:
+                    raise ValueError("--runner must be container or host")
                 continue
             raise ValueError(f"Unknown GATEWAY_ADMIN_WORKSPACE_EDIT option before --: {opt}")
 
@@ -1379,6 +1397,10 @@ class Filter:
             "model": model,
             "max_files": max_files,
         }
+        if run_after:
+            payload["run_after"] = run_after
+            payload["run_timeout"] = run_timeout
+            payload["runner"] = runner
         result = self._gateway_admin_request("/v1/admin/workspace/edit", payload, timeout=max(timeout + 90, 180))
         status = "WORKSPACE_EDIT_OK" if result.get("ok") else "WORKSPACE_EDIT_FAILED"
         files = result.get("files") or []
@@ -1387,15 +1409,22 @@ class Filter:
         diff = str(result.get("diff", ""))
         model_text = str(result.get("model_text", ""))
         error = str(result.get("error", "") or result.get("apply_output", ""))
+        run_result = result.get("run_result") or {}
+        run_output = ""
+        if isinstance(run_result, dict) and run_result:
+            run_output = str(run_result.get("output", ""))
         return (
             f"{status}\n"
             f"workspace={result.get('workspace', workspace)}\n"
             f"status={result.get('status', '(unknown)')}\n"
             f"model={result.get('model', model)}\n"
+            f"run_after={result.get('run_after', '')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
             + (self._details("files", files_text) if files_text else "")
             + (self._details("git_status", git_status) if git_status else "")
             + (self._details("error", self._trim(error, 8000)) if error else "")
+            + (self._details("run_result", self._trim(json.dumps(run_result, ensure_ascii=False, indent=2), 12000)) if run_result else "")
+            + (self._details("run_output", self._trim(run_output, 12000)) if run_output else "")
             + self._details("diff", self._trim(diff, 24000))
             + (self._details("model_text", self._trim(model_text, 12000)) if not result.get("ok") and model_text else "")
         )

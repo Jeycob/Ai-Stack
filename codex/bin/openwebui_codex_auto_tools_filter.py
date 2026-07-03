@@ -1555,7 +1555,22 @@ class Filter:
         task = " ".join(self._non_repo_lines(text)).strip() or text.strip()
         if not task:
             return None
-        return f"GATEWAY_ADMIN_WORKSPACE_EDIT {workspace} --timeout 900 -- {shlex.quote(task[:1800])}"
+        lower = task.lower()
+        run_after = ""
+        run_cues = {
+            "test": ("test", "testy", "otestuj"),
+            "build": ("build", "sestav", "zbuild"),
+            "lint": ("lint",),
+            "verify": ("verify", "over", "ověř", "zkontroluj"),
+            "install": ("install", "nainstaluj", "doinstaluj", "zavislosti", "závislosti"),
+            "smoke": ("spust", "spusť", "rozbehni", "rozběhni", "run it", "smoke"),
+        }
+        for action, cues in run_cues.items():
+            if any(cue in lower for cue in cues):
+                run_after = action
+                break
+        suffix = f" --run-after {run_after}" if run_after else ""
+        return f"GATEWAY_ADMIN_WORKSPACE_EDIT {workspace} --timeout 900{suffix} -- {shlex.quote(task[:1800])}"
 
     def _natural_workspace_action_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)

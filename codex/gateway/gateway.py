@@ -780,6 +780,9 @@ def admin_workspace_edit(payload):
     timeout = int(payload.get("timeout") or 600)
     max_files = int(payload.get("max_files") or 6)
     max_diff_chars = int(payload.get("max_diff_chars") or 80_000)
+    run_after = str(payload.get("run_after") or "").strip().lower()
+    run_timeout = int(payload.get("run_timeout") or 900)
+    run_runner = str(payload.get("runner") or os.getenv("CODEX_GATEWAY_WORKSPACE_RUNNER", "container")).strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
     if not task or len(task) > 4000:
@@ -792,6 +795,12 @@ def admin_workspace_edit(payload):
         raise ValueError("max_files must be between 1 and 20")
     if max_diff_chars < 1000 or max_diff_chars > 300_000:
         raise ValueError("max_diff_chars must be between 1000 and 300000")
+    if run_after and run_after not in {"install", "verify", "smoke", "test", "build", "lint"}:
+        raise ValueError("run_after must be one of install, verify, smoke, test, build, lint")
+    if run_timeout < 1 or run_timeout > 3600:
+        raise ValueError("run_timeout must be between 1 and 3600")
+    if run_runner not in {"container", "host"}:
+        raise ValueError("runner must be container or host")
 
     root = workspace_root(workspace)
     if not (root / ".git").exists():
@@ -861,15 +870,25 @@ def admin_workspace_edit(payload):
         stderr=subprocess.STDOUT,
         timeout=60,
     )
+    action_result = None
+    if apply.returncode == 0 and run_after:
+        action_result = admin_workspace_action({
+            "workspace": workspace,
+            "action": run_after,
+            "timeout": run_timeout,
+            "runner": run_runner,
+        })
     status = run_ro(["git", "status", "--short", "--branch"], root, 10)
     return {
-        "ok": apply.returncode == 0,
+        "ok": apply.returncode == 0 and (action_result is None or bool(action_result.get("ok"))),
         "action": "workspace_edit",
         "workspace": workspace,
         "root": str(root),
         "model": model,
         "files": paths,
         "status": "applied" if apply.returncode == 0 else "apply_failed",
+        "run_after": run_after,
+        "run_result": action_result,
         "apply_output": apply.stdout.strip(),
         "diff": diff,
         "model_text": model_text,

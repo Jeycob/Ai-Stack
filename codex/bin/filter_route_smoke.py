@@ -120,6 +120,12 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         expected=("GATEWAY_ADMIN_WORKSPACE_EDIT Test2 --timeout 900", "webgl soubor s kouli"),
         unexpected=("mentor_codex_local.py delegate", "Tuhle akci jsem sam"),
     ),
+    RouteScenario(
+        name="workspace-direct-edit-and-run",
+        prompt="repozitar: Test2\npridej webgl soubor s kouli a spust to",
+        expected=("GATEWAY_ADMIN_WORKSPACE_EDIT Test2 --timeout 900 --run-after smoke", "webgl soubor s kouli"),
+        unexpected=("mentor_codex_local.py delegate", "GATEWAY_ADMIN_WORKSPACE_ACTION Test2 smoke"),
+    ),
 )
 
 
