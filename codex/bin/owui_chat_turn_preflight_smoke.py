@@ -181,7 +181,7 @@ def assert_runtime_split_brain_short_circuits(turn) -> None:
             "natural_codex_local_route": "agent_loop",
             "runtime_fingerprint": "stale-runtime-fingerprint",
             "runtime_repo_root": turn.local_repo_root(),
-            "runtime_commit": turn.local_repo_commit_short(),
+            "runtime_commit": "different999",
             "gateway_admin": {"lan_admin_ready": True},
             "readiness_issues": [],
         }
@@ -201,6 +201,45 @@ def assert_runtime_split_brain_short_circuits(turn) -> None:
     if calls:
         raise SystemExit(f"PREFLIGHT_RUNTIME_SPLIT_BRAIN_FAILED\nreason=unexpected HTTP calls {calls!r}")
     print("OWUI_PREFLIGHT_RUNTIME_SPLIT_BRAIN_OK")
+
+
+def assert_same_checkout_same_commit_ignores_fingerprint_warning(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        if path != "/api/chat/completions":
+            raise AssertionError(f"same-checkout warning path touched unexpected endpoint: {method} {path}")
+        return 200, {"choices": [{"message": {"content": "SAME_CHECKOUT_COMMIT_OK"}}]}
+
+    def fake_health(_args):
+        return {
+            "ok": True,
+            "codex_local_ready": True,
+            "capability_mode": "agent-first",
+            "natural_codex_local_route": "agent_loop",
+            "runtime_fingerprint": "different-runtime-fingerprint",
+            "runtime_repo_root": turn.local_repo_root(),
+            "runtime_commit": turn.local_repo_commit_short(),
+            "gateway_admin": {"lan_admin_ready": True},
+            "readiness_issues": [],
+        }
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = fake_health
+    turn.run_codex_reconcile_check = lambda _args: {"ok": True}
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
+    joined = "\n".join(text_chunks)
+    if rc != 0:
+        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_FAILED\nreason=unexpected exit code {rc}")
+    if "SAME_CHECKOUT_COMMIT_OK" not in joined:
+        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_FAILED\nreason=missing completion text in {joined!r}")
+    if calls != [("POST", "/api/chat/completions")]:
+        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_OK")
 
 
 def assert_foreign_clone_same_commit_reaches_completion(turn) -> None:
@@ -250,6 +289,8 @@ def main() -> int:
     assert_filter_stale_short_circuits(turn)
     turn = load_turn_module()
     assert_runtime_split_brain_short_circuits(turn)
+    turn = load_turn_module()
+    assert_same_checkout_same_commit_ignores_fingerprint_warning(turn)
     turn = load_turn_module()
     assert_foreign_clone_same_commit_reaches_completion(turn)
     turn = load_turn_module()

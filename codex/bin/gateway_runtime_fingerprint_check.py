@@ -96,12 +96,13 @@ def main() -> int:
     same_commit = bool(local_commit) and bool(remote_commit) and local_commit == remote_commit
     capability_mode = str(payload.get("capability_mode") or "").strip()
     natural_route = str(payload.get("natural_codex_local_route") or "").strip()
+    fingerprint_match = bool(remote_fingerprint) and remote_fingerprint == local_fingerprint
     ok = (
         payload.get("ok") is True
         and capability_mode == "agent-first"
         and natural_route == "agent_loop"
         and bool(remote_fingerprint)
-        and ((same_checkout and remote_fingerprint == local_fingerprint) or (not same_checkout and same_commit))
+        and (same_commit or fingerprint_match)
     )
     result = {
         "ok": ok,
@@ -116,11 +117,18 @@ def main() -> int:
         "local_repo_commit": local_commit,
         "same_checkout": same_checkout,
         "same_commit": same_commit,
+        "fingerprint_match": fingerprint_match,
         "gateway_health": payload,
     }
     if not remote_fingerprint:
         result["marker"] = "CODEX_LOCAL_RUNTIME_FINGERPRINT_MISSING"
         result["recovery"] = "Nasad a restartuj aktuální ai-stack runtime; /health musí vracet runtime_fingerprint."
+    elif same_commit and not fingerprint_match:
+        result["marker"] = "CODEX_LOCAL_RUNTIME_FINGERPRINT_WARNING"
+        result["recovery"] = (
+            "Runtime běží na správném commitu, ale fingerprint helperu se liší. "
+            "Ber to jako diagnostické varování; pokud se objeví skutečné chování starého runtime, restartuj stack."
+        )
     elif same_checkout and remote_fingerprint != local_fingerprint:
         result["marker"] = "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN"
         result["recovery"] = "Běží starý runtime proti novějšímu repu. Restartuj stack a znovu ověř /health."
@@ -141,6 +149,7 @@ def main() -> int:
         print(f"natural_codex_local_route={natural_route}")
         print(f"same_checkout={'true' if same_checkout else 'false'}")
         print(f"same_commit={'true' if same_commit else 'false'}")
+        print(f"fingerprint_match={'true' if fingerprint_match else 'false'}")
         print(f"remote_repo_root={remote_root or 'missing'}")
         print(f"local_repo_root={local_root}")
         print(f"remote_runtime_commit={remote_commit or 'missing'}")

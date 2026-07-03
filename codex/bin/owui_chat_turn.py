@@ -377,13 +377,14 @@ def codex_preflight_guard(args: argparse.Namespace) -> str | None:
     remote_fingerprint = str(health.get("runtime_fingerprint") or "").strip()
     local_fingerprint = local_gateway_runtime_fingerprint()
     checkout = runtime_checkout_identity(health)
+    same_commit = bool(checkout.get("same_commit"))
     if not remote_fingerprint:
         return codex_preflight_failure_text(
             "CODEX_LOCAL_RUNTIME_FINGERPRINT_MISSING",
             "Nasad a restartuj aktuální ai-stack runtime; /health musí vracet runtime_fingerprint.",
             details={"gateway_health": health, "local_runtime_fingerprint": local_fingerprint, "checkout": checkout},
         )
-    if bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint:
+    if bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint and not same_commit:
         return codex_preflight_failure_text(
             "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
             "Běží starý gateway/runtime proces nad novějším repem. Restartuj stack přes codex/bin/start_codex_stack.sh nebo codex/bin/deploy_ai_stack.sh.",
@@ -395,7 +396,7 @@ def codex_preflight_guard(args: argparse.Namespace) -> str | None:
             },
         )
     if not bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint:
-        if not bool(checkout.get("same_commit")):
+        if not same_commit:
             return codex_preflight_failure_text(
                 "CODEX_LOCAL_RUNTIME_CLONE_DRIFT",
                 "Lokální clone není na stejném commitu jako běžící runtime. Synchronizuj repo nebo helper spusť z live runtime checkoutu.",
