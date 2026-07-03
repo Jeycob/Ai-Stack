@@ -1244,6 +1244,7 @@ class Filter:
             f"allow_actions={','.join(result.get('allow_actions', allow_actions))}\n"
             f"max_steps={result.get('max_steps', max_steps)}\n"
             f"reason={result.get('reason', '')}\n"
+            f"stop_reason={result.get('stop_reason', '')}\n"
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"

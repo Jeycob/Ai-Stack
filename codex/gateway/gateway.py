@@ -723,32 +723,35 @@ def admin_workspace_autopilot(payload):
     if not allow_actions:
         raise ValueError("allow_actions must not be empty")
 
-    verify = admin_workspace_action({
-        "workspace": workspace,
-        "action": "verify",
-        "timeout": timeout,
-        "env": env_map,
-        "dry_run": True,
-    })
-    verify_steps = verify.get("verify_steps") or []
-
-    candidate_actions = []
-    for step in verify_steps:
-        action = str(step.get("action") or "").strip().lower()
-        if action in allow_actions and step.get("supported"):
-            candidate_actions.append(action)
-
-    install_probe = None
-    if not candidate_actions and "install" in allow_actions:
-        install_probe = admin_workspace_action({
+    def plan_candidates(executed_names):
+        verify_result = admin_workspace_action({
             "workspace": workspace,
-            "action": "install",
+            "action": "verify",
             "timeout": timeout,
             "env": env_map,
             "dry_run": True,
         })
-        if install_probe.get("ok"):
-            candidate_actions.append("install")
+        verify_steps_local = verify_result.get("verify_steps") or []
+        candidates = []
+        for step in verify_steps_local:
+            action = str(step.get("action") or "").strip().lower()
+            if action in allow_actions and step.get("supported") and action not in executed_names:
+                candidates.append(action)
+
+        install_probe_local = None
+        if not candidates and "install" in allow_actions and "install" not in executed_names:
+            install_probe_local = admin_workspace_action({
+                "workspace": workspace,
+                "action": "install",
+                "timeout": timeout,
+                "env": env_map,
+                "dry_run": True,
+            })
+            if install_probe_local.get("ok"):
+                candidates.append("install")
+        return verify_result, verify_steps_local, candidates, install_probe_local
+
+    verify, verify_steps, candidate_actions, install_probe = plan_candidates(set())
 
     chosen_action = candidate_actions[0] if candidate_actions else None
     if chosen_action == "install" and install_probe is not None:
@@ -772,6 +775,7 @@ def admin_workspace_autopilot(payload):
             "verify_steps": verify_steps,
             "install_probe": install_probe,
             "executed_actions": [],
+            "stop_reason": "no_supported_action",
             "output": "",
         }
 
@@ -789,13 +793,26 @@ def admin_workspace_autopilot(payload):
             "verify_steps": verify_steps,
             "install_probe": install_probe,
             "executed_actions": [],
+            "stop_reason": "recommend_only",
             "output": "",
         }
 
     total_started = time.time()
     executed_actions = []
     last_result = None
-    for action_name in candidate_actions[:max_steps]:
+    current_verify_steps = verify_steps
+    current_install_probe = install_probe
+    stop_reason = "max_steps_reached"
+    for idx in range(max_steps):
+        remaining_names = {step["action"] for step in executed_actions if step.get("action")}
+        if idx == 0:
+            next_candidates = candidate_actions
+        else:
+            _, current_verify_steps, next_candidates, current_install_probe = plan_candidates(remaining_names)
+        if not next_candidates:
+            stop_reason = "no_more_supported_actions"
+            break
+        action_name = next_candidates[0]
         last_result = admin_workspace_action({
             "workspace": workspace,
             "action": action_name,
@@ -815,6 +832,7 @@ def admin_workspace_autopilot(payload):
             "error": last_result.get("error"),
         })
         if not last_result.get("ok"):
+            stop_reason = "step_failed"
             break
 
     ok = all(step.get("ok") for step in executed_actions) if executed_actions else False
@@ -823,6 +841,15 @@ def admin_workspace_autopilot(payload):
         output_parts.append(
             f"== {step['action']} ==\n{str(step.get('output', '')).rstrip()}"
         )
+    final_summary = []
+    if executed_actions:
+        final_summary.append("summary:")
+        for step in executed_actions:
+            if step.get("ok"):
+                final_summary.append(f"- {step['action']}: ok")
+            else:
+                final_summary.append(f"- {step['action']}: failed ({step.get('error') or step.get('exit_code')})")
+        final_summary.append(f"stop_reason={stop_reason}")
     return {
         "ok": ok,
         "workspace": workspace,
@@ -833,12 +860,13 @@ def admin_workspace_autopilot(payload):
         "chosen_action": chosen_action,
         "reason": chosen_reason,
         "duration_ms": int((time.time() - total_started) * 1000),
-        "verify_steps": verify_steps,
-        "install_probe": install_probe,
+        "verify_steps": current_verify_steps,
+        "install_probe": current_install_probe,
         "executed_actions": executed_actions,
+        "stop_reason": stop_reason,
         "exit_code": last_result.get("exit_code") if last_result else None,
         "runner_exit_code": last_result.get("runner_exit_code") if last_result else None,
-        "output": "\n\n".join(output_parts).strip(),
+        "output": "\n\n".join(output_parts + (["\n".join(final_summary)] if final_summary else [])).strip(),
     }
 
 def pid_running(pid):
