@@ -33,6 +33,34 @@
       "scope": "workspace_runtime",
       "summary": "Auditovana capability pro existujici workspace: git init, origin remote, commit, push branch main a recovery s workspace SSH public key pri auth blockerech."
     },
+    "ssh_key_create": {
+      "scope": "workspace_runtime",
+      "summary": "Idempotentne vytvori nebo znovu pouzije SSH klic pro konkretni workspace bez interaktivniho ssh-keygen promptu."
+    },
+    "ssh_key_show_public": {
+      "scope": "workspace_runtime",
+      "summary": "Vrati workspace SSH public key a pokud klic chybi, nejdriv ho idempotentne vytvori."
+    },
+    "workspace_search": {
+      "scope": "workspace_snapshot",
+      "summary": "Bounded rg search pres registrovany workspace s ignorovanim runtime, secrets a build adresaru; vraci konkretni soubory a radky."
+    },
+    "workspace_context_set": {
+      "scope": "agent_metadata",
+      "summary": "Deterministicky potvrdi prepnuti nebo vyreseni aktualniho workspace kontextu pro navazujici chat."
+    },
+    "workspace_context_status": {
+      "scope": "agent_metadata",
+      "summary": "Deterministicky vrati aktualni workspace, cestu a seznam registrovanych workspace."
+    },
+    "capability_catalog_show": {
+      "scope": "agent_metadata",
+      "summary": "Vrati canonical capability katalog vcetne aliasu a readiness problemu registry."
+    },
+    "agent_runtime_status": {
+      "scope": "agent_metadata",
+      "summary": "Vrati runtime commit, fingerprint, model config a readiness stav codex-local gateway."
+    },
     "clarify_or_infer_capability": {
       "scope": "mentoring",
       "summary": "Nejužší mentoring krok pro nejednoznacne zadani: nejdriv audit, upresneni nebo inference dalsi capability, az pak rozsirovani scope."

@@ -269,7 +269,11 @@ Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `ta
 
 Planner uvnitř gateway je nově výslovně `LLM-first`. To znamená, že `admin_agent_loop()` se nejdřív vždy pokusí získat plán od modelu a teprve když planner call selže nebo vrátí nepoužitelný výstup, přejde na malý bounded fallback. V audit výstupu je to vidět přes `planner_source=llm|fallback`, takže už se dá snadno poznat, jestli systém opravdu rozhodoval přes model, nebo jen zachraňoval běh bez něj.
 
-Ještě důležitější je, že planner už nemá vracet rovnou hotový workflow jen podle keywordů. Nejprve vytváří `TaskSpec`, tedy strukturovaný popis významu úlohy: aktuální workspace, skutečný cíl uživatele, jestli jde o nové repo nebo práci v existujícím workspace, cílový remote, požadovaný end-state, potřebné capability, chybějící vstupy, rizikovost a recovery plán. Deterministický kód pak z `TaskSpec` teprve mapuje capability jako `review`, `edit`, `action`, `run`, `bootstrap`, `workspace_git_publish`, `ssh_key_create`, `ssh_key_show_public`, `web_answer`, `web_fetch` nebo `deploy`.
+Ještě důležitější je, že planner už nemá vracet rovnou hotový workflow jen podle keywordů. Nejprve vytváří `TaskSpec`, tedy strukturovaný popis významu úlohy: aktuální workspace, skutečný cíl uživatele, jestli jde o nové repo nebo práci v existujícím workspace, cílový remote, požadovaný end-state, potřebné capability, chybějící vstupy, rizikovost a recovery plán. Deterministický kód pak z `TaskSpec` teprve mapuje capability jako `review`, `workspace_search`, `edit`, `action`, `run`, `bootstrap`, `workspace_git_publish`, `ssh_key_create`, `ssh_key_show_public`, `web_answer`, `web_fetch` nebo `deploy`.
+
+Mezi `TaskSpec` a validací je nově samostatná canonical capability vrstva. LLM může vrátit starší nebo přirozenější alias jako `workspace_ssh_key_create`, `workspace_ssh_key_show_public`, `workspace_review` nebo `read_only_review`, ale gateway ho před validací převede na canonical form `ssh_key_create`, `ssh_key_show_public` nebo `review`. Registry je potom zdroj pravdy pro to, co je implementované; alias už nesmí skončit jako falešný `missing_capabilities`. Když TaskSpec obsahuje zároveň vytvoření SSH klíče i výpis public key, vyhrává `ssh_key_show_public`, protože tahle capability klíč idempotentně vytvoří, pokud chybí, a rovnou vrátí public key/path.
+
+Meta dotazy jsou řešené deterministicky, ne přes obecný repo review: `workspace_context_set`, `workspace_context_status`, `capability_catalog_show` a `agent_runtime_status` vrací aktuální workspace, známé workspaces, capability katalog nebo runtime stav. Dotaz typu “prohledej repo a hledej capability” jde do `workspace_search`, což je bounded `rg` přes workspace s ignorováním runtime/secrets adresářů; pokud by search capability chyběla nebo neměla query, gateway vrátí konkrétní `NEEDS_ATTENTION` místo halucinovaného shrnutí.
 
 Model se přitom standardně nemění. Planner, executor, reviewer i recovery používají stejný default runtime model; liší se jen prompt rolí. Gateway si interně drží role:
 
@@ -291,13 +295,15 @@ Praktický dopad je hlavně u Git/GitHub úloh. Prompt typu:
 
 už nemá spadnout do bootstrapu nového repa jen proto, že obsahuje slova `repo`, `git` nebo `ssh`. Pokud workspace `TestCode` existuje, `TaskSpec` to má pochopit jako práci uvnitř existujícího workspace a zvolit capability `workspace_git_publish`: případně `git init`, nastavení `origin`, commit změn, push branch `main` přes workspace SSH key a při auth blockerech vrácení `MANUAL_STEP_REQUIRED` s public key a přesným dalším krokem místo generic rady.
 
-TaskSpec také prochází validací capability. Když model požádá o neznámou nebo zatím neimplementovanou capability, gateway vrátí `AGENT_LOOP_NEEDS_ATTENTION` s `missing_capabilities` a recovery odkazem na `docs/codex-local-capability-roadmap.json`. Nesmí si vybrat “něco podobného”, protože to je přesně cesta k tomu, že agent udělá jinou věc než uživatel chtěl.
+TaskSpec také prochází validací capability až po canonicalizaci aliasů. Když model požádá o skutečně neznámou nebo zatím neimplementovanou capability, gateway vrátí `AGENT_LOOP_NEEDS_ATTENTION` s `missing_capabilities` a recovery odkazem na `docs/codex-local-capability-roadmap.json`. Nesmí si vybrat “něco podobného”, protože to je přesně cesta k tomu, že agent udělá jinou věc než uživatel chtěl.
 
 Novější vrstva nad tím je `GATEWAY_ADMIN_AGENT_LOOP`: intent-first orchestrace pro běžný codex-local chat. Tady už router nemá být „hlavní mozek“. Tenká OpenWebUI vrstva pouze předá workspace a původní task do gateway, a samotný loop udělá sled `intent/plán -> policy check -> capability execution -> observation -> recovery/verify -> report`.
 
 Prakticky to znamená:
 
 - `nic needituj` nebo jiný explicitní read-only požadavek jde do `review`,
+- `kde teď jsi`, `přepni se do workspace Test2` nebo `jaké máš capability` jde do meta capability,
+- `prohledej repo` jde do `workspace_search` a vrací konkrétní match řádky,
 - bezpečná editace jde do `edit` a může si sama přidat `run_after=verify|test|build|smoke`,
 - `ověř projekt`, `spusť build`, `nainstaluj závislosti` apod. jdou do `action`,
 - širší “udělej co je potřeba / pokračuj sám / rozběhni to” jde do `autopilot`,

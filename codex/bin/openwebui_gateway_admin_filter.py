@@ -165,6 +165,10 @@ class Filter:
         latest_user = self._last_message_text(body, "user")
         natural_command = self._natural_admin_command(body, latest_user)
         if natural_command:
+            if self._admin_command_requested(natural_command, "GATEWAY_ADMIN_AGENT_LOOP"):
+                self._replace_last_user_text(body, latest_user, natural_command)
+                body["stream"] = True
+                return body
             return self._direct_response(body, self._dispatch_admin_command(natural_command))
 
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
@@ -180,6 +184,9 @@ class Filter:
             return self._direct_response(body, result)
         command, handler = self._match_admin_handler(latest_user)
         if command and handler:
+            if command == "GATEWAY_ADMIN_AGENT_LOOP":
+                body["stream"] = True
+                return body
             return self._direct_response(body, self._invoke_admin_handler(command, handler, latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
             normalized = re.sub(

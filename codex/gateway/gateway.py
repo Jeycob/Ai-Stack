@@ -5,7 +5,7 @@
 # gateway-scheduled-chat-patch: ok
 # gateway-chat-no-error-patch: ok
 # gateway-chat-fast-ack-patch: ok
-import hashlib, html, ipaddress, json, marshal, os, re, shlex, socket, subprocess, sys, time, uuid, urllib.error, urllib.parse, urllib.request
+import hashlib, html, ipaddress, json, marshal, os, re, shlex, socket, subprocess, sys, threading, time, uuid, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 from pathlib import Path
@@ -565,6 +565,7 @@ def runtime_health():
     workspaces_file_exists = Path(WORKSPACES_FILE).is_file()
     roadmap_exists = CAPABILITY_ROADMAP_FILE.is_file()
     git_head = run_ro(["git", "rev-parse", "--short", "HEAD"], REPO_ROOT, 8)
+    capability_registry_issues = agent_capability_registry_issues()
     local_admin_ready = True
     lan_admin_ready = bool(ADMIN_TOKEN)
     readiness_issues = []
@@ -578,6 +579,8 @@ def runtime_health():
         readiness_issues.append("OPENWEBUI_LOADER_UNAVAILABLE")
     if not lan_admin_ready:
         readiness_issues.append("GATEWAY_ADMIN_TOKEN_MISSING")
+    if capability_registry_issues:
+        readiness_issues.append("CAPABILITY_REGISTRY_INVALID")
     codex_local_ready = not readiness_issues
     return {
         "codex_local_ready": codex_local_ready,
@@ -614,6 +617,14 @@ def runtime_health():
         "capability_roadmap": {
             "path": str(CAPABILITY_ROADMAP_FILE),
             "exists": roadmap_exists,
+        },
+        "capability_registry": {
+            "implemented": sorted(
+                name
+                for name, spec in agent_capability_registry().items()
+                if isinstance(spec, dict) and spec.get("implemented")
+            ),
+            "issues": capability_registry_issues,
         },
         "readiness_issues": readiness_issues,
         "openwebui": {
@@ -783,6 +794,8 @@ def admin_web_answer(payload):
 
 
 AGENT_LOOP_WORKFLOWS = {
+    "meta",
+    "workspace_search",
     "review",
     "edit",
     "action",
@@ -799,9 +812,12 @@ AGENT_LOOP_WORKFLOWS = {
 }
 AGENT_LOOP_ACTIONS = {"install", "verify", "smoke", "test", "build", "lint"}
 AGENT_CAPABILITY_TO_WORKFLOW = {
+    "workspace_context_set": "meta",
+    "workspace_context_status": "meta",
+    "capability_catalog_show": "meta",
+    "agent_runtime_status": "meta",
     "review": "review",
-    "workspace_review": "review",
-    "read_only_review": "review",
+    "workspace_search": "workspace_search",
     "workspace_edit": "edit",
     "edit": "edit",
     "workspace_run": "run",
@@ -811,9 +827,7 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "workspace_repo_bootstrap": "bootstrap",
     "bootstrap": "bootstrap",
     "workspace_git_publish": "workspace_git_publish",
-    "workspace_ssh_key_create": "ssh_key_create",
     "ssh_key_create": "ssh_key_create",
-    "workspace_ssh_key_show_public": "ssh_key_show_public",
     "ssh_key_show_public": "ssh_key_show_public",
     "public_web_access": "web_answer",
     "web_answer": "web_answer",
@@ -824,21 +838,39 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "clarify": "clarify",
 }
 CORE_AGENT_CAPABILITIES = {
+    "workspace_context_set": {
+        "workflow": "meta",
+        "summary": "Deterministically acknowledge or report requested workspace context.",
+        "scope": "agent_metadata",
+        "implemented": True,
+    },
+    "workspace_context_status": {
+        "workflow": "meta",
+        "summary": "Deterministically report the current resolved workspace context.",
+        "scope": "agent_metadata",
+        "implemented": True,
+    },
+    "capability_catalog_show": {
+        "workflow": "meta",
+        "summary": "Deterministically show the implemented capability catalog.",
+        "scope": "agent_metadata",
+        "implemented": True,
+    },
+    "agent_runtime_status": {
+        "workflow": "meta",
+        "summary": "Deterministically show codex-local runtime status.",
+        "scope": "agent_metadata",
+        "implemented": True,
+    },
     "review": {
         "workflow": "review",
         "summary": "Read-only analysis over a repository snapshot; never edits.",
         "scope": "workspace_snapshot",
         "implemented": True,
     },
-    "workspace_review": {
-        "workflow": "review",
-        "summary": "Alias for read-only workspace review.",
-        "scope": "workspace_snapshot",
-        "implemented": True,
-    },
-    "read_only_review": {
-        "workflow": "review",
-        "summary": "Alias for read-only workspace review.",
+    "workspace_search": {
+        "workflow": "workspace_search",
+        "summary": "Bounded ripgrep search over a registered workspace; returns matching files and lines.",
         "scope": "workspace_snapshot",
         "implemented": True,
     },
@@ -884,6 +916,18 @@ CORE_AGENT_CAPABILITIES = {
         "scope": "workspace_bootstrap",
         "implemented": True,
     },
+    "workspace_repo_bootstrap": {
+        "workflow": "bootstrap",
+        "summary": "Audited repository/workspace bootstrap.",
+        "scope": "workspace_bootstrap",
+        "implemented": True,
+    },
+    "workspace_git_publish": {
+        "workflow": "workspace_git_publish",
+        "summary": "Existing workspace git init/origin/commit/push using workspace SSH key.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
     "ssh_key_create": {
         "workflow": "ssh_key_create",
         "summary": "Alias for idempotent workspace SSH key creation.",
@@ -894,6 +938,12 @@ CORE_AGENT_CAPABILITIES = {
         "workflow": "ssh_key_show_public",
         "summary": "Alias for returning the workspace SSH public key.",
         "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "public_web_access": {
+        "workflow": "web_answer",
+        "summary": "Public HTTP/HTTPS fetch and answer from downloaded content.",
+        "scope": "public_web",
         "implemented": True,
     },
     "web_answer": {
@@ -914,13 +964,180 @@ CORE_AGENT_CAPABILITIES = {
         "scope": "stack_runtime",
         "implemented": True,
     },
+    "stack_deploy": {
+        "workflow": "deploy",
+        "summary": "Audited ai-stack deploy/restart flow.",
+        "scope": "stack_runtime",
+        "implemented": True,
+    },
     "clarify": {
         "workflow": "clarify",
         "summary": "Return a precise missing-input or missing-capability recovery step.",
         "scope": "mentoring",
         "implemented": True,
     },
+    "clarify_or_infer_capability": {
+        "workflow": "clarify",
+        "summary": "Planner fallback marker for asking the capability selector or returning a precise recovery step.",
+        "scope": "mentoring",
+        "implemented": True,
+    },
 }
+
+CANONICAL_AGENT_CAPABILITY_ALIASES = {
+    "analyze": "review",
+    "analysis": "review",
+    "audit": "review",
+    "read_only": "review",
+    "read_only_review": "review",
+    "review": "review",
+    "workspace_review": "review",
+    "capabilities": "capability_catalog_show",
+    "capability": "capability_catalog_show",
+    "capability_catalog": "capability_catalog_show",
+    "capability_catalog_show": "capability_catalog_show",
+    "capability_registry": "capability_catalog_show",
+    "capability_status": "capability_catalog_show",
+    "capability_list": "capability_catalog_show",
+    "show_capabilities": "capability_catalog_show",
+    "list_capabilities": "capability_catalog_show",
+    "create_repo": "workspace_repo_bootstrap",
+    "create_repository": "workspace_repo_bootstrap",
+    "create_workspace": "workspace_repo_bootstrap",
+    "new_repo": "workspace_repo_bootstrap",
+    "new_repository": "workspace_repo_bootstrap",
+    "new_workspace": "workspace_repo_bootstrap",
+    "repo_bootstrap": "workspace_repo_bootstrap",
+    "repository_bootstrap": "workspace_repo_bootstrap",
+    "bootstrap": "workspace_repo_bootstrap",
+    "git_publish": "workspace_git_publish",
+    "git_push": "workspace_git_publish",
+    "github_push": "workspace_git_publish",
+    "publish": "workspace_git_publish",
+    "push": "workspace_git_publish",
+    "remote_push": "workspace_git_publish",
+    "ssh": "ssh_key_create",
+    "ssh_key": "ssh_key_create",
+    "ssh_key_create": "ssh_key_create",
+    "ssh_keygen": "ssh_key_create",
+    "github_ssh_key": "ssh_key_create",
+    "create_ssh_key": "ssh_key_create",
+    "generate_ssh_key": "ssh_key_create",
+    "workspace_ssh": "ssh_key_create",
+    "workspace_ssh_key": "ssh_key_create",
+    "workspace_ssh_key_create": "ssh_key_create",
+    "public_key": "ssh_key_show_public",
+    "ssh_public_key": "ssh_key_show_public",
+    "public_ssh_key": "ssh_key_show_public",
+    "show_public_key": "ssh_key_show_public",
+    "return_public_key": "ssh_key_show_public",
+    "workspace_public_key": "ssh_key_show_public",
+    "workspace_ssh_key_show_public": "ssh_key_show_public",
+    "ssh_key_show_public": "ssh_key_show_public",
+    "search": "workspace_search",
+    "repo_search": "workspace_search",
+    "repository_search": "workspace_search",
+    "workspace_search": "workspace_search",
+    "search_workspace": "workspace_search",
+    "grep": "workspace_search",
+    "rg": "workspace_search",
+    "internet": "public_web_access",
+    "internet_access": "public_web_access",
+    "public_web": "public_web_access",
+    "web": "public_web_access",
+    "web_access": "public_web_access",
+    "web_answer": "public_web_access",
+    "web_fetch": "public_web_access",
+    "fetch_web": "public_web_access",
+    "download_web": "public_web_access",
+    "deploy": "stack_deploy",
+    "stack_deploy": "stack_deploy",
+    "restart_stack": "stack_deploy",
+    "agent_runtime_status": "agent_runtime_status",
+    "runtime_status": "agent_runtime_status",
+    "system_status": "agent_runtime_status",
+    "status": "agent_runtime_status",
+    "workspace_context_set": "workspace_context_set",
+    "context_set": "workspace_context_set",
+    "workspace_set": "workspace_context_set",
+    "switch_workspace": "workspace_context_set",
+    "set_workspace": "workspace_context_set",
+    "change_workspace": "workspace_context_set",
+    "workspace_context_status": "workspace_context_status",
+    "context_status": "workspace_context_status",
+    "workspace_status": "workspace_context_status",
+    "workspace_info": "workspace_context_status",
+    "current_workspace": "workspace_context_status",
+    "workspace_list": "workspace_context_status",
+    "workspaces": "workspace_context_status",
+    "list_workspaces": "workspace_context_status",
+    "workspace_edit": "workspace_edit",
+    "edit": "workspace_edit",
+    "workspace_run": "workspace_run",
+    "run": "workspace_run",
+    "command": "workspace_run",
+    "shell": "workspace_run",
+    "workspace_autopilot": "workspace_autopilot",
+    "autopilot": "workspace_autopilot",
+    "clarify": "clarify_or_infer_capability",
+    "clarify_or_infer_capability": "clarify_or_infer_capability",
+}
+
+WORKSPACE_ACTION_ALIASES = {
+    "dependency_install": "install",
+    "dependencies": "install",
+    "install": "install",
+    "setup": "install",
+    "verify": "verify",
+    "check": "verify",
+    "smoke": "smoke",
+    "run_app": "smoke",
+    "test": "test",
+    "tests": "test",
+    "run_tests": "test",
+    "build": "build",
+    "compile": "build",
+    "lint": "lint",
+}
+
+
+def capability_key(value):
+    key = str(value or "").strip().lower()
+    key = re.sub(r"[\s./-]+", "_", key)
+    key = re.sub(r"[^a-z0-9_:]+", "", key)
+    key = re.sub(r"_+", "_", key).strip("_")
+    return key
+
+
+def canonicalize_workspace_action(action):
+    key = capability_key(action)
+    return WORKSPACE_ACTION_ALIASES.get(key, key)
+
+
+def canonicalize_agent_capability(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    key = capability_key(raw)
+    if key.startswith("workspace_action:"):
+        action = canonicalize_workspace_action(key.split(":", 1)[1])
+        return f"workspace_action:{action}" if action else ""
+    if key.startswith("workspace_action_"):
+        action = canonicalize_workspace_action(key.removeprefix("workspace_action_"))
+        return f"workspace_action:{action}" if action else ""
+    return CANONICAL_AGENT_CAPABILITY_ALIASES.get(key, raw)
+
+
+def canonicalize_agent_capabilities(capabilities):
+    out = []
+    seen = set()
+    for item in capabilities or []:
+        capability = canonicalize_agent_capability(item)
+        if not capability or capability in seen:
+            continue
+        seen.add(capability)
+        out.append(capability)
+    return out
 
 
 def extract_json_object(text):
@@ -1134,7 +1351,7 @@ def agent_capability_registry():
     for name, spec in load_capability_roadmap_payload().get("capabilities", {}).items():
         if not isinstance(spec, dict):
             continue
-        capability = str(name).strip()
+        capability = canonicalize_agent_capability(name)
         if not capability:
             continue
         entry = registry.setdefault(capability, {})
@@ -1155,10 +1372,57 @@ def agent_capability_registry():
     return registry
 
 
+def agent_capability_registry_issues():
+    registry = agent_capability_registry()
+    issues = []
+    required = {
+        "review",
+        "workspace_search",
+        "workspace_repo_bootstrap",
+        "workspace_git_publish",
+        "ssh_key_create",
+        "ssh_key_show_public",
+        "public_web_access",
+        "stack_deploy",
+        "workspace_context_set",
+        "workspace_context_status",
+        "capability_catalog_show",
+        "agent_runtime_status",
+    }
+    for capability in sorted(required):
+        entry = registry.get(capability)
+        if not entry:
+            issues.append(f"missing:{capability}")
+        elif not entry.get("implemented"):
+            issues.append(f"not_implemented:{capability}")
+    for alias, target in sorted(CANONICAL_AGENT_CAPABILITY_ALIASES.items()):
+        canonical = canonicalize_agent_capability(alias)
+        if canonical != target:
+            issues.append(f"alias_drift:{alias}->{canonical}!={target}")
+        entry = registry.get(target)
+        if not entry:
+            issues.append(f"alias_target_missing:{alias}->{target}")
+        elif not entry.get("implemented") and target != "clarify_or_infer_capability":
+            issues.append(f"alias_target_not_implemented:{alias}->{target}")
+    for action in sorted(AGENT_LOOP_ACTIONS):
+        capability = f"workspace_action:{action}"
+        entry = registry.get(capability)
+        if not entry:
+            issues.append(f"missing_action:{capability}")
+        elif not entry.get("implemented"):
+            issues.append(f"not_implemented_action:{capability}")
+    return issues
+
+
 def agent_capability_catalog():
     capability_registry = agent_capability_registry()
     lines = [
+        "- workspace_context_set: deterministically acknowledge or switch the resolved workspace context",
+        "- workspace_context_status: deterministically report current workspace, path, and registered workspaces",
+        "- capability_catalog_show: show implemented capabilities and canonical aliases",
+        "- agent_runtime_status: show codex-local runtime/readiness status",
         "- review: read-only analysis over repository snapshot; never edits",
+        "- workspace_search: bounded rg search over the workspace; returns matching files and lines",
         "- edit: safe repository edit through audited unified diff application; optional verify/test/build/smoke follow-up",
         "- action: one audited workspace action from {install, verify, smoke, test, build, lint}",
         "- run: execute one explicit short command inside codex-opencode-<workspace> and return output",
@@ -1328,12 +1592,16 @@ def agent_ssh_key_show_public_requested(task):
         "vrať mi public key",
         "ukaz public key",
         "ukaž public key",
+        "vypis public",
+        "vypiš public",
+        "vypis mi public",
+        "vypiš mi public",
         "vrat public key",
         "vrať public key",
         "ssh-ed25519",
         "ssh-rsa",
     )
-    return any(cue in lower for cue in public_cues)
+    return any(cue in lower for cue in public_cues) or ("public" in lower and any(cue in lower for cue in ("ssh", "klic", "klíč", "key")))
 
 
 def agent_ssh_key_create_requested(task):
@@ -1566,6 +1834,42 @@ def agent_infer_command_from_task(task):
     return []
 
 
+def agent_meta_capability_from_task(task):
+    lower = str(task or "").strip().lower()
+    if not lower:
+        return ""
+    if any(cue in lower for cue in ("jake mas capability", "jaké máš capability", "jake mas schopnosti", "jaké máš schopnosti", "capability catalog", "capability katalog")):
+        return "capability_catalog_show"
+    if any(cue in lower for cue in ("prepni se do workspace", "přepni se do workspace", "switch workspace", "set workspace", "zmen workspace", "změň workspace")):
+        return "workspace_context_set"
+    if any(cue in lower for cue in ("kde ted jsi", "kde teď jsi", "current workspace", "workspace status", "v jakem workspace", "v jakém workspace")):
+        return "workspace_context_status"
+    if any(cue in lower for cue in ("agent runtime", "runtime status", "gateway status", "codex status")):
+        return "agent_runtime_status"
+    return ""
+
+
+def agent_workspace_search_query_from_task(task):
+    text = strip_routing(str(task or "")).strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if not any(cue in lower for cue in ("prohledej", "hledej", "vyhledej", "search", "grep", "rg", "find mentions")):
+        return ""
+    cleaned = re.sub(
+        r"(?is)\b(?:prohledej|prohledat|vyhledej|hledej|search|grep|rg|find mentions(?: of)?)\b",
+        " ",
+        text,
+    )
+    cleaned = re.sub(
+        r"(?is)\b(?:repo|repository|repozitar|repozitář|projekt|workspace|soubor(?:y|ech)?|zminky|zmínky|o|of|for|a|and|najdi)\b",
+        " ",
+        cleaned,
+    )
+    cleaned = " ".join(cleaned.replace(":", " ").split())
+    return cleaned[:160] or "capability"
+
+
 def agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists):
     """Return a small policy fallback when the LLM planner is unavailable.
 
@@ -1577,9 +1881,15 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
     inferred_action = agent_infer_action_from_task(task)
     inferred_followups = agent_infer_followup_actions(task)
     command = agent_infer_command_from_task(task)
+    meta_capability = agent_meta_capability_from_task(task)
+    search_query = agent_workspace_search_query_from_task(task)
 
     bootstrap_requested = agent_bootstrap_requested(task)
-    if agent_read_only_requested(task):
+    if meta_capability:
+        workflow = "meta"
+    elif search_query and workspace_exists:
+        workflow = "workspace_search"
+    elif agent_read_only_requested(task):
         workflow = "review"
     elif agent_deploy_requested(task):
         workflow = "deploy"
@@ -1619,6 +1929,9 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         "desired_end_state": "git_init_origin_commit_push_main" if workflow == "workspace_git_publish" else "",
         "url": url,
         "question": str(task or "").strip() if workflow == "web_answer" else "",
+        "search_query": search_query if workflow == "workspace_search" else "",
+        "meta_capability": meta_capability if workflow == "meta" else "",
+        "required_capabilities": [meta_capability] if workflow == "meta" else (["workspace_search"] if workflow == "workspace_search" else []),
         "ssh_comment": agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
         if workflow in {"ssh_key_create", "ssh_key_show_public"}
         else "",
@@ -1794,6 +2107,11 @@ def agent_capability_hints_from_task(task, workspace_exists):
     capabilities = []
     remote_url = agent_remote_url_from_task(task)
     bootstrap_name = bootstrap_repo_name_from_text(task)
+    meta_capability = agent_meta_capability_from_task(task)
+    if meta_capability:
+        capabilities.append(meta_capability)
+    if agent_workspace_search_query_from_task(task) and workspace_exists:
+        capabilities.append("workspace_search")
     if bootstrap_name:
         capabilities.append("workspace_repo_bootstrap")
     if remote_url and workspace_exists and not bootstrap_name:
@@ -1818,7 +2136,7 @@ def agent_capability_hints_from_task(task, workspace_exists):
         capabilities.append("workspace_autopilot")
     if not capabilities:
         capabilities.append("clarify_or_infer_capability")
-    return capabilities
+    return canonicalize_agent_capabilities(capabilities)
 
 
 def agent_capability_selector_schema():
@@ -1871,6 +2189,7 @@ def agent_taskspec_schema():
             "followup_actions": {"type": "array", "items": {"type": "string"}},
             "url": {"type": "string"},
             "question": {"type": "string"},
+            "search_query": {"type": "string"},
             "ssh_comment": {"type": "string"},
             "confidence": {"type": "string"},
         },
@@ -1893,6 +2212,7 @@ def agent_taskspec_schema():
             "followup_actions",
             "url",
             "question",
+            "search_query",
             "ssh_comment",
             "confidence",
         ],
@@ -1976,7 +2296,7 @@ def agent_select_capabilities_with_llm(
     registry = agent_capability_registry()
     selected_capabilities = []
     seen_capabilities = set()
-    for item in _string_list(parsed.get("required_capabilities")):
+    for item in canonicalize_agent_capabilities(_string_list(parsed.get("required_capabilities"))):
         if item in seen_capabilities:
             continue
         meta = registry.get(item) or {}
@@ -2016,15 +2336,20 @@ def split_agent_capabilities(capabilities):
     registry = agent_capability_registry()
     implemented = []
     missing = []
+    seen_implemented = set()
+    seen_missing = set()
     for raw in capabilities or []:
-        capability = str(raw or "").strip()
+        capability = canonicalize_agent_capability(raw)
         if not capability:
             continue
         entry = registry.get(capability) or {}
         if entry.get("implemented"):
-            implemented.append(capability)
-        else:
+            if capability not in seen_implemented:
+                implemented.append(capability)
+                seen_implemented.add(capability)
+        elif capability not in seen_missing:
             missing.append(capability)
+            seen_missing.add(capability)
     return implemented, missing
 
 
@@ -2058,6 +2383,7 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 '  "followup_actions": ["install","smoke"],\n'
                 '  "url": "public url or empty",\n'
                 '  "question": "public-web question or empty",\n'
+                '  "search_query": "workspace search query or empty",\n'
                 '  "ssh_comment": "ssh key comment or empty",\n'
                 '  "confidence": "high|medium|low"\n'
                 "}\n\n"
@@ -2066,6 +2392,8 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 "- If an existing workspace is the target and the user mentions git init, origin, remote, push, or a remote URL, prefer existing-workspace git publishing instead of bootstrap.\n"
                 "- If the task asks for SSH key creation in an existing workspace, request the SSH capability instead of bootstrap or raw ssh-keygen.\n"
                 "- If the task asks for the public key, request the public-key capability.\n"
+                "- If the task asks to switch/report workspace context, show capabilities, or report runtime status, request the matching meta capability.\n"
+                "- If the task asks to search the repository, request workspace_search and put the concrete search text into search_query.\n"
                 "- If the task is read-only or explicitly says not to edit, mark read_only=true and keep required_capabilities minimal.\n"
                 "- If there is a concrete remote URL, put it into remote_url exactly.\n"
                 "- If the user includes an explicit shell command, preserve it in command, but only if it is truly the user's intended action.\n"
@@ -2124,6 +2452,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
             desired_end_state = "ai_stack_deployed"
         elif agent_public_url_from_task(task):
             desired_end_state = "public_web_answer_returned"
+        elif agent_workspace_search_query_from_task(task):
+            desired_end_state = "workspace_search_results_returned"
         elif agent_edit_requested(task):
             desired_end_state = "requested_changes_applied_and_verified_if_needed"
         elif agent_infer_action_from_task(task):
@@ -2132,7 +2462,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
             desired_end_state = "explicit_command_completed"
         else:
             desired_end_state = "intent_clarified"
-    planner_required_capabilities = _string_list(spec.get("required_capabilities"))
+    planner_required_capabilities = canonicalize_agent_capabilities(_string_list(spec.get("required_capabilities")))
     selector_source = "planner" if planner_required_capabilities else "none"
     llm_capability_selection = None
     if (
@@ -2162,26 +2492,45 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         required_capabilities = planner_required_capabilities or agent_capability_hints_from_task(task, workspace_exists)
         if not planner_required_capabilities:
             selector_source = "heuristic_fallback"
+    required_capabilities = canonicalize_agent_capabilities(required_capabilities)
+    meta_capability = agent_meta_capability_from_task(task)
+    if meta_capability and meta_capability not in required_capabilities:
+        required_capabilities.insert(0, meta_capability)
     if is_new_workspace_request and "workspace_repo_bootstrap" not in required_capabilities:
         required_capabilities.insert(0, "workspace_repo_bootstrap")
     if remote_url and workspace_exists and not is_new_workspace_request and "workspace_git_publish" not in required_capabilities:
         required_capabilities.insert(0, "workspace_git_publish")
-    if agent_ssh_key_show_public_requested(task) and "workspace_ssh_key_show_public" not in required_capabilities:
-        required_capabilities.insert(0, "workspace_ssh_key_show_public")
-    elif agent_ssh_key_create_requested(task) and "workspace_ssh_key_create" not in required_capabilities:
-        required_capabilities.insert(0, "workspace_ssh_key_create")
+    # Capability precedence is semantic rather than prompt-specific: returning the
+    # public key is a superset operation because it idempotently creates the key
+    # when needed, so it wins over plain key creation whenever both are present.
+    if "ssh_key_show_public" in required_capabilities and "ssh_key_create" in required_capabilities:
+        required_capabilities = [cap for cap in required_capabilities if cap != "ssh_key_create"]
+    if agent_ssh_key_show_public_requested(task) and "ssh_key_show_public" not in required_capabilities:
+        required_capabilities.insert(0, "ssh_key_show_public")
+        required_capabilities = [cap for cap in required_capabilities if cap != "ssh_key_create"]
+    elif (
+        agent_ssh_key_create_requested(task)
+        and "ssh_key_create" not in required_capabilities
+        and "ssh_key_show_public" not in required_capabilities
+    ):
+        required_capabilities.insert(0, "ssh_key_create")
+    search_query = str(spec.get("search_query") or "").strip() or agent_workspace_search_query_from_task(task)
+    if search_query and workspace_exists and "workspace_search" not in required_capabilities:
+        required_capabilities.insert(0, "workspace_search")
     url = str(spec.get("url") or "").strip() or agent_public_url_from_task(task)
     if (
         read_only
         and not is_new_workspace_request
         and not remote_url
         and not url
+        and "workspace_search" not in required_capabilities
+        and not meta_capability
         and not agent_ssh_key_show_public_requested(task)
         and not agent_ssh_key_create_requested(task)
         and not agent_deploy_requested(task)
         and not agent_explicit_command_requested(task)
     ):
-        required_capabilities = ["read_only_review"]
+        required_capabilities = ["review"]
     missing_inputs = _string_list(spec.get("missing_inputs"))
     if (
         not missing_inputs
@@ -2193,6 +2542,10 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if is_new_workspace_request and not target_repo_name:
         missing_inputs.append("target_repo_name")
     if remote_url and not workspace_exists and not is_new_workspace_request:
+        missing_inputs.append("existing_workspace")
+    if "workspace_search" in required_capabilities and not search_query:
+        missing_inputs.append("search_query")
+    if "workspace_search" in required_capabilities and not workspace_exists:
         missing_inputs.append("existing_workspace")
     risk_level = str(spec.get("risk_level") or "").strip().lower()
     if risk_level not in {"low", "medium", "high"}:
@@ -2244,7 +2597,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         command = []
     if not command:
         command = agent_infer_command_from_task(task)
-    if read_only and required_capabilities == ["read_only_review"]:
+    required_capabilities = canonicalize_agent_capabilities(required_capabilities)
+    if read_only and required_capabilities == ["review"]:
         action = ""
         run_after = ""
         followup_actions = []
@@ -2269,6 +2623,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         "followup_actions": followup_actions,
         "url": url,
         "question": question,
+        "search_query": search_query,
+        "meta_capability": meta_capability,
         "ssh_comment": ssh_comment,
         "confidence": confidence,
         "capability_selector_source": selector_source,
@@ -2276,7 +2632,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
 
 
 def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, workspace_exists, task):
-    required_capabilities = _string_list(spec.get("required_capabilities"))
+    required_capabilities = canonicalize_agent_capabilities(_string_list(spec.get("required_capabilities")))
     implemented_capabilities, missing_capabilities = split_agent_capabilities(required_capabilities)
     capabilities = set(implemented_capabilities)
     action_capability = next(
@@ -2295,26 +2651,43 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     followup_actions = list(spec.get("followup_actions") or [])
     repo_name = ""
     remote_url = str(spec.get("remote_url") or "").strip()
+    meta_capability = next(
+        (
+            capability
+            for capability in implemented_capabilities
+            if capability in {
+                "workspace_context_set",
+                "workspace_context_status",
+                "capability_catalog_show",
+                "agent_runtime_status",
+            }
+        ),
+        "",
+    )
 
     if missing_capabilities:
         workflow = "clarify"
-    elif read_only:
-        workflow = "review"
     elif spec.get("missing_inputs"):
         workflow = "clarify"
+    elif meta_capability:
+        workflow = "meta"
     elif spec.get("is_new_workspace_request"):
         workflow = "bootstrap"
         repo_name = str(spec.get("target_repo_name") or "").strip()
     elif workspace_exists and ("workspace_git_publish" in capabilities or (remote_url and agent_git_publish_requested(task))):
         workflow = "workspace_git_publish"
-    elif workspace_exists and "workspace_ssh_key_show_public" in capabilities:
+    elif workspace_exists and "ssh_key_show_public" in capabilities:
         workflow = "ssh_key_show_public"
-    elif workspace_exists and "workspace_ssh_key_create" in capabilities:
+    elif workspace_exists and "ssh_key_create" in capabilities:
         workflow = "ssh_key_create"
     elif "stack_deploy" in capabilities or agent_deploy_requested(task):
         workflow = "deploy"
     elif "public_web_access" in capabilities and spec.get("url"):
         workflow = "web_answer" if spec.get("question") else "web_fetch"
+    elif workspace_exists and "workspace_search" in capabilities:
+        workflow = "workspace_search"
+    elif read_only:
+        workflow = "review"
     elif "workspace_edit" in capabilities or agent_edit_requested(task):
         workflow = "edit"
         run_after = str(spec.get("run_after") or "").strip().lower()
@@ -2330,7 +2703,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     workspace = str(spec.get("current_workspace") or "").strip() or (requested_workspace if workspace_exists else controller_workspace)
     if workflow in {"bootstrap", "deploy"}:
         workspace = controller_workspace
-    elif workflow in {"review", "edit", "action", "run", "autopilot", "ssh_key_create", "ssh_key_show_public", "workspace_git_publish"}:
+    elif workflow in {"meta", "workspace_search", "review", "edit", "action", "run", "autopilot", "ssh_key_create", "ssh_key_show_public", "workspace_git_publish"}:
         workspace = requested_workspace if workspace_exists else controller_workspace
 
     return {
@@ -2349,6 +2722,8 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         "required_capabilities": required_capabilities,
         "missing_capabilities": missing_capabilities,
         "missing_inputs": _string_list(spec.get("missing_inputs")),
+        "meta_capability": meta_capability,
+        "search_query": str(spec.get("search_query") or "").strip(),
         "url": str(spec.get("url") or "").strip(),
         "question": str(spec.get("question") or "").strip(),
         "ssh_comment": str(spec.get("ssh_comment") or "").strip(),
@@ -2392,13 +2767,13 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
             requested_workspace if not workspace_exists and requested_workspace != controller_workspace else ""
         )
     workspace = str(plan.get("workspace") or "").strip() or requested_workspace or controller_workspace
-    if workflow in {"review", "edit", "action", "run", "autopilot", "deploy"}:
+    if workflow in {"meta", "workspace_search", "review", "edit", "action", "run", "autopilot", "deploy"}:
         workspace = requested_workspace if workspace_exists else controller_workspace
     confidence = str(plan.get("confidence") or "medium").strip().lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"
     capability_locked = bool(plan.get("capability_locked"))
-    required_capabilities = _string_list(plan.get("required_capabilities"))
+    required_capabilities = canonicalize_agent_capabilities(_string_list(plan.get("required_capabilities")))
     action_capability = next(
         (
             capability.split(":", 1)[1].strip().lower()
@@ -2506,6 +2881,8 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         "required_capabilities": required_capabilities,
         "missing_capabilities": _string_list(plan.get("missing_capabilities")),
         "missing_inputs": _string_list(plan.get("missing_inputs")),
+        "meta_capability": str(plan.get("meta_capability") or "").strip(),
+        "search_query": str(plan.get("search_query") or "").strip(),
         "capability_locked": capability_locked,
     }
 
@@ -2558,6 +2935,181 @@ def agent_plan(task, requested_workspace, controller_workspace, workspace_exists
     taskspec = normalize_agent_taskspec(parsed, requested_workspace, controller_workspace, workspace_exists, task)
     plan = agent_taskspec_to_plan(taskspec, requested_workspace, controller_workspace, workspace_exists, task)
     return plan, taskspec, raw
+
+
+def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_exists, workspaces):
+    capability = str(plan.get("meta_capability") or "").strip() or "workspace_context_status"
+    current = requested_workspace if workspace_exists else controller_workspace
+    cfg = workspaces.get(current) or {}
+    known = sorted(workspaces)
+    if capability == "workspace_context_set":
+        if workspace_exists:
+            answer = f"Workspace context je nastavený na `{requested_workspace}`."
+        else:
+            answer = (
+                f"Workspace `{requested_workspace}` není registrovaný; aktuální controller zůstává `{controller_workspace}`."
+            )
+        return {
+            "ok": bool(workspace_exists),
+            "capability": capability,
+            "current_workspace": current,
+            "requested_workspace": requested_workspace,
+            "workspace_exists": bool(workspace_exists),
+            "path": str(cfg.get("path") or ""),
+            "known_workspaces": known,
+            "answer": answer,
+        }
+    if capability == "capability_catalog_show":
+        registry = agent_capability_registry()
+        implemented = sorted(
+            name for name, spec in registry.items() if isinstance(spec, dict) and spec.get("implemented")
+        )
+        aliases = {
+            alias: target
+            for alias, target in sorted(CANONICAL_AGENT_CAPABILITY_ALIASES.items())
+            if alias != target
+        }
+        return {
+            "ok": True,
+            "capability": capability,
+            "current_workspace": current,
+            "implemented": implemented,
+            "aliases": aliases,
+            "issues": agent_capability_registry_issues(),
+            "catalog": agent_capability_catalog(),
+            "answer": "Capability katalog je připravený; níže jsou canonical capability a aliasy.",
+        }
+    if capability == "agent_runtime_status":
+        health = runtime_health()
+        return {
+            "ok": bool(health.get("codex_local_ready")),
+            "capability": capability,
+            "current_workspace": current,
+            "runtime_commit": health.get("runtime_commit"),
+            "runtime_fingerprint": health.get("runtime_fingerprint"),
+            "readiness_issues": health.get("readiness_issues") or [],
+            "model_runtime": health.get("model_runtime") or {},
+            "answer": (
+                f"Runtime workspace `{current}`; ready={bool(health.get('codex_local_ready'))}; "
+                f"commit={health.get('runtime_commit')}; fingerprint={health.get('runtime_fingerprint')}."
+            ),
+        }
+    return {
+        "ok": True,
+        "capability": "workspace_context_status",
+        "current_workspace": current,
+        "requested_workspace": requested_workspace,
+        "controller_workspace": controller_workspace,
+        "workspace_exists": bool(workspace_exists),
+        "path": str(cfg.get("path") or ""),
+        "known_workspaces": known,
+        "answer": f"Jsem v workspace `{current}` na cestě `{cfg.get('path', '')}`.",
+    }
+
+
+def admin_workspace_search(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    query = str(payload.get("query") or "").strip()
+    max_matches = int(payload.get("max_matches") or 80)
+    timeout = int(payload.get("timeout") or 20)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
+    if not query or len(query) > 200:
+        raise ValueError("query must be 1..200 characters")
+    max_matches = max(1, min(max_matches, 200))
+    timeout = max(1, min(timeout, 60))
+    root = workspace_root(workspace)
+    cmd = [
+        "rg",
+        "--fixed-strings",
+        "--line-number",
+        "--no-heading",
+        "--color",
+        "never",
+        "--smart-case",
+        "--max-count",
+        str(max_matches),
+        "--max-filesize",
+        "512K",
+        "--glob",
+        "!.git/**",
+        "--glob",
+        "!codex/state/**",
+        "--glob",
+        "!codex/audit/**",
+        "--glob",
+        "!logs/**",
+        "--glob",
+        "!node_modules/**",
+        "--glob",
+        "!__pycache__/**",
+        "--glob",
+        "!.venv/**",
+        "--glob",
+        "!venv/**",
+        "--glob",
+        "!dist/**",
+        "--glob",
+        "!build/**",
+        "--glob",
+        "!.next/**",
+        query,
+        ".",
+    ]
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "action": "workspace_search",
+            "workspace": workspace,
+            "root": str(root),
+            "query": query,
+            "command": cmd,
+            "exit_code": 127,
+            "match_count": 0,
+            "matches": [],
+            "output": "rg is not installed in the workspace runtime.",
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "action": "workspace_search",
+            "workspace": workspace,
+            "root": str(root),
+            "query": query,
+            "command": cmd,
+            "exit_code": 124,
+            "match_count": 0,
+            "matches": [],
+            "output": str(exc.stdout or exc.stderr or "workspace search timed out"),
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    matches = lines[:max_matches]
+    return {
+        "ok": proc.returncode in {0, 1},
+        "action": "workspace_search",
+        "workspace": workspace,
+        "root": str(root),
+        "query": query,
+        "command": cmd,
+        "exit_code": proc.returncode,
+        "match_count": len(matches),
+        "truncated": len(lines) > len(matches),
+        "matches": matches,
+        "output": "\n".join(matches),
+        "duration_ms": int((time.time() - started) * 1000),
+    }
 
 
 def admin_agent_loop(payload):
@@ -2652,6 +3204,19 @@ def admin_agent_loop(payload):
             )
         return result
 
+    if workflow == "meta":
+        execution = admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_exists, workspaces)
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = "Meta capability completed." if result["ok"] else "Meta capability needs attention."
+        result["answer"] = str(execution.get("answer") or "").strip()
+        if not result["ok"]:
+            result["recovery"] = {
+                "text": "Použij registrovaný workspace nebo vytvoř nový workspace bootstrapem.",
+                "known_workspaces": sorted(workspaces),
+            }
+        return result
+
     if workflow == "review":
         answer = agent_review_response(plan["workspace"], task)
         result["ok"] = bool(answer)
@@ -2680,12 +3245,28 @@ def admin_agent_loop(payload):
         result["execution"] = deploy
         return result
 
-    if workflow in {"edit", "action", "autopilot", "ssh_key_create", "ssh_key_show_public"} and not workspace_exists:
+    if workflow in {"workspace_search", "edit", "action", "autopilot", "ssh_key_create", "ssh_key_show_public"} and not workspace_exists:
         result["summary"] = f"Workspace '{requested_workspace}' zatím není registrovaný."
         result["recovery"] = {
             "text": "Nejdřív vytvoř nebo zaregistruj workspace, případně použij bootstrap workflow.",
             "suggested_workflow": "bootstrap",
         }
+        return result
+
+    if workflow == "workspace_search":
+        execution = admin_workspace_search({
+            "workspace": plan["workspace"],
+            "query": plan.get("search_query") or taskspec.get("search_query") or agent_workspace_search_query_from_task(task),
+            "max_matches": 80,
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = "Workspace search completed." if result["ok"] else "Workspace search failed."
+        if not result["ok"]:
+            result["recovery"] = {
+                "text": "Zkontroluj, že je v runtime dostupný `rg`, nebo přidej fallback search capability.",
+                "query": execution.get("query"),
+            }
         return result
 
     if workflow == "edit":
@@ -4675,10 +5256,15 @@ def runtime_fingerprint():
         ("completion", completion),
         ("codex_local_agent_loop_payload", codex_local_agent_loop_payload),
         ("normal_chat_requires_tool", normal_chat_requires_tool),
+        ("canonicalize_agent_capability", canonicalize_agent_capability),
+        ("split_agent_capabilities", split_agent_capabilities),
+        ("agent_capability_registry_issues", agent_capability_registry_issues),
         ("agent_plan", agent_plan),
         ("normalize_agent_taskspec", normalize_agent_taskspec),
         ("agent_taskspec_to_plan", agent_taskspec_to_plan),
         ("normalize_agent_plan", normalize_agent_plan),
+        ("admin_agent_meta", admin_agent_meta),
+        ("admin_workspace_search", admin_workspace_search),
         ("admin_agent_loop", admin_agent_loop),
         ("admin_run_workspace", admin_run_workspace),
         ("admin_workspace_git_publish", admin_workspace_git_publish),
@@ -4724,8 +5310,23 @@ def agent_loop_human_answer(result):
     recovery = result.get("recovery") if isinstance(result.get("recovery"), dict) else {}
     workspace = str(result.get("requested_workspace") or result.get("controller_workspace") or "").strip()
 
-    if workflow in {"review", "clarify"}:
+    if workflow in {"meta", "review", "clarify"}:
         return str(result.get("answer") or "").strip()
+
+    if workflow == "workspace_search":
+        query = str(execution.get("query") or "").strip()
+        count = int(execution.get("match_count") or 0)
+        if result.get("ok"):
+            matches = execution.get("matches") if isinstance(execution.get("matches"), list) else []
+            text = f"Ve workspace {workspace} jsem prohledal repo na `{query}` a našel {count} shod."
+            if matches:
+                preview = "\n".join(str(item) for item in matches[:12])
+                text += f"\n\n```text\n{preview}\n```"
+            return text
+        return (
+            f"Search ve workspace {workspace} pro `{query}` selhal. "
+            + preview_text(execution.get("output") or execution.get("error") or result.get("summary"))
+        ).strip()
 
     if workflow == "web_answer":
         return str(execution.get("answer") or result.get("answer") or "").strip()
@@ -5192,6 +5793,80 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
+    def _write_sse_chunk(self, result_id, created, model_name, content="", finish_reason=None):
+        self.wfile.write(
+            f"data: {json.dumps(sse_chunk(result_id, created, model_name, content, finish_reason), ensure_ascii=False)}\n\n".encode()
+        )
+        self.wfile.flush()
+
+    def stream_completion_with_heartbeat(self, payload):
+        model_name = payload.get("model") or DEFAULT_MODEL_ALIAS
+        result_id = "chatcmpl-" + uuid.uuid4().hex
+        created = int(time.time())
+        state = {"result": None, "error": None}
+
+        def worker():
+            try:
+                state["result"] = completion(payload)
+            except Exception as exc:
+                state["error"] = exc
+
+        thread = threading.Thread(target=worker, name="codex-gateway-stream-completion", daemon=True)
+        thread.start()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        progress_messages = [
+            "Pracuji na tom pres codex-local agent loop...\n\n",
+            "\n[progress] Gateway porad bezi, cekam na planner/capability vysledek...\n",
+            "\n[progress] Request je stale aktivni; drzim spojeni zive, aby OpenWebUI nespadlo na fetch timeout...\n",
+        ]
+        sent_progress = False
+        next_progress_at = time.monotonic()
+        progress_idx = 0
+
+        while thread.is_alive():
+            thread.join(timeout=0.5)
+            now = time.monotonic()
+            if now < next_progress_at:
+                continue
+            try:
+                self._write_sse_chunk(result_id, created, model_name, progress_messages[min(progress_idx, len(progress_messages) - 1)])
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            sent_progress = True
+            progress_idx += 1
+            next_progress_at = now + 12
+
+        error = state.get("error")
+        if error is not None:
+            final_text = (
+                "CODEX_LOCAL_STREAM_FAILED\n"
+                f"error={type(error).__name__}: {error}\n"
+                "recovery=Zkontroluj gateway log a zopakuj request; spojeni uz dostalo heartbeat, chyba vznikla uvnitr executor vrstvy."
+            )
+        else:
+            result = state.get("result") or {}
+            final_text = str(
+                ((result.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            ).strip()
+            if not final_text:
+                final_text = fallback_response_text(payload)
+
+        if sent_progress:
+            final_text = "\n" + final_text
+        try:
+            self._write_sse_chunk(result_id, created, model_name, final_text)
+            self._write_sse_chunk(result_id, created, model_name, finish_reason="stop")
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
     def proxy_ollama_sse(self, payload):
         model_name = payload.get("model") or DEFAULT_MODEL_ALIAS
         result_id = "chatcmpl-" + uuid.uuid4().hex
@@ -5338,6 +6013,15 @@ class H(BaseHTTPRequestHandler):
                 and not normal_chat_requires_tool(payload)
             ):
                 return self.proxy_ollama_sse(payload)
+            if (
+                payload.get("stream")
+                and (
+                    explicit_agent_loop_request(gateway_admin_text(payload))
+                    or codex_local_agent_loop_payload(payload)
+                    or normal_chat_requires_tool(payload)
+                )
+            ):
+                return self.stream_completion_with_heartbeat(payload)
             result = completion(payload)
             return self.sendsse(result) if payload.get("stream") else self.sendj(result)
         except Exception as e:

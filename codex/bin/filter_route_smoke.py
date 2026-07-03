@@ -329,27 +329,35 @@ def build_test_workspaces_file() -> Path:
     return path
 
 
-def route_prompt(filter_obj: Any, scenario: RouteScenario) -> str:
+def route_body(filter_obj: Any, scenario: RouteScenario) -> dict[str, Any]:
     body = {
         "model": scenario.model,
         "messages": list(scenario.messages) if scenario.messages else [{"role": "user", "content": scenario.prompt}],
     }
-    routed = filter_obj.inlet(body)
+    return filter_obj.inlet(body)
+
+
+def route_prompt(filter_obj: Any, scenario: RouteScenario) -> str:
+    routed = route_body(filter_obj, scenario)
     return str(routed["messages"][-1]["content"])
 
 
 def run_scenario(filter_obj: Any, scenario: RouteScenario) -> dict[str, Any]:
-    routed = route_prompt(filter_obj, scenario)
+    routed_body = route_body(filter_obj, scenario)
+    routed = str(routed_body["messages"][-1]["content"])
     missing = [needle for needle in scenario.expected if needle not in routed]
     unexpected = [needle for needle in scenario.unexpected if needle in routed]
+    stream_ok = routed_body.get("stream") is True
     return {
         "name": scenario.name,
-        "ok": not missing and not unexpected,
+        "ok": not missing and not unexpected and stream_ok,
         "prompt": scenario.prompt,
         "routed": routed,
+        "stream": routed_body.get("stream"),
         "expected": list(scenario.expected),
         "missing": missing,
         "unexpected": unexpected,
+        "stream_error": "" if stream_ok else "codex-local agent route must preserve/enable stream=True",
     }
 
 

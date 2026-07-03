@@ -320,7 +320,7 @@ def assert_read_only_instruction_overrides_action_words() -> None:
     plan = gateway.agent_taskspec_to_plan(taskspec, "ai-stack", "ai-stack", True, task)
     if taskspec.get("read_only") is not True:
         raise SystemExit(f"read-only instruction should override planner read_only=false, got {taskspec!r}")
-    if taskspec.get("required_capabilities") != ["read_only_review"]:
+    if taskspec.get("required_capabilities") != ["review"]:
         raise SystemExit(f"read-only answer should not keep action capability, got {taskspec!r}")
     if taskspec.get("missing_capabilities"):
         raise SystemExit(f"read-only answer should not report missing action capability, got {taskspec!r}")
@@ -516,6 +516,233 @@ def assert_unknown_capability_needs_attention() -> None:
     if "AGENT_LOOP_NEEDS_ATTENTION" not in text or "remote_database_write" not in text:
         raise SystemExit(f"expected visible NEEDS_ATTENTION with missing capability, got {text!r}")
     print("UNKNOWN_CAPABILITY_NEEDS_ATTENTION_OK")
+
+
+def _taskspec_plan(spec: dict, task: str, workspace: str = "Test2", workspace_exists: bool = True):
+    taskspec = gateway.normalize_agent_taskspec(spec, workspace, "ai-stack", workspace_exists, task)
+    plan = gateway.agent_taskspec_to_plan(taskspec, workspace, "ai-stack", workspace_exists, task)
+    return taskspec, plan
+
+
+def assert_taskspec_capability_alias_canonicalization() -> None:
+    task = "vytvor tam ssh klic"
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "Test2",
+            "user_goal": "create workspace ssh key",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "workspace_ssh_key_ready",
+            "required_capabilities": ["workspace_ssh_key_create"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "create key idempotently",
+            "read_only": False,
+        },
+        task,
+    )
+    if taskspec.get("required_capabilities") != ["ssh_key_create"]:
+        raise SystemExit(f"expected canonical ssh_key_create, got {taskspec!r}")
+    if taskspec.get("missing_capabilities"):
+        raise SystemExit(f"alias must not be missing, got {taskspec!r}")
+    if plan.get("workflow") != "ssh_key_create":
+        raise SystemExit(f"expected ssh_key_create workflow, got {plan!r}")
+
+    mixed, mixed_plan = _taskspec_plan(
+        {
+            "current_workspace": "Test2",
+            "user_goal": "create and show workspace ssh key",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "workspace_public_key_returned",
+            "required_capabilities": ["workspace_ssh_key_create", "ssh_key_create", "ssh_key_show_public"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "show public key",
+            "read_only": False,
+        },
+        "vytvor tam ssh klic a vypis mi public",
+    )
+    if mixed.get("required_capabilities") != ["ssh_key_show_public"]:
+        raise SystemExit(f"show_public should dominate create, got {mixed!r}")
+    if mixed.get("missing_capabilities"):
+        raise SystemExit(f"mixed canonical caps must not be missing, got {mixed!r}")
+    if mixed_plan.get("workflow") != "ssh_key_show_public":
+        raise SystemExit(f"expected ssh_key_show_public workflow, got {mixed_plan!r}")
+    print("TASKSPEC_CAPABILITY_ALIAS_CANONICALIZATION_OK")
+
+
+def assert_taskspec_public_key_prompt_uses_show_public() -> None:
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "Test2",
+            "user_goal": "create or reuse ssh key and show public key",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "workspace_public_key_returned",
+            "required_capabilities": ["workspace_ssh_key_create"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "show public key",
+            "read_only": False,
+        },
+        "vytvor tam ssh klic a vypis mi public",
+    )
+    if "ssh_key_show_public" not in taskspec.get("required_capabilities", []):
+        raise SystemExit(f"public key prompt should canonicalize to ssh_key_show_public, got {taskspec!r}")
+    if "ssh_key_create" in taskspec.get("required_capabilities", []):
+        raise SystemExit(f"show_public should subsume create, got {taskspec!r}")
+    if taskspec.get("missing_capabilities"):
+        raise SystemExit(f"expected no missing capability, got {taskspec!r}")
+    if plan.get("workflow") != "ssh_key_show_public":
+        raise SystemExit(f"expected ssh_key_show_public workflow, got {plan!r}")
+    print("TASKSPEC_PUBLIC_KEY_PROMPT_SHOW_PUBLIC_OK")
+
+
+def assert_taskspec_unknown_capability_stays_missing() -> None:
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "Test2",
+            "user_goal": "write to remote database",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "remote_database_written",
+            "required_capabilities": ["remote_database_write"],
+            "missing_inputs": [],
+            "risk_level": "high",
+            "recovery_plan": "add audited database capability",
+            "read_only": False,
+        },
+        "zapis do remote databaze",
+    )
+    if plan.get("workflow") != "clarify":
+        raise SystemExit(f"unknown capability should clarify, got {plan!r}")
+    if plan.get("missing_capabilities") != ["remote_database_write"]:
+        raise SystemExit(f"unknown capability should remain missing, got {plan!r}")
+    print("TASKSPEC_UNKNOWN_CAPABILITY_STAYS_MISSING_OK")
+
+
+def assert_taskspec_meta_capabilities() -> None:
+    for capability, task in (
+        ("workspace_context_set", "Prepni se do workspace Test2"),
+        ("workspace_context_status", "kde ted jsi?"),
+        ("capability_catalog_show", "jake mas capability?"),
+    ):
+        taskspec, plan = _taskspec_plan(
+            {
+                "current_workspace": "Test2",
+                "user_goal": task,
+                "is_new_workspace_request": False,
+                "is_existing_workspace_task": True,
+                "target_repo_name": "",
+                "remote_url": "",
+                "desired_end_state": "metadata_returned",
+                "required_capabilities": [capability],
+                "missing_inputs": [],
+                "risk_level": "low",
+                "recovery_plan": "return deterministic metadata",
+                "read_only": False,
+            },
+            task,
+        )
+        if taskspec.get("missing_capabilities"):
+            raise SystemExit(f"meta capability must not be missing for {task!r}: {taskspec!r}")
+        if plan.get("workflow") != "meta":
+            raise SystemExit(f"meta capability should map to meta workflow for {task!r}: {plan!r}")
+    print("TASKSPEC_META_CAPABILITIES_OK")
+
+
+def assert_workspace_search_capability() -> None:
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "Test2",
+            "user_goal": "search repository for capability implementation",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "search_results_returned",
+            "required_capabilities": ["workspace_search"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "return bounded search results",
+            "read_only": True,
+            "search_query": "capability",
+        },
+        "prohledej repo a hledej capability",
+    )
+    if taskspec.get("missing_capabilities") or taskspec.get("missing_inputs"):
+        raise SystemExit(f"workspace_search should be supported with query, got {taskspec!r}")
+    if plan.get("workflow") != "workspace_search":
+        raise SystemExit(f"workspace_search capability should map to search workflow, got {plan!r}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        workspace_root = tmp / "Test2"
+        workspace_root.mkdir()
+        (workspace_root / "README.md").write_text("capability implementation marker\n", encoding="utf-8")
+        workspaces_file = tmp / "workspaces.json"
+        workspaces_file.write_text(
+            json.dumps(
+                {
+                    "default": "Test2",
+                    "workspaces": {
+                        "Test2": {"path": str(workspace_root), "port": 4100, "cpus": 8, "memory": "16g"}
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(gateway, "WORKSPACES_FILE", str(workspaces_file)):
+            result = gateway.admin_workspace_search({"workspace": "Test2", "query": "capability", "max_matches": 10})
+    if not result.get("ok") or result.get("match_count", 0) < 1:
+        raise SystemExit(f"expected bounded workspace search result, got {result!r}")
+    print("WORKSPACE_SEARCH_CAPABILITY_OK")
+
+
+def assert_agent_loop_meta_response() -> None:
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "Test2",
+            "user_goal": "report current workspace",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "workspace_context_returned",
+            "required_capabilities": ["workspace_context_status"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "return metadata",
+            "read_only": False,
+        },
+        "kde ted jsi?",
+    )
+    with patch.object(
+        gateway,
+        "agent_controller_workspace",
+        return_value=("Test2", True, {"Test2": {"path": str(ROOT), "port": 4100}}),
+    ), patch.object(
+        gateway,
+        "agent_plan",
+        return_value=(plan, taskspec, '{"required_capabilities":["workspace_context_status"]}'),
+    ):
+        result = gateway.admin_agent_loop({"workspace": "Test2", "task": "kde ted jsi?"})
+    if not result.get("ok") or result.get("workflow") != "meta":
+        raise SystemExit(f"expected deterministic meta agent response, got {result!r}")
+    text = gateway.agent_loop_response_text(result)
+    if "Test2" not in text:
+        raise SystemExit(f"meta response should mention Test2, got {text!r}")
+    print("AGENT_LOOP_META_RESPONSE_OK")
 
 
 def assert_agent_loop_prefers_llm_plan() -> None:
@@ -974,6 +1201,12 @@ def main() -> int:
     assert_autopilot_llm_candidate_selection()
     assert_autopilot_planner_fallback()
     assert_unknown_capability_needs_attention()
+    assert_taskspec_capability_alias_canonicalization()
+    assert_taskspec_public_key_prompt_uses_show_public()
+    assert_taskspec_unknown_capability_stays_missing()
+    assert_taskspec_meta_capabilities()
+    assert_workspace_search_capability()
+    assert_agent_loop_meta_response()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()
     assert_codex_local_payload_routing()

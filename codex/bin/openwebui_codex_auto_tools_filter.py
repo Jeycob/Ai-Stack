@@ -307,7 +307,7 @@ class Filter:
             workspace = "ai-stack"
         command = f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(workspace)} -- {shlex.quote(task_text[:3000])}"
         self._set_message_text(latest, f"repo: {workspace}\n" + command)
-        body["stream"] = False
+        body["stream"] = True
         return body
 
     def _agent_loop_task_text(self, text: str) -> str:
