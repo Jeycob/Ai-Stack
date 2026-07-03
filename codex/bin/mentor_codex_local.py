@@ -42,6 +42,7 @@ UNSAFE_PATCH_SEGMENTS = (
 WORKFLOW_PRIORITY = {
     "improve": 95,
     "deploy": 90,
+    "publish-plan": 89,
     "release-prep": 89,
     "push-check": 89,
     "push": 88,
@@ -163,6 +164,14 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
         visible = (
             f"repo: {args.workspace}\n"
             "Zkontroluj release readiness, shrň blokery a navrhni další krok před publikací. Nic neměň."
+        )
+        technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_REPO_GUARD {args.workspace} main"
+        return visible, technical
+
+    if args.mode == "publish-plan":
+        visible = (
+            f"repo: {args.workspace}\n"
+            "Připrav krátký publish plán pro release/publikaci. Nejprve si ověř release readiness a pak navrhni další auditované kroky. Nic neměň."
         )
         technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_REPO_GUARD {args.workspace} main"
         return visible, technical
@@ -465,6 +474,29 @@ def classify_task(task: str) -> dict[str, str]:
             "Stack restart is broader than repo-safe editing, but we already have a named deploy flow with preflight, restart, and smoke checks.",
             "stack_deploy",
             "If deployment later needs host package changes or wider infra orchestration, add a dedicated stack-runtime capability instead of widening deploy blindly.",
+        )
+    if any(
+        token in lower
+        for token in (
+            "publish plan",
+            "release plan",
+            "plan publikace",
+            "plán publikace",
+            "jak publikovat",
+            "jak udelat release",
+            "jak udělat release",
+            "navrhni publish plan",
+            "navrhni release plan",
+        )
+    ):
+        return result(
+            "capability",
+            "publish-plan",
+            "The task asks for a concrete publish or release plan, which fits a read-only orchestration step built on release-prep evidence.",
+            "high",
+            "Before tags or publication, we should first inspect readiness and then return a short audited publish sequence instead of pretending release execution already exists.",
+            "",
+            "If the resulting plan ends with remote publication only, the remaining gap is the GitHub/release capability boundary rather than a missing local check.",
         )
     if any(
         token in lower
@@ -1218,6 +1250,8 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
         return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
     if workflow == "deploy":
         return "python3 codex/bin/mentor_codex_local.py deploy"
+    if workflow == "publish-plan":
+        return f"python3 codex/bin/mentor_codex_local.py publish-plan {workspace}"
     if workflow == "release-prep":
         return f"python3 codex/bin/mentor_codex_local.py release-prep {workspace}"
     if workflow == "push-check":
@@ -1256,6 +1290,8 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
             return f"repo: ai-stack\nVytvoř nové repository {repo_name}{suffix}"
     if workflow == "deploy":
         return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
+    if workflow == "publish-plan":
+        return f"repo: {workspace}\nPřiprav krátký publish plán pro release/publikaci a navrhni další auditované kroky."
     if workflow == "release-prep":
         return f"repo: {workspace}\nZkontroluj release readiness, shrň blokery a navrhni další krok před publikací."
     if workflow == "push-check":
@@ -1305,6 +1341,9 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
     elif workflow == "deploy":
         lines.append("goal=run the audited ai-stack deploy flow with pull, restart, and smoke checks")
         lines.append("guardrail=prefer named deploy flow over ad-hoc docker or root commands")
+    elif workflow == "publish-plan":
+        lines.append("goal=derive a short audited publish sequence from release readiness rather than improvising a full release")
+        lines.append("guardrail=stay read-only, build the plan from release-prep evidence, and leave remote publication behind the release capability boundary")
     elif workflow == "release-prep":
         lines.append("goal=inspect release readiness from repo status, remotes, recent commits, and workspace metadata before any publish step")
         lines.append("guardrail=stay read-only and escalate to the release capability boundary only if publication or tag mutation is the remaining step")
@@ -1515,6 +1554,11 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
     if workflow == "deploy":
         steps.append(("deploy", "python3 codex/bin/mentor_codex_local.py deploy"))
         steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        return steps
+
+    if workflow == "publish-plan":
+        steps.append(("publish-plan", f"python3 codex/bin/mentor_codex_local.py publish-plan {workspace}"))
+        steps.append(("if-publication-remains", "if the final step still needs remote mutation, review the GitHub/release capability boundary"))
         return steps
 
     if workflow == "release-prep":
@@ -1742,6 +1786,57 @@ def run_release_prep_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_publish_plan_sequence(args: argparse.Namespace) -> int:
+    prep_args = argparse.Namespace(**vars(args))
+    prep_args.mode = "release-prep"
+
+    if args.dry_run:
+        run_release_prep_sequence(prep_args)
+        plan_visible = (
+            f"repo: {args.workspace}\n"
+            "Na základě celé dosavadní historie teď navrhni krátký publish plán. "
+            "Vrať 2-4 auditované kroky a jasně napiš, jestli poslední krok už naráží na release capability boundary."
+        )
+        plan_technical = (
+            f"{repo_prefix(args.workspace)}\n"
+            "Na základě celé dosavadní historie navrhni stručný publish plan. "
+            "Odpověz strukturovaně v těchto řádcích:\n"
+            "PUBLISH_STEP_1: <step>\n"
+            "PUBLISH_STEP_2: <step>\n"
+            "PUBLISH_STEP_3: <step or none>\n"
+            "PUBLISH_STEP_4: <step or none>\n"
+            "BOUNDARY: <none or capability boundary summary>"
+        )
+        print_prompt_preview(args, *apply_mentor_context(args, plan_visible, plan_technical))
+        return 0
+
+    rc = run_release_prep_sequence(prep_args)
+    if rc != 0:
+        return rc
+
+    plan_visible = (
+        f"repo: {args.workspace}\n"
+        "Na základě celé dosavadní historie teď navrhni krátký publish plán. "
+        "Vrať 2-4 auditované kroky a jasně napiš, jestli poslední krok už naráží na release capability boundary."
+    )
+    plan_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        "Na základě celé dosavadní historie navrhni stručný publish plan. "
+        "Odpověz strukturovaně v těchto řádcích:\n"
+        "PUBLISH_STEP_1: <step>\n"
+        "PUBLISH_STEP_2: <step>\n"
+        "PUBLISH_STEP_3: <step or none>\n"
+        "PUBLISH_STEP_4: <step or none>\n"
+        "BOUNDARY: <none or capability boundary summary>"
+    )
+    rc, output = invoke_turn(args, plan_visible, plan_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+    if output.strip():
+        print(output.strip())
+    return 0
+
+
 def run_boundary_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"MENTOR_BOUNDARY_WORKSPACE={args.workspace}")
@@ -1779,6 +1874,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return rc
     if args.mode == "autopilot":
         return run_autopilot_sequence(args)
+    if args.mode == "publish-plan":
+        return run_publish_plan_sequence(args)
     if args.mode == "release-prep":
         return run_release_prep_sequence(args)
     if args.mode == "push-check":
@@ -1866,6 +1963,11 @@ def parse_args() -> argparse.Namespace:
     deploy_status = sub.add_parser("deploy-status", help="Ask codex-local for deploy status")
     deploy_status.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     deploy_status.set_defaults()
+
+    publish_plan = sub.add_parser("publish-plan", help="Ask codex-local for a short audited publish plan built on release-prep evidence")
+    publish_plan.add_argument("workspace")
+    publish_plan.add_argument("--timeout", type=int, default=120)
+    publish_plan.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
     release_prep = sub.add_parser("release-prep", help="Ask codex-local for a read-only release readiness preflight over a workspace")
     release_prep.add_argument("workspace")

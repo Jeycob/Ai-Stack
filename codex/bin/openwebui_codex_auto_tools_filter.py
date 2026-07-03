@@ -128,6 +128,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_dispatch_command(text)
         if not command:
+            command = self._natural_workspace_publish_plan_command(text)
+        if not command:
             command = self._natural_workspace_release_prep_command(text)
         if not command:
             command = self._natural_workspace_release_boundary_command(text)
@@ -873,6 +875,46 @@ class Filter:
             workspace,
         ]
         return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 240 -- {shlex.join(command)}"
+
+    def _natural_workspace_publish_plan_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        if not any(
+            token in lower
+            for token in (
+                "publish plan",
+                "release plan",
+                "plan publikace",
+                "plán publikace",
+                "jak publikovat",
+                "jak udelat release",
+                "jak udělat release",
+                "navrhni publish plan",
+                "navrhni release plan",
+            )
+        ):
+            return None
+        if any(
+            token in lower
+            for token in (
+                "vytvor release",
+                "vytvoř release",
+                "create release",
+                "publish package",
+                "github actions",
+                "tag release",
+            )
+        ):
+            return None
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "publish-plan",
+            workspace,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 300 -- {shlex.join(command)}"
 
     def _mentions_ai_stack(self, text: str) -> bool:
         return re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*ai-stack\s*$", text) is not None or "ai-stack" in text.lower()
