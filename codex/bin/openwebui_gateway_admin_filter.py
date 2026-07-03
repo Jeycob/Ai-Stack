@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
+FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
 
 
 class Filter:
@@ -75,6 +76,10 @@ class Filter:
             body.setdefault("messages", []).insert(0, {"role": "system", "content": self._instructions()})
 
         latest_user = self._last_message_text(body, "user")
+        natural_command = self._natural_admin_command(body, latest_user)
+        if natural_command:
+            return self._direct_response(body, self._dispatch_admin_command(natural_command))
+
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
             normalized = re.sub(
                 r"(?im)^(\s*)GATEWAY_ADMIN_APPLY_NOW(\s*)$",
@@ -185,6 +190,21 @@ class Filter:
             )
         return body
 
+    def _dispatch_admin_command(self, command: str) -> str:
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_EXPLAIN_FILE"):
+            return self._explain_file_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_SSH_KEYGEN"):
+            return self._ssh_keygen(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
+            return self._workspace_action_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_RUN_WORKSPACE"):
+            return self._run_workspace_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_ANSWER"):
+            return self._web_answer_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_FETCH"):
+            return self._web_fetch_admin(command)
+        raise ValueError(f"Unsupported natural admin command: {command.splitlines()[0]}")
+
     def outlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
         return body
 
@@ -224,6 +244,179 @@ class Filter:
                 content = msg.get("content", "")
                 return content if isinstance(content, str) else str(content)
         return ""
+
+    def _workspace_from_text(self, text: str) -> str | None:
+        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*([A-Za-z0-9_.-]{{1,80}})\s*$", text)
+        return match.group(1) if match else None
+
+    def _line_value(self, text: str, label_pattern: str) -> str | None:
+        match = re.search(rf"(?im)^\s*{label_pattern}\s*:\s*(.+?)\s*$", text)
+        if not match:
+            return None
+        value = match.group(1).strip().strip("`").strip().strip("\"'")
+        return value or None
+
+    def _non_route_lines(self, text: str) -> list[str]:
+        lines = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if re.match(rf"(?i)^{WORKSPACE_LABEL_PATTERN}\s*:\s*[A-Za-z0-9_.-]{{1,80}}\s*$", stripped):
+                continue
+            if re.match(rf"(?i)^{FILE_LABEL_PATTERN}\s*:\s*.+$", stripped):
+                continue
+            lines.append(stripped)
+        return lines
+
+    def _file_from_text(self, text: str) -> str | None:
+        explicit = self._line_value(text, FILE_LABEL_PATTERN)
+        if explicit:
+            return explicit
+        lower = text.lower()
+        known = [
+            ("docker compose", "docker-compose.yml"),
+            ("docker-compose", "docker-compose.yml"),
+            ("compose.yml", "compose.yml"),
+            ("compose.yaml", "compose.yaml"),
+            ("readme", "README.md"),
+            ("gateway.py", "codex/gateway/gateway.py"),
+            ("start_codex_stack.sh", "codex/bin/start_codex_stack.sh"),
+            ("workspaces.json", "codex/workspaces.json"),
+        ]
+        for needle, rel in known:
+            if needle in lower:
+                return rel
+        return None
+
+    def _looks_like_file_read_or_explain(self, text: str) -> bool:
+        lower = text.lower()
+        return any(
+            cue in lower
+            for cue in (
+                "precti",
+                "přečti",
+                "read ",
+                "ukaz",
+                "ukaž",
+                "vypis",
+                "vypiš",
+                "vysvetli",
+                "vysvětli",
+                "explain",
+                "popis",
+                "co dela",
+                "co dělá",
+                "radek po radku",
+                "řádek po řádku",
+                "line by line",
+            )
+        )
+
+    def _looks_like_workspace_action(self, text: str) -> str | None:
+        lower = text.lower()
+        action_cues = {
+            "install": ("install", "nainstaluj", "doinstaluj", "dependencies", "zavislosti", "závislosti"),
+            "test": ("test", "testy", "otestuj"),
+            "build": ("build", "sestav", "zbuild"),
+            "lint": ("lint",),
+            "verify": ("verify", "over", "ověř", "zkontroluj"),
+            "smoke": ("smoke", "rozbehni", "rozběhni", "spust", "spusť"),
+        }
+        for action, cues in action_cues.items():
+            if any(cue in lower for cue in cues):
+                return action
+        return None
+
+    def _looks_like_edit_request(self, text: str) -> bool:
+        lower = text.lower()
+        return any(
+            cue in lower
+            for cue in (
+                "pridej",
+                "přidej",
+                "vytvor",
+                "vytvoř",
+                "uprav",
+                "edituj",
+                "napis",
+                "napiš",
+                "implementuj",
+                "dopln",
+                "doplň",
+                "add ",
+                "create ",
+                "modify ",
+                "implement ",
+                "webgl",
+                "kouli",
+                "sphere",
+            )
+        )
+
+    def _natural_web_url(self, text: str) -> str | None:
+        match = re.search(r"https?://[^\s<>'\")]+", text)
+        if match:
+            return match.group(0).rstrip(".,;:!?)]}")
+        lower = text.lower()
+        known_domains = {
+            "seznam.cz": "https://www.seznam.cz/",
+            "novinky.cz": "https://www.novinky.cz/",
+            "idnes.cz": "https://www.idnes.cz/",
+            "github.com": "https://github.com/",
+            "example.com": "https://example.com/",
+        }
+        for domain, url in known_domains.items():
+            if domain in lower:
+                return url
+        return None
+
+    def _natural_admin_command(self, body: dict, text: str) -> str | None:
+        model = str(body.get("model") or "")
+        if not model.startswith("codex-local-") or not text or "GATEWAY_ADMIN_" in text:
+            return None
+
+        workspace = self._workspace_from_text(text)
+        lower = text.lower()
+        task_text = " ".join(self._non_route_lines(text)).strip() or text.strip()
+        if workspace and self._looks_like_file_read_or_explain(text):
+            rel = self._file_from_text(text)
+            if rel:
+                question = task_text or "Přečti a vysvětli soubor."
+                return (
+                    f"GATEWAY_ADMIN_EXPLAIN_FILE {shlex.quote(workspace)} {shlex.quote(rel)} "
+                    f"1 400 -- {shlex.quote(question[:1200])}"
+                )
+
+        if workspace and any(cue in lower for cue in ("ssh", "klic", "klíč", "key", "github")) and any(
+            cue in lower for cue in ("vygeneruj", "vytvor", "vytvoř", "generate", "create")
+        ):
+            key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{workspace}")[:64].strip("-") or "github-workspace"
+            return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
+
+        if workspace:
+            action = self._looks_like_workspace_action(task_text)
+            if action:
+                return f"GATEWAY_ADMIN_WORKSPACE_ACTION {shlex.quote(workspace)} {action} --runner container --timeout 900"
+            if self._looks_like_edit_request(task_text):
+                command = [
+                    "python3",
+                    "codex/bin/mentor_codex_local.py",
+                    "delegate",
+                    workspace,
+                    task_text[:1200],
+                    "--timeout",
+                    "1200",
+                    "--max-steps",
+                    "3",
+                ]
+                return f"GATEWAY_ADMIN_RUN_WORKSPACE ai-stack --runner host --timeout 1500 -- {shlex.join(command)}"
+
+        url = self._natural_web_url(text)
+        if url and any(cue in lower for cue in ("stahni", "stáhni", "nacti", "načti", "precti", "přečti", "podivej", "podívej", "svatek", "svátek", "?")):
+            question = " ".join(self._non_route_lines(text)).strip() or text.strip()
+            return f"GATEWAY_ADMIN_WEB_ANSWER {shlex.quote(url)} -- {shlex.quote(question[:1200])}"
+        return None
 
     def _assistant_text(self, body: dict) -> str:
         if isinstance(body.get("choices"), list) and body["choices"]:

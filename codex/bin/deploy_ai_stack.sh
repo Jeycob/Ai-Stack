@@ -94,9 +94,12 @@ sync_openwebui_function() {
 
   if [ -f "$REPO_ROOT/codex/bin/openwebui_codex_auto_tools_filter.py" ]; then
     section "Syncing OpenWebUI auto tools filter function"
-    python3 "$REPO_ROOT/codex/bin/sync_openwebui_function.py" \
+    if ! python3 "$REPO_ROOT/codex/bin/sync_openwebui_function.py" \
       --function-id codex_auto_tools_filter \
-      --source codex/bin/openwebui_codex_auto_tools_filter.py
+      --source codex/bin/openwebui_codex_auto_tools_filter.py; then
+      echo "OPENWEBUI_AUTO_FILTER_SYNC_FAILED_NONFATAL"
+      echo "Natural critical routes are also handled by codex_gateway_admin_filter."
+    fi
   fi
 }
 
