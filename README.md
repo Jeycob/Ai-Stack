@@ -350,6 +350,12 @@ Když chceš ještě menší odpověď a jde ti jen o další praktický krok, p
 
     python3 codex/bin/mentor_codex_local.py next-helper ai-stack "Fixni to a dotáhni co zvládneš."
 
+Pro levné lokální “as-if user” ověření celé mentoring vrstvy je tam i `mentor_scenario_runner.py`. Ten nevolá živý OpenWebUI chat, ale řetězí helpery jako `profile -> brief -> next-helper -> plan` a podle workflow přidá ještě vhodný krok jako `bootstrap-dispatch` nebo `delegate --dry-run`. Výsledkem je kompaktní scénářový report nad helper orchestration vrstvou:
+
+    python3 codex/bin/mentor_scenario_runner.py ai-stack "Vytvoř nové repository Test2 jako React appku, doinstaluj co chybí a zkus to rozběhnout."
+
+Je to levná E2E vrstva pro lokální validaci mentora. Živý důkaz proti skutečnému běžícímu codex-local stacku pořád zůstává `owui_chat_turn.py`, gateway smoke a OpenWebUI audit chat.
+
 Když naopak potřebuješ vysvětlit, proč helper nezvolil širší akci a co ho brzdí, použij `boundary`: vrátí guardrail summary, capability scope, missing capability hint a další doporučený helper krok.
 
     python3 codex/bin/mentor_codex_local.py boundary ai-stack "Vytvoř release a pushni to na GitHub"

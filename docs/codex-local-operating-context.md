@@ -254,6 +254,14 @@ Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen
 minimum kontextu nutne pro pokracovani v dalsim capability kroku a neposila
 znovu cely reasoning blok.
 
+Pro levne lokalni E2E overeni mentor vrstvy bez volani ziveho OpenWebUI chatu
+je vhodny `codex/bin/mentor_scenario_runner.py`. Ten bere jeden lidsky task a
+retezí nad nim helpery `profile`, `brief`, `next-helper`, `plan` a podle
+workflow doplni jeste `bootstrap-dispatch` nebo `delegate --dry-run`. Vysledek
+je kompaktní scenarovy report nad helper orchestration vrstvou. Je to dobre pro
+opakovatelnou validaci klasifikace a handoff logiky, ale neni to nahrada za
+zivy audit chat nebo gateway smoke test.
+
 Priklad explicitniho scaffold planu:
 
 ```bash
