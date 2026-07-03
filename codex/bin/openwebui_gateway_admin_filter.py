@@ -1245,6 +1245,8 @@ class Filter:
             f"max_steps={result.get('max_steps', max_steps)}\n"
             f"reason={result.get('reason', '')}\n"
             f"recommendation={result.get('recommendation', '')}\n"
+            f"patch_target={result.get('patch_target', '')}\n"
+            f"patch_hint={result.get('patch_hint', '')}\n"
             f"stop_reason={result.get('stop_reason', '')}\n"
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"

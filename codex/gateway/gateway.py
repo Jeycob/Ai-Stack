@@ -697,12 +697,16 @@ def admin_workspace_action(payload):
     result["runner_exit_code"] = proc.returncode
     return result
 
-def workspace_autopilot_recommendation(workspace: str) -> str:
+def workspace_autopilot_recommendation(workspace: str) -> dict:
     try:
         root = load_workspace(WORKSPACES_FILE, workspace)
         scan = collect(root, 60)
     except Exception as exc:
-        return f"Workspace needs manual review because scan data is unavailable: {exc}"
+        return {
+            "text": f"Workspace needs manual review because scan data is unavailable: {exc}",
+            "patch_target": "",
+            "patch_hint": "",
+        }
 
     manifests = scan.get("manifests") or []
     languages = scan.get("languages") or []
@@ -711,16 +715,42 @@ def workspace_autopilot_recommendation(workspace: str) -> str:
     manifest_names = {Path(rel).name for rel in manifests}
 
     if not manifests:
-        return "Workspace has no recognized project manifest yet; first add build or package metadata for the detected stack."
+        return {
+            "text": "Workspace has no recognized project manifest yet; first add build or package metadata for the detected stack.",
+            "patch_target": "",
+            "patch_hint": "Add a standard project manifest such as package.json, pyproject.toml, Cargo.toml, go.mod, pom.xml, or CMakeLists.txt.",
+        }
     if "package.json" in manifest_names and not package_scripts:
-        return "Node workspace has package.json but no scripts; add at least build, test or lint scripts so codex-local can continue automatically."
+        return {
+            "text": "Node workspace has package.json but no scripts; add at least build, test or lint scripts so codex-local can continue automatically.",
+            "patch_target": "package.json",
+            "patch_hint": "Add scripts.test, scripts.build, or scripts.lint entries under package.json:scripts.",
+        }
     if {"pyproject.toml", "requirements.txt"} & manifest_names and not any("pytest" in cmd for cmd in candidate_commands):
-        return "Python workspace is missing an obvious test entrypoint; consider adding tests/ or a pytest-compatible setup."
+        target = "pyproject.toml" if "pyproject.toml" in manifest_names else "requirements.txt"
+        return {
+            "text": "Python workspace is missing an obvious test entrypoint; consider adding tests/ or a pytest-compatible setup.",
+            "patch_target": target,
+            "patch_hint": "Add a pytest-compatible test layout, or declare the test dependency/configuration in pyproject.toml or requirements.txt.",
+        }
     if any(lang in {"javascript/typescript", "python", "rust", "go", "jvm", "c/cpp"} for lang in languages) and not candidate_commands:
-        return "Project shape is recognized, but no runnable lint/test/build command was inferred; expose one through standard manifests or scripts."
+        target = manifests[0] if manifests else ""
+        return {
+            "text": "Project shape is recognized, but no runnable lint/test/build command was inferred; expose one through standard manifests or scripts.",
+            "patch_target": target,
+            "patch_hint": "Add a standard lint, test, or build entrypoint in the main project manifest so capability routing can infer it.",
+        }
     if candidate_commands:
-        return f"No safe next capability matched the current allowlist. The first inferred manual command to review is: {candidate_commands[0]}"
-    return "No safe next capability was inferred; inspect manifests and add a standard lint, test or build entrypoint."
+        return {
+            "text": f"No safe next capability matched the current allowlist. The first inferred manual command to review is: {candidate_commands[0]}",
+            "patch_target": manifests[0] if manifests else "",
+            "patch_hint": f"Review whether this command should be exposed through a standard script or manifest entry: {candidate_commands[0]}",
+        }
+    return {
+        "text": "No safe next capability was inferred; inspect manifests and add a standard lint, test or build entrypoint.",
+        "patch_target": manifests[0] if manifests else "",
+        "patch_hint": "Expose at least one standard lint, test, or build entrypoint in the project manifest.",
+    }
 
 def admin_workspace_autopilot(payload):
     workspace = str(payload.get("workspace") or "").strip()
@@ -788,6 +818,7 @@ def admin_workspace_autopilot(payload):
         chosen_reason = ""
 
     if not chosen_action:
+        recommendation = workspace_autopilot_recommendation(workspace)
         return {
             "ok": False,
             "workspace": workspace,
@@ -797,7 +828,9 @@ def admin_workspace_autopilot(payload):
             "max_steps": max_steps,
             "chosen_action": "none",
             "reason": "No supported next action was found within the allowed action set.",
-            "recommendation": workspace_autopilot_recommendation(workspace),
+            "recommendation": recommendation.get("text", ""),
+            "patch_target": recommendation.get("patch_target", ""),
+            "patch_hint": recommendation.get("patch_hint", ""),
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
@@ -817,6 +850,8 @@ def admin_workspace_autopilot(payload):
             "chosen_action": chosen_action,
             "reason": chosen_reason,
             "recommendation": "",
+            "patch_target": "",
+            "patch_hint": "",
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
@@ -888,6 +923,8 @@ def admin_workspace_autopilot(payload):
         "chosen_action": chosen_action,
         "reason": chosen_reason,
         "recommendation": "",
+        "patch_target": "",
+        "patch_hint": "",
         "duration_ms": int((time.time() - total_started) * 1000),
         "verify_steps": current_verify_steps,
         "install_probe": current_install_probe,

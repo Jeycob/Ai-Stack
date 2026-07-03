@@ -148,7 +148,7 @@ Ještě výš je capability `verify`, která se chová víc agenticky: pokusí s
     repo: Test2
     ověř projekt
 
-Nad tím je ještě capability `autopilot`, která se chová víc jako lokální řízený agent: nejdřív udělá `verify --dry-run`, z dostupných capability kroků vybere další bezpečné kroky a podle limitu je buď jen doporučí, nebo je rovnou provede. Typicky běží s limitem jednoho kroku, ale pro přirozené “pokračuj sám” workflow může bezpečně udělat krátký chain do `max_steps=2`. Po každém úspěšném kroku si plán znovu přepočítá a vrací i `stop_reason`, aby bylo jasné, proč skončil. Když nenajde nic spustitelného, vrátí místo prázdného failu i konkrétní `recommendation`, co projektu chybí nebo jaký další command dává smysl ručně doplnit. Příklad doporučení:
+Nad tím je ještě capability `autopilot`, která se chová víc jako lokální řízený agent: nejdřív udělá `verify --dry-run`, z dostupných capability kroků vybere další bezpečné kroky a podle limitu je buď jen doporučí, nebo je rovnou provede. Typicky běží s limitem jednoho kroku, ale pro přirozené “pokračuj sám” workflow může bezpečně udělat krátký chain do `max_steps=2`. Po každém úspěšném kroku si plán znovu přepočítá a vrací i `stop_reason`, aby bylo jasné, proč skončil. Když nenajde nic spustitelného, vrátí místo prázdného failu i konkrétní `recommendation`, plus `patch_target` a `patch_hint`, tedy kde by se typicky upravovalo a co přesně v projektu chybí. Příklad doporučení:
 
     repo: Test2
     navrhni další krok a zatím nic nespouštěj
