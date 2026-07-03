@@ -23,6 +23,24 @@ SAFE_PATCH_ROOT_FILES = {
     "docker-compose.yml",
     "start_docker.bat",
     ".gitignore",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "pyproject.toml",
+    "requirements.txt",
+    "Cargo.toml",
+    "go.mod",
+    "go.sum",
+    "pom.xml",
+    "build.gradle",
+    "settings.gradle",
+    "CMakeLists.txt",
+    "Makefile",
+    "vite.config.ts",
+    "vite.config.js",
+    "tsconfig.json",
+    "index.html",
 }
 SAFE_PATCH_PREFIX_RULES = (
     ("docs/", (".md",)),
@@ -30,6 +48,12 @@ SAFE_PATCH_PREFIX_RULES = (
     ("codex/bin/", (".py", ".sh")),
     ("codex/gateway/", (".py",)),
     ("openwebui/", (".js", ".css")),
+    ("src/", (".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".kt", ".c", ".cc", ".cpp", ".h", ".hpp", ".css", ".scss", ".html", ".json")),
+    ("app/", (".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".kt", ".c", ".cc", ".cpp", ".h", ".hpp", ".css", ".scss", ".html", ".json")),
+    ("tests/", (".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".kt", ".c", ".cc", ".cpp", ".h", ".hpp", ".json")),
+    ("test/", (".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".kt", ".c", ".cc", ".cpp", ".h", ".hpp", ".json")),
+    ("public/", (".html", ".css", ".js", ".json", ".txt", ".svg")),
+    ("include/", (".h", ".hpp", ".hh", ".inc")),
 )
 UNSAFE_PATCH_SEGMENTS = (
     "/dev/null",
@@ -264,9 +288,13 @@ def parse_next_action(text: str, allowed_actions: set[str]) -> tuple[str, str]:
 def parse_key_values(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in text.splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
+        if "=" in line:
+            key, value = line.split("=", 1)
+        else:
+            match = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*:\s*(.+?)\s*$", line)
+            if not match:
+                continue
+            key, value = match.group(1), match.group(2)
         key = key.strip().lower()
         value = value.strip()
         if key:
@@ -350,6 +378,12 @@ def follow_read_command(args: argparse.Namespace, workspace: str, read_command: 
     return rc
 
 
+def has_patch_guidance(meta: dict[str, str]) -> bool:
+    read_command = meta.get("read_command", "").strip()
+    patch_target = meta.get("patch_target", "").strip().lower()
+    return bool(read_command or (patch_target and patch_target != "none"))
+
+
 def request_patch_plan(args: argparse.Namespace, workspace: str) -> tuple[int, str]:
     plan_visible = (
         f"repo: {workspace}\n"
@@ -381,6 +415,120 @@ def request_diff_only(args: argparse.Namespace, workspace: str, target: str, sum
         f"Hint: {hint or '(none)'}"
     )
     return invoke_turn(args, diff_visible, diff_technical, send_history=True, capture_output=True)
+
+
+def request_followup_verify(args: argparse.Namespace, workspace: str, allow_actions_value: str) -> tuple[int, str]:
+    verify_visible = (
+        f"repo: {workspace}\n"
+        "Patch je aplikovaný. Teď proveď právě jeden další bezpečný capability krok jako ověření, "
+        "jestli se problém opravdu posunul správným směrem, a vrať stručný výsledek."
+    )
+    verify_technical = (
+        f"{repo_prefix(args.repo)}\n"
+        f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {workspace} --timeout {args.timeout} "
+        f"--max-steps 1 --allow-actions {allow_actions_value}"
+    )
+    return invoke_turn(args, verify_visible, verify_technical, send_history=True, capture_output=True)
+
+
+def run_patch_recovery_once(
+    args: argparse.Namespace,
+    workspace: str,
+    seed_output: str,
+    recommendation: str,
+    allow_actions_value: str,
+    ready_tag: str,
+    blocked_tag: str,
+) -> tuple[int, dict[str, str | bool]]:
+    meta = parse_key_values(seed_output)
+    read_command = meta.get("read_command", "").strip()
+    patch_target = meta.get("patch_target", "").strip().lower()
+
+    if not read_command and (not patch_target or patch_target == "none"):
+        return 0, {
+            "handled": False,
+            "applied": False,
+            "final_output": seed_output,
+            "verify_output": "",
+        }
+
+    rc = follow_read_command(args, workspace, read_command)
+    if rc != 0:
+        return rc, {}
+
+    rc, plan_output = request_patch_plan(args, workspace)
+    if rc != 0:
+        return rc, {}
+    plan_meta = parse_key_values(plan_output)
+    target = plan_meta.get("patch_target", "").strip()
+    summary = plan_meta.get("patch_summary", "").strip() or recommendation
+    hint = plan_meta.get("patch_hint", "").strip()
+    if not target or target.lower() == "none":
+        final_parts = []
+        if seed_output.strip():
+            final_parts.append(seed_output.strip())
+        if plan_output.strip():
+            final_parts.append(plan_output.strip())
+        return 0, {
+            "handled": True,
+            "applied": False,
+            "final_output": "\n\n".join(final_parts),
+            "verify_output": "",
+        }
+
+    rc, diff_output = request_diff_only(args, workspace, target, summary, hint)
+    if rc != 0:
+        return rc, {}
+
+    try:
+        diff = extract_diff_block(diff_output)
+        files, safe_summary = validate_safe_diff(diff)
+    except ValueError as exc:
+        final_parts = []
+        if seed_output.strip():
+            final_parts.append(seed_output.strip())
+        if plan_output.strip():
+            final_parts.append(plan_output.strip())
+        if diff_output.strip():
+            final_parts.append(diff_output.strip())
+        final_parts.append(f"{blocked_tag}\nreason={exc}")
+        return 0, {
+            "handled": True,
+            "applied": False,
+            "final_output": "\n\n".join(final_parts),
+            "verify_output": "",
+        }
+
+    apply_visible = (
+        f"repo: {workspace}\n"
+        f"Capability kroky doběhly a malý patch prošel guardraily ({len(files)} souborů). "
+        "Teď ho auditovaně aplikuj a vrať stručný výsledek."
+    )
+    apply_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_APPLY_NOW\n\n```diff\n{diff}```"
+    rc, apply_output = invoke_turn(args, apply_visible, apply_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc, {}
+
+    rc, verify_output = request_followup_verify(args, workspace, allow_actions_value)
+    if rc != 0:
+        return rc, {}
+
+    final_parts = []
+    if seed_output.strip():
+        final_parts.append(seed_output.strip())
+    if plan_output.strip():
+        final_parts.append(plan_output.strip())
+    final_parts.append(f"{ready_tag}\nfiles={safe_summary}")
+    if apply_output.strip():
+        final_parts.append(apply_output.strip())
+    if verify_output.strip():
+        final_parts.append(verify_output.strip())
+    return 0, {
+        "handled": True,
+        "applied": True,
+        "final_output": "\n\n".join(final_parts),
+        "verify_output": verify_output,
+    }
 
 
 def choose_workflow(task: str) -> str:
@@ -1515,8 +1663,9 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
         print(f"IMPROVE_CONTEXT_BOOTSTRAP_FAILED={','.join(bootstrap_failed) or 'none'}")
         print(f"IMPROVE_FOCUS={improve_focus}")
         print(f"IMPROVE_ALLOW_ACTIONS={allow_actions_value}")
+        print(f"IMPROVE_RECOVERY_CYCLES={max(1, min(getattr(args, 'recovery_cycles', 2), 3))}")
         print("FOLLOW_UP")
-        print("If autopilot returns read_command or patch guidance, the helper will continue into the apply-safe flow automatically.")
+        print("If autopilot returns read_command or patch guidance, the helper will continue into the apply-safe flow automatically and then re-run one safe capability verification step.")
         return 0
 
     print(f"IMPROVE_CONTEXT_BOOTSTRAP_STATUS={bootstrap_status or 'none'}")
@@ -1524,77 +1673,60 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
     print(f"IMPROVE_CONTEXT_BOOTSTRAP_FAILED={','.join(bootstrap_failed) or 'none'}")
     print(f"IMPROVE_FOCUS={improve_focus}")
     print(f"IMPROVE_ALLOW_ACTIONS={allow_actions_value}")
+    recovery_cycles = max(1, min(getattr(args, "recovery_cycles", 2), 3))
+    print(f"IMPROVE_RECOVERY_CYCLES={recovery_cycles}")
 
     rc, autopilot_output = invoke_turn(args, visible, technical, send_history=False, capture_output=True)
     if rc != 0:
         return rc
-    meta = parse_key_values(autopilot_output)
-    read_command = meta.get("read_command", "").strip()
-    patch_target = meta.get("patch_target", "").strip().lower()
-    recommendation = meta.get("recommendation", "").strip()
+    current_output = autopilot_output
+    current_recommendation = parse_key_values(current_output).get("recommendation", "").strip()
+    last_final_output = current_output.strip()
 
-    if not read_command and (not patch_target or patch_target == "none"):
-        if autopilot_output.strip():
-            print(autopilot_output.strip())
-        return 0
+    for cycle in range(1, recovery_cycles + 1):
+        meta = parse_key_values(current_output)
+        if not has_patch_guidance(meta):
+            if last_final_output.strip():
+                print(last_final_output.strip())
+            return 0
 
-    rc = follow_read_command(args, args.workspace, read_command)
-    if rc != 0:
-        return rc
+        print(f"IMPROVE_RECOVERY_CYCLE={cycle}")
+        rc, recovery = run_patch_recovery_once(
+            args,
+            args.workspace,
+            current_output,
+            current_recommendation,
+            allow_actions_value,
+            ready_tag=f"IMPROVE_READY_CYCLE_{cycle}",
+            blocked_tag=f"IMPROVE_BLOCKED_CYCLE_{cycle}",
+        )
+        if rc != 0:
+            return rc
 
-    rc, plan_output = request_patch_plan(args, args.workspace)
-    if rc != 0:
-        return rc
-    plan_meta = parse_key_values(plan_output)
-    target = plan_meta.get("patch_target", "").strip()
-    summary = plan_meta.get("patch_summary", "").strip() or recommendation
-    hint = plan_meta.get("patch_hint", "").strip()
-    if not target or target.lower() == "none":
-        final_parts = []
-        if autopilot_output.strip():
-            final_parts.append(autopilot_output.strip())
-        if plan_output.strip():
-            final_parts.append(plan_output.strip())
-        print("\n\n".join(final_parts))
-        return 0
+        last_final_output = str(recovery.get("final_output", "") or "").strip()
+        if not recovery.get("handled"):
+            if current_output.strip():
+                print(current_output.strip())
+            return 0
+        if not recovery.get("applied"):
+            if last_final_output:
+                print(last_final_output)
+            return 0
 
-    rc, diff_output = request_diff_only(args, args.workspace, target, summary, hint)
-    if rc != 0:
-        return rc
-
-    try:
-        diff = extract_diff_block(diff_output)
-        files, safe_summary = validate_safe_diff(diff)
-    except ValueError as exc:
-        final_parts = []
-        if autopilot_output.strip():
-            final_parts.append(autopilot_output.strip())
-        if plan_output.strip():
-            final_parts.append(plan_output.strip())
-        if diff_output.strip():
-            final_parts.append(diff_output.strip())
-        final_parts.append(f"IMPROVE_BLOCKED\nreason={exc}")
-        print("\n\n".join(final_parts))
-        return 0
-
-    apply_visible = (
-        f"repo: {args.workspace}\n"
-        f"Capability kroky doběhly a malý patch prošel guardraily ({len(files)} souborů). "
-        "Teď ho auditovaně aplikuj a vrať stručný výsledek."
-    )
-    apply_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_APPLY_NOW\n\n```diff\n{diff}```"
-    rc, apply_output = invoke_turn(args, apply_visible, apply_technical, send_history=True, capture_output=True)
-    if rc != 0:
-        return rc
+        verify_output = str(recovery.get("verify_output", "") or "")
+        verify_meta = parse_key_values(verify_output)
+        current_recommendation = verify_meta.get("recommendation", "").strip()
+        current_output = verify_output
+        if not has_patch_guidance(verify_meta):
+            if last_final_output:
+                print(last_final_output)
+            return 0
 
     final_parts = []
-    if autopilot_output.strip():
-        final_parts.append(autopilot_output.strip())
-    if plan_output.strip():
-        final_parts.append(plan_output.strip())
-    final_parts.append(f"IMPROVE_READY\nfiles={safe_summary}")
-    if apply_output.strip():
-        final_parts.append(apply_output.strip())
+    if last_final_output:
+        final_parts.append(last_final_output)
+    final_parts.append("IMPROVE_RECOVERY_LIMIT_REACHED")
+    final_parts.append("reason=patch guidance persisted after the configured recovery cycles")
     print("\n\n".join(final_parts))
     return 0
 
@@ -3330,6 +3462,7 @@ def parse_args() -> argparse.Namespace:
     improve.add_argument("workspace")
     improve.add_argument("--timeout", type=int, default=2400)
     improve.add_argument("--max-steps", type=int, default=3)
+    improve.add_argument("--recovery-cycles", type=int, default=2, help="Maximum number of diagnose-fix-verify recovery loops after autopilot returns patch guidance")
     improve.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
@@ -3446,6 +3579,7 @@ def parse_args() -> argparse.Namespace:
     bootstrap_improve.add_argument("--timeout", type=int, default=2400)
     bootstrap_improve.add_argument("--followup-steps", type=int, default=2, help="Maximum number of post-bootstrap workspace capability steps to attempt before improve flow")
     bootstrap_improve.add_argument("--max-steps", type=int, default=3)
+    bootstrap_improve.add_argument("--recovery-cycles", type=int, default=2, help="Maximum number of diagnose-fix-verify recovery loops after autopilot returns patch guidance")
     bootstrap_improve.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     bootstrap_improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 

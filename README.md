@@ -252,6 +252,16 @@ Nově jsou základní workspace capability akce a jejich přirozené jazykové s
 
 Stejný registry teď používá i gateway autopilot planner. Ten už nevybírá další capability krok jen z úzkého `verify + install` heuristického flow, ale dělá dry-run přes celé povolené action set, řídí se `autopilot_priority` a při failu vrací i recovery směr (`recommendation`, `patch_target`, `patch_hint`, `read_command`) odvozený z registry a scanneru workspace. Prakticky to znamená méně falešných „nic nejde“ stavů a lepší navázání do `mentor_codex_local.py improve`.
 
+`mentor_codex_local.py improve` teď navíc umí malý `diagnose -> fix -> verify` recovery loop. Když autopilot vrátí patch guidance, helper:
+1. provede `read_command`,
+2. vyžádá si minimální patch plan,
+3. nechá model navrhnout přesně jeden malý unified diff,
+4. diff lokálně zvaliduje proti safe scope,
+5. auditovaně ho aplikuje,
+6. hned potom spustí ještě jeden bezpečný capability verify krok.
+
+Tenhle loop může kontrolovaně proběhnout víckrát přes `--recovery-cycles`, takže agent nekončí po prvním patchi, pokud follow-up verify vrátí další konkrétní blocker.
+
 Protože některé instalace OpenWebUI umí odmítnout aktualizaci sekundárního auto-tools filtru, kritické přirozené routy jsou zároveň implementované i v aktivním `Codex Gateway Admin Filter`. Ten umí bez explicitních `GATEWAY_ADMIN_*` markerů zachytit například `repozitar: ai-stack / soubor: docker-compose.yml / vysvětli řádek po řádku`, `repozitar: Test2 / vytvoř mi ssh klíč pro github`, `repozitar: Test2 / spusť testy`, `repozitar: Test2 / přidej webgl soubor s koulí` nebo `kdo má dnes svátek? stáhni mi to z seznam.cz`.
 
 Novější výchozí chování je o něco samostatnější: autopilot a mentor helpery už standardně počítají i s `verify` a `smoke`, ne jen s `install/test/build/lint`. U širších zadání typu “rozběhni to a dotáhni co půjde” tak codex-local nemusí zbytečně končit po prvním read-only shrnutí, ale může bezpečně zkusit ověřovací a startup krok ještě před tím, než sáhne po patch workflow.
