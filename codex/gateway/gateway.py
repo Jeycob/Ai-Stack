@@ -24,12 +24,9 @@ from workspace_context import (
 )
 from workspace_scan import collect, load_workspace
 
-WORKSPACES_FILE = os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json")
 OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1")
 OPENWEBUI_HEALTH_URL = os.getenv("OPENWEBUI_HEALTH_URL", "http://127.0.0.1:9090/")
 OPENWEBUI_LOADER_URL = os.getenv("OPENWEBUI_LOADER_URL", "http://127.0.0.1:9090/static/loader.js")
-REPO_ROOT = Path(WORKSPACES_FILE).resolve().parents[1]
-CAPABILITY_ROADMAP_FILE = REPO_ROOT / "docs" / "codex-local-capability-roadmap.json"
 ADMIN_TOKEN_FILE = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN_FILE", "")
 ADMIN_TOKEN = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN", "")
 if not ADMIN_TOKEN and ADMIN_TOKEN_FILE:
@@ -44,6 +41,83 @@ MODELS = {
     "codex-local-plan-qwen32b": {"model": "qwen2.5-coder:32b", "mode": "plan"},
     "codex-local-build-qwen32b": {"model": "qwen2.5-coder:32b", "mode": "build"},
 }
+
+
+def _repo_root_candidates():
+    env_workspaces = os.getenv("CODEX_WORKSPACES_FILE", "").strip()
+    if env_workspaces:
+        try:
+            yield Path(env_workspaces).resolve().parents[1]
+        except Exception:
+            pass
+    env_repo_root = os.getenv("CODEX_REPO_ROOT", "").strip()
+    if env_repo_root:
+        try:
+            yield Path(env_repo_root).resolve()
+        except Exception:
+            pass
+    try:
+        yield Path(__file__).resolve().parents[2]
+    except Exception:
+        pass
+    for raw in (
+        "/mnt/c/Repositories/ai-stack",
+        "/data/repositories/ai-stack",
+        "/app/backend/data/repositories/ai-stack",
+        "/Repositories/ai-stack",
+    ):
+        try:
+            yield Path(raw).resolve()
+        except Exception:
+            yield Path(raw)
+
+
+def _resolve_repo_root():
+    checked = []
+    seen = set()
+    for root in _repo_root_candidates():
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        checked.append(key)
+        if (root / "codex/gateway/gateway.py").is_file():
+            return root
+    fallback = next(iter(seen), str(Path.cwd()))
+    return Path(fallback)
+
+
+def _resolve_workspaces_file(repo_root: Path):
+    env_workspaces = os.getenv("CODEX_WORKSPACES_FILE", "").strip()
+    candidates = []
+    if env_workspaces:
+        candidates.append(Path(env_workspaces))
+    candidates.append(repo_root / "codex/workspaces.json")
+    for raw in (
+        "/mnt/c/Repositories/ai-stack/codex/workspaces.json",
+        "/data/repositories/ai-stack/codex/workspaces.json",
+        "/app/backend/data/repositories/ai-stack/codex/workspaces.json",
+        "/Repositories/ai-stack/codex/workspaces.json",
+    ):
+        candidates.append(Path(raw))
+    seen = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.is_file():
+            return resolved
+    return candidates[0] if env_workspaces else repo_root / "codex/workspaces.json"
+
+
+REPO_ROOT = _resolve_repo_root()
+WORKSPACES_FILE = str(_resolve_workspaces_file(REPO_ROOT))
+CAPABILITY_ROADMAP_FILE = REPO_ROOT / "docs" / "codex-local-capability-roadmap.json"
 
 IGNORE_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", "target", ".next", "__pycache__"}
 IMPORTANT = {
