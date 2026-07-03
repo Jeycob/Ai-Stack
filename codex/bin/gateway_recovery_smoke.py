@@ -20,6 +20,16 @@ if str(ROOT) not in sys.path:
 from codex.gateway import gateway
 
 
+def assert_agent_loop_parse() -> None:
+    parsed = gateway.explicit_agent_loop_request(
+        "repo: ai-stack\n"
+        "GATEWAY_ADMIN_AGENT_LOOP ai-stack -- Prohlédni workspace. Nic needituj."
+    )
+    if parsed != {"workspace": "ai-stack", "task": "Prohlédni workspace. Nic needituj."}:
+        raise SystemExit(f"expected explicit agent-loop parse, got {parsed!r}")
+    print("AGENT_LOOP_PARSE_OK")
+
+
 def assert_case(action: str, output: str, manifests: list[str], expected_target: str, expected_fragment: str) -> None:
     fake_scan = {
         "manifests": manifests,
@@ -52,6 +62,7 @@ def assert_case(action: str, output: str, manifests: list[str], expected_target:
 
 
 def main() -> int:
+    assert_agent_loop_parse()
     assert_case(
         "test",
         "npm error Missing script: test",

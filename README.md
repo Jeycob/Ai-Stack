@@ -248,11 +248,25 @@ Protože nasazení restartuje i gateway, běží asynchronně. Stav sleduj dalš
     repo: ai-stack
     GATEWAY_ADMIN_DEPLOY_STATUS
 
-Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a až potom restartuje Codex stack a OpenWebUI. Po restartu čeká na gateway, OpenWebUI root a `/static/loader.js`, aby krátký náběh služby nevypadal jako chyba. Pokud `sudo` vyžaduje heslo, pokusí se o restart přes WSL root interop (`wsl.exe -d Ubuntu -u root`), stejně jako Windows startovací `.bat` skript. Když selže i to, vypíše ruční fallback. Pokud má k dispozici `OWUI_API_KEY` nebo ignorovaný soubor `codex/state/openwebui-api.key`, po restartu také sesynchronizuje OpenWebUI admin filter a auto-tools filter funkci.
+Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a až potom restartuje Codex stack a OpenWebUI. Po restartu čeká na gateway, OpenWebUI root a `/static/loader.js`, aby krátký náběh služby nevypadal jako chyba. Pokud `sudo` vyžaduje heslo, pokusí se o restart přes WSL root interop (`wsl.exe -d Ubuntu -u root`), stejně jako Windows startovací `.bat` skript. Když selže i to, vypíše ruční fallback. Pokud má k dispozici `OWUI_API_KEY` nebo ignorovaný soubor `codex/state/openwebui-api.key`, po restartu také sesynchronizuje OpenWebUI admin filter a auto-tools filter funkci. Stejný reconcile krok spouští i `start_docker.bat`, takže běžný Windows autostart nenechá OpenWebUI tiše s vypnutými nebo stale codex-local funkcemi.
 
 Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `tail` nebo `log_tail` balí do rozbalovacích `<details>` bloků, aby chat zůstal čitelný. OpenWebUI raw HTML v Markdownu escapuje, proto `openwebui/loader.js` tyto doslovné bloky po vykreslení zprávy převádí na skutečné lokální dropdowny.
 
 `Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat přirozené požadavky a mapovat je na několik širších capability workflow. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`; webové dotazy typu “stáhni mi to z seznam.cz”, “podívej se na https://...” nebo “kdo má dnes svátek?” přepíše na `GATEWAY_ADMIN_WEB_FETCH` nebo `GATEWAY_ADMIN_WEB_ANSWER`; preflight formulace typu “je to ready na push?”, “co blokuje push?” nebo “zkontroluj push readiness” přepíše na auditovaný `GATEWAY_ADMIN_GIT_STATUS`; publish-plan formulace typu “navrhni publish plan”, “jak publikovat release”, “co mám dělat před releasem?” nebo “jaký je další release krok?” přepíše na helper `mentor_codex_local.py publish-plan`; release-prep formulace typu “zkontroluj release readiness”, “připrav release” nebo “co blokuje release” přepíše na helper `mentor_codex_local.py release-prep`; jednoduché publish zadání typu “pushni změny do GitHubu”, “commitni a pushni” nebo `message: ...` přepíše na auditovaný `GATEWAY_ADMIN_GIT_PUSH`; bootstrap požadavky typu “vytvoř nové repository Test2 a vygeneruj ssh klíč” přepíše na `GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2` bez restartu nebo pushnutí; “založ GitHub repository Test2” přidá `--github`; explicitní “restartni workspace/stack” přidá `--restart`; pokud bootstrap prompt rovnou obsahuje i follow-through cíl typu “doinstaluj co chybí”, “stáhni co je třeba”, “napiš/vytvoř kód”, “rozběhni to” nebo “spusť testy”, přepíše se už na širší mentor workflow `mentor_codex_local.py bootstrap-improve`, které nejdřív repo založí a zaregistruje a potom pokračuje přes auditovaný improve flow nad novým workspace; běžné repo kontroly jako git status/remote/log nebo explicitní “spusť příkaz:” v registrovaném workspace přepíše na `GATEWAY_ADMIN_RUN_WORKSPACE`; jednoduché editace typu “přidej WebGL soubor s koulí”, “vytvoř index.html” nebo “uprav README” přepíše na `GATEWAY_ADMIN_WORKSPACE_EDIT`, kde gateway nechá model vytvořit unified diff, ověří cílové cesty a `git apply --check`, a teprve potom změnu aplikuje; formulace “přidej ... a spusť/rozběhni/otestuj” k tomu automaticky přidá navazující `run-after` akci; běžné developerské akce jako install/test/build/lint/verify/smoke přepíše na `GATEWAY_ADMIN_WORKSPACE_ACTION`; širší požadavky typu “ověř a pokračuj sám”, “udělej co je potřeba”, “dotáhni to” nebo “navrhni další krok” přepíše na `GATEWAY_ADMIN_WORKSPACE_AUTOPILOT`, nově typicky se třemi kroky a se sadou `install,verify,smoke,test,build,lint`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá auditovatelný admin workflow.
+
+Novější vrstva nad tím je `GATEWAY_ADMIN_AGENT_LOOP`: intent-first orchestrace pro běžný codex-local chat. Tady už router nemá být „hlavní mozek“. Tenká OpenWebUI vrstva pouze předá workspace a původní task do gateway, a samotný loop udělá sled `intent/plán -> policy check -> capability execution -> observation -> recovery/verify -> report`.
+
+Prakticky to znamená:
+
+- `nic needituj` nebo jiný explicitní read-only požadavek jde do `review`,
+- bezpečná editace jde do `edit` a může si sama přidat `run_after=verify|test|build|smoke`,
+- `ověř projekt`, `spusť build`, `nainstaluj závislosti` apod. jdou do `action`,
+- širší “udělej co je potřeba / pokračuj sám / rozběhni to” jde do `autopilot`,
+- bootstrap typu “vytvoř repo, initni git, vygeneruj ssh klíč, doinstaluj co chybí” jde do `bootstrap`,
+- veřejný webový dotaz jde do `web_answer` nebo `web_fetch`,
+- ai-stack self-update/restart prompt jde do `deploy`.
+
+Tím se snižuje závislost na křehkých regex routách v OpenWebUI filtrech. Kód už nemá hádat celý workflow z každé fráze; má hlavně zvalidovat policy, spustit auditovanou capability a při selhání vrátit konkrétní recovery krok.
 
 Nově jsou základní workspace capability akce a jejich přirozené jazykové spouštěče centralizované v `docs/codex-local-capability-roadmap.json` pod `workspace_actions`. To znamená, že `Codex Auto Tools Filter`, `Codex Gateway Admin Filter` i `mentor_codex_local.py` čtou stejný registry pro akce jako `install`, `test`, `build`, `lint`, `verify` a `smoke`, včetně timeoutů, runneru a synonym typu “stáhni co je potřeba”, “doinstaluj co chybí” nebo “pusť to”.
 
@@ -319,16 +333,14 @@ Pro skutečný chat-level E2E smoke nad audit chatem je nad tím ještě `codex/
 Nad tím je teď ještě lehký scénářový runner `codex/bin/owui_chat_scenarios.py`. Ten už neposílá interní marker nebo technický admin prompt, ale běžný user-like audit chat prompt, takže ověřuje i přirozený routing přes `Codex Auto Tools Filter`. Hodí se pro levné E2E ověření, že codex-local pořád zvládá základní agentické flow přes samotný OpenWebUI chat:
 
     python3 codex/bin/owui_chat_scenarios.py --list
-    python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario git-status --scenario next-step
-    python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario workflow-profile-improve --scenario mentor-brief-bootstrap
+    python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario agent-review --scenario verify-project
+    python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario explicit-agent-loop
     OWUI_API_KEY=... python3 codex/bin/owui_chat_scenarios.py --scenario all --json
 
 Výchozí scénáře dnes pokrývají:
-- `git-status`: přirozené “zkontroluj git status”
+- `agent-review`: read-only review přes intent-first agent loop
 - `verify-project`: přirozené “ověř projekt”
-- `push-readiness`: přirozené “je to ready na push?”
-- `deploy-status`: přirozené “ukaž deploy status”
-- `next-step`: přirozené “navrhni další krok”
+- `explicit-agent-loop`: kontrola, že `GATEWAY_ADMIN_AGENT_LOOP` zachytí capability vrstva, ne plain model
 
 To je záměrně levnější než plný browser E2E. Neověřuje vzhled UI, ale přímo to, že běžná lidská formulace v audit chatu projde route -> filter -> gateway -> capability -> zpět do viditelné odpovědi.
 
@@ -392,8 +404,8 @@ Když naopak chceš opravdu plný živý důkaz přes OpenWebUI chat, použij:
 
 `codex/bin/check_ai_stack.sh` to teď umí použít i automaticky. Když je dostupný OpenWebUI API key přes `OWUI_API_KEY` nebo ignorovaný `codex/state/openwebui-api.key`, healthcheck po gateway smoke přidá i audit-chat smoke. Pokud key chybí, krok se jen korektně přeskočí. Vypnout ho jde přes `SKIP_OWUI_CHAT_SMOKE=1`.
 
-Stejný healthcheck teď umí po základním audit-chat smoke spustit i lehké user-like scénáře přes `owui_chat_scenarios.py`. Výchozí sada je záměrně levná (`git-status,next-step`), aby šlo rychle ověřit, že pořád funguje i přirozený route přes filter a capability vrstvu, ne jen úzký technický smoke. Chování jde řídit přes:
-- `OWUI_CHAT_SCENARIOS=git-status,deploy-status,next-step`
+Stejný healthcheck teď umí po základním audit-chat smoke spustit i lehké user-like scénáře přes `owui_chat_scenarios.py`. Výchozí sada je záměrně levná (`agent-review,verify-project`), aby šlo rychle ověřit, že pořád funguje i přirozený route přes filter a capability vrstvu, ne jen úzký technický smoke. Chování jde řídit přes:
+- `OWUI_CHAT_SCENARIOS=agent-review,explicit-agent-loop,verify-project`
 - `SKIP_OWUI_CHAT_SCENARIOS=1`
 
 Pro admin nebo patch operace používej oddělený viditelný a technický prompt. Viditelný prompt je lidský popis práce pro audit chat; technický prompt může obsahovat interní gateway/admin marker a diff, ale do viditelné historie se nezapisuje:
@@ -636,12 +648,13 @@ Praktická pravidla pro zadávání úloh:
 - Aby se při těchto nested helper bězích neroztočila rekurze `OpenWebUI chat -> mentor helper -> owui_chat_turn.py -> stejný OpenWebUI chat`, používá helper vrstva explicitní `--stateless-turns`, který se při volání child `owui_chat_turn.py` překládá na `--stateless`. Takový vnitřní krok pak nepíše zpět do `/api/v1/chats/<id>`, ale jde přímo přes jednorázové `/api/chat/completions`, takže se nesnaží editovat právě ten chat, který ho spustil.
 - Stejné pravidlo teď platí napříč mentor helper commandy, ne jen pro `delegate`: `brief`, `review`, `boundary`, `profile`, `report`, `plan`, `next-helper`, `publish-plan`, `release-prep`, `bootstrap-dispatch`, `bootstrap-improve` a multi-task helpery už se skládají ve stejném stateless tvaru. Tím se snižuje riziko, že by se některý “levný” analytický helper choval jinak než zbytek.
 - Sjednocený stateless tvar se nepropisuje jen do live routování z OpenWebUI filtru, ale i do textových výstupů mentora jako `MENTOR_BRIEF_NEXT_HELPER`, `MENTOR_NEXT_HELPER_COMMAND`, `PLAN_STEP_*`, `BACKLOG_ITEM_*_PLAN_CMD` a `BACKLOG_ITEM_*_REPORT_CMD`. Díky tomu i copy/paste workflow z audit chatu nebo z lokálních helper výstupů používá stejný bezpečný command shape jako runtime router.
-- Čistě read-only architektonické prompty typu `repo: ai-stack` + `Nic needituj. Řekni blockery autonomie...` už se navíc nesnaží routovat do self-delegace přes `mentor_codex_local.py delegate`. Pokud prompt vypadá jako přímá analýza repozitáře bez editace, filter ho nechá v normální snapshot/model cestě, aby odpověď vznikla přímo nad repem bez další orchestrace.
+- Čistě read-only architektonické prompty typu `repo: ai-stack` + `Nic needituj. Řekni blockery autonomie...` už se nesnaží routovat do self-delegace přes `mentor_codex_local.py delegate`. Jdou přes `GATEWAY_ADMIN_AGENT_LOOP`, kde policy vynutí `workflow=review` a odpověď vznikne bez editace.
 - Background workspace run teď vrací i `job_id`. Stav jde kdykoli zkontrolovat přes `GATEWAY_ADMIN_RUN_WORKSPACE_STATUS <job_id>` nebo přirozeně dotazem typu `repo: Test2` + `stav jobu`. Gateway vrátí `running`, poslední `tail` a pokud už doběhl `run_check.py`, i `exit_code`, `duration_ms` a parsovaný `result`.
 - Přímý fallback pro deploy přes gateway admin endpoint: `python3 codex/bin/gateway_admin.py --base-url http://127.0.0.1:9101 deploy` na runtime hostu, nebo z jiné stanice s `CODEX_GATEWAY_ADMIN_TOKEN` / `codex/state/codex-gateway-admin.token`. Stav zjistíš přes `python3 codex/bin/gateway_admin.py --base-url http://127.0.0.1:9101 deploy-status`.
-- Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `python3 codex/bin/sync_openwebui_function.py --dry-run`.
-- Aplikace synchronizace OpenWebUI funkce po review: `python3 codex/bin/sync_openwebui_function.py`.
-- Synchronizace OpenWebUI funkcí záměrně nevynucuje jen shodu obsahu, ale i `is_active=true` a `is_global=true`; tím deploy odhalí i stav, kdy je nový filtr v repozitáři, ale OpenWebUI ho v model pipeline reálně nepoužívá.
+- Dry-run reconcile všech required OpenWebUI funkcí: `python3 codex/bin/reconcile_openwebui_functions.py --dry-run`.
+- Tvrdá kontrola runtime stavu funkcí: `python3 codex/bin/reconcile_openwebui_functions.py --check-only`.
+- Aplikace reconcile po review: `python3 codex/bin/reconcile_openwebui_functions.py`.
+- Reconciler záměrně nevynucuje jen shodu obsahu, ale i `is_active=true`, `is_global=true` a hash runtime zdroje včetně embedded capability roadmapy. Aktivaci provádí přes OpenWebUI toggle endpointy, ne pouze přes update payload, protože některé verze `is_active` v update requestu ignorují. Tím deploy odhalí i stav, kdy je nový filtr v repozitáři, ale OpenWebUI ho v model pipeline reálně nepoužívá.
 - Uložení GitHub API tokenu pro volitelné zakládání GitHub repozitářů: `codex/bin/store_runtime_secret.sh github-api`.
 - Bezpečné mapování OpenWebUI endpointů bez mutačních metod: `OWUI_API_KEY_FILE=codex/state/openwebui-api.key python3 codex/bin/discover_openwebui_endpoints.py --path /api/config --path /api/v1/functions/list`.
 - Seznam modelů: `curl http://192.168.0.48:9101/v1/models`.

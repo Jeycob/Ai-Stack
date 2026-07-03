@@ -42,7 +42,20 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: --- 6. ZJISTENI WSL IP ---
+:: --- 6. RECONCILE OPENWEBUI FUNKCI ---
+wsl -d %DISTRO% -e test -f /mnt/c/Repositories/ai-stack/codex/state/openwebui-api.key
+if %errorlevel% equ 0 (
+    echo [%time%] Reconciluji OpenWebUI Codex funkce... >> "%LOGFILE%"
+    wsl -d %DISTRO% -e bash -lc "for i in {1..90}; do curl -fsS http://127.0.0.1:9090/ >/dev/null 2>&1 && break; sleep 1; done; cd /mnt/c/Repositories/ai-stack && python3 codex/bin/reconcile_openwebui_functions.py" >> "%LOGFILE%" 2>&1
+    if %errorlevel% neq 0 (
+        echo [CHYBA] Reconcile OpenWebUI Codex funkci selhal. >> "%LOGFILE%"
+        exit /b 1
+    )
+) else (
+    echo [%time%] OpenWebUI API key nenalezen, reconcile funkci preskocen. >> "%LOGFILE%"
+)
+
+:: --- 7. ZJISTENI WSL IP ---
 echo [%time%] Nastavuji portproxy... >> "%LOGFILE%"
 for /f "tokens=1" %%i in ('wsl -d %DISTRO% -e hostname -I') do set "WSL_IP=%%i"
 
@@ -53,14 +66,14 @@ if not defined WSL_IP (
 
 echo [%time%] WSL IP: !WSL_IP! >> "%LOGFILE%"
 
-:: --- 7. PORTPROXY BEZ GLOBALNIHO RESETU ---
+:: --- 8. PORTPROXY BEZ GLOBALNIHO RESETU ---
 netsh interface portproxy delete v4tov4 listenport=9090 listenaddress=0.0.0.0 >nul 2>&1
 netsh interface portproxy add v4tov4 listenport=9090 listenaddress=0.0.0.0 connectport=9090 connectaddress=!WSL_IP! >> "%LOGFILE%" 2>&1
 
 netsh interface portproxy delete v4tov4 listenport=9101 listenaddress=0.0.0.0 >nul 2>&1
 netsh interface portproxy add v4tov4 listenport=9101 listenaddress=0.0.0.0 connectport=9101 connectaddress=!WSL_IP! >> "%LOGFILE%" 2>&1
 
-:: --- 8. FIREWALL PRAVIDLA PRO LAN ---
+:: --- 9. FIREWALL PRAVIDLA PRO LAN ---
 netsh advfirewall firewall show rule name="OpenWebUI 9090 LAN" >nul 2>&1
 if %errorlevel% neq 0 (
     netsh advfirewall firewall add rule name="OpenWebUI 9090 LAN" dir=in action=allow protocol=TCP localport=9090 remoteip=192.168.0.0/24 >> "%LOGFILE%" 2>&1
@@ -71,7 +84,7 @@ if %errorlevel% neq 0 (
     netsh advfirewall firewall add rule name="Codex Gateway 9101 LAN" dir=in action=allow protocol=TCP localport=9101 remoteip=192.168.0.0/24 >> "%LOGFILE%" 2>&1
 )
 
-:: --- 9. RYCHLA KONTROLA ---
+:: --- 10. RYCHLA KONTROLA ---
 echo [%time%] Kontroluji sluzby... >> "%LOGFILE%"
 curl -sS --connect-timeout 5 http://127.0.0.1:9090/ >nul 2>&1
 if %errorlevel% neq 0 (

@@ -5,7 +5,7 @@
 # gateway-scheduled-chat-patch: ok
 # gateway-chat-no-error-patch: ok
 # gateway-chat-fast-ack-patch: ok
-import html, ipaddress, json, os, re, socket, subprocess, sys, time, uuid, urllib.error, urllib.parse, urllib.request
+import html, ipaddress, json, os, re, shlex, socket, subprocess, sys, time, uuid, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 from pathlib import Path
@@ -92,7 +92,7 @@ def select_workspace(messages):
     return name, workspaces[name]
 
 def strip_routing(text):
-    return re.sub(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:\s*[A-Za-z0-9_.-]+\s*$", "", text).strip()
+    return re.sub(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:?\s*[A-Za-z0-9_.-]+\s*$", "", text).strip()
 
 def run_ro(args, cwd, timeout=8):
     try:
@@ -566,6 +566,668 @@ def admin_web_answer(payload):
     result["answer"] = answer
     return result
 
+
+AGENT_LOOP_WORKFLOWS = {
+    "review",
+    "edit",
+    "action",
+    "run",
+    "autopilot",
+    "bootstrap",
+    "web_answer",
+    "web_fetch",
+    "deploy",
+    "clarify",
+}
+AGENT_LOOP_ACTIONS = {"install", "verify", "smoke", "test", "build", "lint"}
+
+
+def extract_json_object(text):
+    source = str(text or "").strip()
+    if not source:
+        raise ValueError("AGENT_PLAN_EMPTY")
+    fenced = re.search(r"(?is)```(?:json)?\s*(\{.*?\})\s*```", source)
+    if fenced:
+        source = fenced.group(1).strip()
+    start = source.find("{")
+    if start < 0:
+        raise ValueError("AGENT_PLAN_JSON_NOT_FOUND")
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx, ch in enumerate(source[start:], start=start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(source[start : idx + 1])
+    raise ValueError("AGENT_PLAN_JSON_UNCLOSED")
+
+
+def agent_read_only_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "nic needituj",
+        "bez editace",
+        "jen analyzuj",
+        "jen analysis",
+        "jen popis",
+        "jen vysvetli",
+        "jen vysvětli",
+        "jen rekni",
+        "jen řekni",
+        "read only",
+        "readonly",
+        "do not edit",
+        "don't edit",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def agent_extract_repo_name(task):
+    text = str(task or "").strip()
+    patterns = (
+        r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:repo|repository|repozitar|repozitář|repositar|workspace|projekt|project)\s*:\s*([A-Za-z0-9_.-]{1,80})\b",
+        r"(?i)\b(?:repo|repository|repozitar|repozitář|repositar)\s+([A-Za-z0-9_.-]{1,80})\b",
+        r"(?i)\b(?:workspace|projekt|project)\s+([A-Za-z0-9_.-]{1,80})\b",
+        r"(?i)\b(?:vytvor|vytvoř|zaloz|založ)\s+(?:nove|nové|new)?\s*(?:repo|repository|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def agent_controller_workspace(requested_workspace):
+    default, workspaces = load_registry()
+    if requested_workspace in workspaces:
+        return requested_workspace, True, workspaces
+    if "ai-stack" in workspaces:
+        return "ai-stack", False, workspaces
+    return default, False, workspaces
+
+
+def agent_capability_catalog():
+    registry = load_workspace_action_registry()
+    lines = [
+        "- review: read-only analysis over repository snapshot; never edits",
+        "- edit: safe repository edit through audited unified diff application; optional verify/test/build/smoke follow-up",
+        "- action: one audited workspace action from {install, verify, smoke, test, build, lint}",
+        "- run: execute one explicit short command inside codex-opencode-<workspace> and return output",
+        "- autopilot: recovery/verify loop over install/verify/smoke/test/build/lint",
+        "- bootstrap: create local repository/workspace, init git, generate SSH key, optionally continue with follow-up actions",
+        "- web_answer: answer a question from a public HTTP/HTTPS source",
+        "- web_fetch: fetch text from a public HTTP/HTTPS source",
+        "- deploy: ai-stack deploy/restart flow",
+        "- clarify: ask for one missing piece of information instead of pretending to execute",
+        "",
+        "Workspace actions:",
+    ]
+    for action in ("install", "verify", "smoke", "test", "build", "lint"):
+        spec = registry.get(action) or {}
+        summary = str(spec.get("summary", "")).strip()
+        lines.append(f"- {action}: {summary or 'audited workspace action'}")
+    return "\n".join(lines)
+
+
+def agent_infer_action_from_task(task):
+    lower = str(task or "").lower()
+    registry = load_workspace_action_registry()
+    for action, spec in registry.items():
+        if not isinstance(spec, dict):
+            continue
+        cues = spec.get("cues") or []
+        if any(isinstance(cue, str) and cue.lower() in lower for cue in cues):
+            return str(action).strip().lower()
+    return ""
+
+
+def agent_edit_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "uprav",
+        "edituj",
+        "pridej",
+        "přidej",
+        "vytvor soubor",
+        "vytvoř soubor",
+        "vytvor",
+        "vytvoř",
+        "dopln",
+        "doplň",
+        "zmen",
+        "změň",
+        "append",
+        "modify",
+        "update",
+        "create file",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def agent_bootstrap_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "vytvor repo",
+        "vytvoř repo",
+        "vytvor repository",
+        "vytvoř repository",
+        "zaloz repo",
+        "založ repo",
+        "create repo",
+        "create repository",
+        "nove repository",
+        "nové repository",
+        "nove repo",
+        "nové repo",
+        "vytvor workspace",
+        "vytvoř workspace",
+        "initni git",
+        "init git",
+        "ssh klic",
+        "ssh klíč",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def agent_public_url_from_task(task):
+    text = str(task or "").strip()
+    match = re.search(r"https?://[^\s<>'\")]+", text)
+    if match:
+        return match.group(0).rstrip(".,;:!?)]}")
+    lower = text.lower()
+    if "seznam.cz" in lower and ("svatek" in lower or "svátek" in lower):
+        return "https://search.seznam.cz/?q=" + urllib.parse.quote_plus("kdo má dnes svátek")
+    known = {
+        "seznam.cz": "https://www.seznam.cz/",
+        "novinky.cz": "https://www.novinky.cz/",
+        "idnes.cz": "https://www.idnes.cz/",
+        "github.com": "https://github.com/",
+        "example.com": "https://example.com/",
+    }
+    for domain, url in known.items():
+        if domain in lower:
+            return url
+    return ""
+
+
+def agent_web_question_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "?",
+        "kdo ",
+        "co ",
+        "jaky ",
+        "jaký ",
+        "jaka ",
+        "jaká ",
+        "jake ",
+        "jaké ",
+        "kdy ",
+        "kde ",
+        "proc ",
+        "proč ",
+        "who ",
+        "what ",
+        "when ",
+        "where ",
+        "why ",
+        "svatek",
+        "svátek",
+        "dneska",
+        "dnes ",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def agent_run_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "spust prikaz",
+        "spusť příkaz",
+        "spust command",
+        "spusť command",
+        "run command",
+        "execute command",
+        "shell command",
+        "terminal command",
+        "vypis verzi",
+        "vypiš verzi",
+        "ukaz verzi",
+        "ukaž verzi",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def agent_infer_command_from_task(task):
+    text = str(task or "").strip()
+    lower = text.lower()
+    fenced = re.search(r"(?is)```(?:bash|sh|shell)?\s*\n(.+?)\n```", text)
+    if fenced:
+        line = next((item.strip() for item in fenced.group(1).splitlines() if item.strip()), "")
+        if line:
+            return ["sh", "-lc", line]
+    inline = re.search(r"`([^`\n]{1,300})`", text)
+    if inline:
+        return ["sh", "-lc", inline.group(1).strip()]
+    command_match = re.search(
+        r"(?is)\b(?:spust|spusť|run|execute)\s+(?:prikaz|příkaz|command)\s*:?\s*(.+)$",
+        text,
+    )
+    if command_match:
+        candidate = command_match.group(1).strip()
+        if candidate:
+            return ["sh", "-lc", candidate[:500]]
+    if "git status" in lower:
+        return ["git", "status", "--short", "--branch"]
+    if re.search(r"\b(pwd|kde jsem|working directory)\b", lower):
+        return ["pwd"]
+    if re.search(r"\b(ls|vypis soubory|vypiš soubory|seznam souboru|seznam souborů)\b", lower):
+        return ["ls", "-la"]
+    if "python" in lower and ("verzi" in lower or "version" in lower):
+        return ["python3", "--version"]
+    if "node" in lower and ("verzi" in lower or "version" in lower):
+        return ["node", "--version"]
+    if "npm" in lower and ("verzi" in lower or "version" in lower):
+        return ["npm", "--version"]
+    return []
+
+
+def normalize_agent_command(value):
+    if isinstance(value, list) and value and all(isinstance(item, str) and item.strip() for item in value):
+        command = [item.strip() for item in value]
+    elif isinstance(value, str) and value.strip():
+        command = ["sh", "-lc", value.strip()]
+    else:
+        return []
+    if len(command) > 12:
+        raise ValueError("agent run command is too long")
+    if sum(len(item) for item in command) > 1200:
+        raise ValueError("agent run command text is too long")
+    joined = " ".join(command)
+    if "mentor_codex_local.py" in joined or "owui_chat_turn.py" in joined:
+        raise ValueError("agent run refuses nested OpenWebUI helper commands")
+    return command
+
+
+def agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
+    registry = load_registry()[1]
+    workspace_list = ", ".join(sorted(registry))
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the intent planner for a local Codex-like engineering agent. "
+                "Return JSON only. Do not explain. Choose the single best next workflow, not every possible one.\n\n"
+                "Output schema:\n"
+                "{\n"
+                '  "workflow": "review|edit|action|run|autopilot|bootstrap|web_answer|web_fetch|deploy|clarify",\n'
+                '  "reason": "short reason",\n'
+                '  "read_only": true,\n'
+                '  "workspace": "workspace-name",\n'
+                '  "action": "install|verify|smoke|test|build|lint or empty",\n'
+                '  "command": ["short","command","args"],\n'
+                '  "run_after": "install|verify|smoke|test|build|lint or empty",\n'
+                '  "followup_actions": ["install","verify"],\n'
+                '  "repo_name": "name or empty",\n'
+                '  "github": false,\n'
+                '  "url": "public url or empty",\n'
+                '  "question": "question for public web answer or empty",\n'
+                '  "confidence": "high|medium|low"\n'
+                "}\n\n"
+                "Planning rules:\n"
+                "- If the user explicitly says no edits, choose review with read_only=true.\n"
+                "- For analysis/explanation/review prompts, choose review.\n"
+                "- For file or code changes, choose edit. If the prompt also asks to verify/test/build/smoke after the edit, set run_after.\n"
+                "- For direct install/verify/smoke/test/build/lint requests, choose action.\n"
+                "- For an explicit one-off shell/terminal command or a small runtime inspection not covered by named actions, choose run and set command as a JSON string array.\n"
+                "- For 'do what is needed', 'continue autonomously', recovery, or multi-step runtime stabilization, choose autopilot.\n"
+                "- For creating a new repository/workspace/git init/SSH key bootstrap flow, choose bootstrap. "
+                "Put the new repository name in repo_name and any post-bootstrap runtime steps into followup_actions.\n"
+                "- If GitHub push/remote is mentioned during bootstrap, set github=true, but do not assume push is already confirmed.\n"
+                "- For public website questions, choose web_answer; for plain fetch, choose web_fetch.\n"
+                "- For ai-stack self-update/deploy/restart prompts, choose deploy.\n"
+                "- If the request is materially ambiguous, choose clarify.\n"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Requested workspace: {requested_workspace}\n"
+                f"Controller workspace: {controller_workspace}\n"
+                f"Requested workspace exists: {workspace_exists}\n"
+                f"Known workspaces: {workspace_list}\n\n"
+                f"Capability catalog:\n{agent_capability_catalog()}\n\n"
+                f"User task:\n{task}\n\n"
+                f"Repository snapshot for the controller workspace:\n{snapshot[:18000]}"
+            ),
+        },
+    ]
+
+
+def normalize_agent_plan(plan, requested_workspace, controller_workspace, workspace_exists, task):
+    if not isinstance(plan, dict):
+        plan = {}
+    workflow = str(plan.get("workflow") or "").strip().lower() or "clarify"
+    if workflow not in AGENT_LOOP_WORKFLOWS:
+        workflow = "clarify"
+    requested_read_only = agent_read_only_requested(task)
+    read_only = requested_read_only
+    if read_only and workflow != "review":
+        workflow = "review"
+    action = str(plan.get("action") or "").strip().lower()
+    if action not in AGENT_LOOP_ACTIONS:
+        action = ""
+    run_after = str(plan.get("run_after") or "").strip().lower()
+    if run_after not in AGENT_LOOP_ACTIONS:
+        run_after = ""
+    followup_actions = [
+        str(item).strip().lower()
+        for item in (plan.get("followup_actions") or [])
+        if str(item).strip().lower() in AGENT_LOOP_ACTIONS
+    ]
+    try:
+        command = normalize_agent_command(plan.get("command")) if workflow == "run" else []
+    except ValueError:
+        command = []
+    repo_name = str(plan.get("repo_name") or "").strip()
+    if not repo_name and workflow == "bootstrap":
+        repo_name = agent_extract_repo_name(task) or (
+            requested_workspace if not workspace_exists and requested_workspace != controller_workspace else ""
+        )
+    workspace = str(plan.get("workspace") or "").strip() or requested_workspace or controller_workspace
+    if workflow in {"review", "edit", "action", "run", "autopilot", "deploy"}:
+        workspace = requested_workspace if workspace_exists else controller_workspace
+    confidence = str(plan.get("confidence") or "medium").strip().lower()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "medium"
+    inferred_action = agent_infer_action_from_task(task)
+    bootstrap_requested = agent_bootstrap_requested(task)
+    run_requested = agent_run_requested(task)
+    if workflow == "bootstrap" and not bootstrap_requested:
+        if agent_edit_requested(task):
+            workflow = "edit"
+        elif inferred_action:
+            workflow = "action"
+            action = action or inferred_action
+        elif run_requested:
+            workflow = "run"
+        else:
+            workflow = "clarify"
+    if workflow == "web_fetch" and agent_web_question_requested(task):
+        workflow = "web_answer"
+    if workflow in {"web_fetch", "web_answer"} and not str(plan.get("url") or "").strip():
+        plan["url"] = agent_public_url_from_task(task)
+    if workflow == "web_answer" and not str(plan.get("question") or "").strip():
+        plan["question"] = str(task or "").strip()
+    if not read_only and workflow == "review" and inferred_action:
+        workflow = "action"
+        action = action or inferred_action
+    if not read_only and workflow == "review" and run_requested:
+        workflow = "run"
+    if not read_only and workflow == "review" and agent_edit_requested(task):
+        workflow = "edit"
+    if workflow == "edit" and not run_after and inferred_action:
+        run_after = inferred_action
+    if workflow == "run" and not command:
+        command = agent_infer_command_from_task(task)
+    if workflow == "run" and not command:
+        workflow = "clarify"
+    if workflow != "bootstrap":
+        repo_name = ""
+    return {
+        "workflow": workflow,
+        "reason": str(plan.get("reason") or "").strip(),
+        "read_only": read_only,
+        "workspace": workspace,
+        "action": action,
+        "command": command,
+        "run_after": run_after,
+        "followup_actions": followup_actions,
+        "repo_name": repo_name,
+        "github": bool(plan.get("github")),
+        "url": str(plan.get("url") or "").strip(),
+        "question": str(plan.get("question") or "").strip(),
+        "confidence": confidence,
+    }
+
+
+def agent_review_response(workspace, task):
+    default, workspaces = load_registry()
+    cfg = workspaces.get(workspace) or workspaces.get(default)
+    if not cfg:
+        raise ValueError(f"Unknown workspace '{workspace}'")
+    try:
+        snapshot = repo_snapshot(workspace, cfg)
+    except Exception as exc:
+        snapshot = f"SNAPSHOT_UNAVAILABLE: {exc}"
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a senior coding agent doing a read-only review over a trusted repository snapshot. "
+                "Reply in Czech. Never claim edits or execution. "
+                "Base every conclusion only on the provided snapshot. "
+                "Do not answer with generic software advice. "
+                "If the snapshot is insufficient, say exactly which file or command output is missing. "
+                "When listing blockers, risks, or architecture observations, make them concrete and reference the relevant file paths."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Úkol:\n{task}\n\nSnapshot:\n{snapshot[:22000]}",
+        },
+    ]
+    response = ollama_chat(MODELS["codex-local-plan-qwen14b"]["model"], messages, timeout=240)
+    return response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+
+def agent_plan(task, requested_workspace, controller_workspace, workspace_exists):
+    default, workspaces = load_registry()
+    cfg = workspaces.get(controller_workspace) or workspaces.get(default)
+    try:
+        snapshot = repo_snapshot(controller_workspace, cfg) if cfg else ""
+    except Exception as exc:
+        snapshot = f"SNAPSHOT_UNAVAILABLE: {exc}"
+    response = ollama_chat(
+        MODELS["codex-local-plan-qwen14b"]["model"],
+        agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot),
+        timeout=240,
+    )
+    raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    plan = normalize_agent_plan(extract_json_object(raw), requested_workspace, controller_workspace, workspace_exists, task)
+    return plan, raw
+
+
+def admin_agent_loop(payload):
+    requested_workspace = str(payload.get("workspace") or "").strip() or "ai-stack"
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", requested_workspace):
+        raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
+    task = str(payload.get("task") or "").strip()
+    if not task or len(task) > 6000:
+        raise ValueError("task must be 1..6000 characters")
+    controller_workspace, workspace_exists, workspaces = agent_controller_workspace(requested_workspace)
+    plan, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists)
+
+    result = {
+        "ok": False,
+        "requested_workspace": requested_workspace,
+        "controller_workspace": controller_workspace,
+        "workspace_exists": workspace_exists,
+        "task": task,
+        "plan": plan,
+        "raw_plan": raw_plan,
+        "workflow": plan["workflow"],
+        "read_only": plan["read_only"],
+    }
+
+    workflow = plan["workflow"]
+    if workflow == "clarify":
+        result["ok"] = True
+        result["summary"] = "Potřebuju upřesnit zadání nebo chybějící cílový workspace."
+        result["answer"] = (
+            "Nejsem si ještě jistý správným workflow. Upřesni prosím cílový workspace nebo konkrétní akci "
+            "(např. review, edit, install, verify, bootstrap repo)."
+        )
+        return result
+
+    if workflow == "review":
+        answer = agent_review_response(plan["workspace"], task)
+        result["ok"] = bool(answer)
+        result["summary"] = "Read-only review completed."
+        result["answer"] = answer or "Read-only review nedala žádný obsah."
+        return result
+
+    if workflow == "web_fetch":
+        fetch = admin_web_fetch({"url": plan["url"]})
+        result["ok"] = bool(fetch.get("ok"))
+        result["summary"] = "Public web fetch completed." if result["ok"] else "Public web fetch failed."
+        result["execution"] = fetch
+        return result
+
+    if workflow == "web_answer":
+        answer_result = admin_web_answer({"url": plan["url"], "question": plan["question"] or task})
+        result["ok"] = bool(answer_result.get("ok"))
+        result["summary"] = "Public web answer completed." if result["ok"] else "Public web answer failed."
+        result["execution"] = answer_result
+        return result
+
+    if workflow == "deploy":
+        deploy = admin_deploy_stack({"branch": "main"})
+        result["ok"] = bool(deploy.get("ok"))
+        result["summary"] = "ai-stack deploy scheduled." if result["ok"] else "ai-stack deploy was not scheduled."
+        result["execution"] = deploy
+        return result
+
+    if workflow in {"edit", "action", "autopilot"} and not workspace_exists:
+        result["summary"] = f"Workspace '{requested_workspace}' zatím není registrovaný."
+        result["recovery"] = {
+            "text": "Nejdřív vytvoř nebo zaregistruj workspace, případně použij bootstrap workflow.",
+            "suggested_workflow": "bootstrap",
+        }
+        return result
+
+    if workflow == "edit":
+        execution = admin_workspace_edit({
+            "workspace": plan["workspace"],
+            "task": task,
+            "run_after": plan["run_after"],
+            "timeout": 900,
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = "Safe edit applied and verified." if result["ok"] else "Safe edit failed."
+        if not result["ok"] and plan["run_after"]:
+            result["recovery"] = workspace_action_failure_recommendation(plan["workspace"], plan["run_after"], execution.get("run_result") or execution)
+        return result
+
+    if workflow == "action":
+        action = plan["action"] or "verify"
+        execution = admin_workspace_action({
+            "workspace": plan["workspace"],
+            "action": action,
+            "timeout": int((load_workspace_action_registry().get(action) or {}).get("timeout", 900)),
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = f"Workspace action {action} completed." if result["ok"] else f"Workspace action {action} failed."
+        if not result["ok"]:
+            result["recovery"] = workspace_action_failure_recommendation(plan["workspace"], action, execution)
+        return result
+
+    if workflow == "run":
+        command = plan.get("command") or []
+        if not command:
+            result["summary"] = "Run workflow needs a concrete command."
+            result["recovery"] = {"text": "Uveď konkrétní krátký příkaz, který se má spustit v workspace kontejneru."}
+            return result
+        execution = admin_run_workspace({
+            "workspace": plan["workspace"],
+            "command": command,
+            "timeout": 300,
+            "runner": "container",
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = "Workspace command completed." if result["ok"] else "Workspace command failed."
+        return result
+
+    if workflow == "autopilot":
+        allow_actions = plan["followup_actions"] or ["install", "verify", "smoke", "test", "build", "lint"]
+        execution = admin_workspace_autopilot({
+            "workspace": plan["workspace"],
+            "allow_actions": allow_actions,
+            "max_steps": 3,
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = "Autopilot loop completed." if result["ok"] else "Autopilot loop stopped on a blocker."
+        if not result["ok"]:
+            result["recovery"] = {
+                "text": str(execution.get("recommendation", "")).strip(),
+                "patch_target": str(execution.get("patch_target", "")).strip(),
+                "patch_hint": str(execution.get("patch_hint", "")).strip(),
+                "patch_summary": str(execution.get("patch_summary", "")).strip(),
+                "read_command": str(execution.get("read_command", "")).strip(),
+            }
+        return result
+
+    if workflow == "bootstrap":
+        repo_name = plan["repo_name"]
+        if not repo_name or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", repo_name):
+            result["summary"] = "Bootstrap workflow needs a valid repository name."
+            result["recovery"] = {"text": "Uveď prosím jméno nového repository/workspace."}
+            return result
+        execution = admin_create_local_repo({
+            "name": repo_name,
+            "github": plan["github"],
+            "restart": False,
+        })
+        result["execution"] = execution
+        if execution.get("ok") or execution.get("partial_ok"):
+            followup = None
+            if plan["followup_actions"]:
+                followup = admin_workspace_autopilot({
+                    "workspace": repo_name,
+                    "allow_actions": plan["followup_actions"],
+                    "max_steps": min(3, max(1, len(plan["followup_actions"]))),
+                })
+            result["followup"] = followup
+            result["ok"] = bool(execution.get("ok")) and (followup is None or bool(followup.get("ok")))
+            result["summary"] = "Repository bootstrap completed." if result["ok"] else "Repository bootstrap completed with follow-up blockers."
+            if followup and not followup.get("ok"):
+                result["recovery"] = {
+                    "text": str(followup.get("recommendation", "")).strip(),
+                    "patch_target": str(followup.get("patch_target", "")).strip(),
+                    "patch_hint": str(followup.get("patch_hint", "")).strip(),
+                    "patch_summary": str(followup.get("patch_summary", "")).strip(),
+                    "read_command": str(followup.get("read_command", "")).strip(),
+                }
+            elif plan["github"]:
+                result["recovery"] = {
+                    "text": "Po vložení vygenerovaného public key do GitHubu mi potvrď pokračování a zkusím remote/push krok.",
+                }
+            return result
+        result["summary"] = "Repository bootstrap failed."
+        result["ok"] = False
+        return result
+
+    result["summary"] = f"Workflow {workflow} zatím není implementovaný."
+    return result
+
 def admin_add_workspace(payload):
     name = str(payload.get("name") or "").strip()
     path = str(payload.get("path") or "").strip()
@@ -606,17 +1268,38 @@ def admin_add_workspace(payload):
     }
 
     if restart:
-        bash = subprocess.run(
-            ["bash", str(REPO_ROOT / "codex/bin/start_codex_stack.sh")],
-            cwd=REPO_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=300,
-        )
-        result["restart_exit_code"] = bash.returncode
-        result["restart_output"] = bash.stdout.strip()
-        result["restart_ok"] = bash.returncode == 0
+        start_script = str(REPO_ROOT / "codex/bin/start_codex_stack.sh")
+        attempts = [
+            ("direct", ["bash", start_script]),
+        ]
+        wsl_exe = os.getenv("WSL_EXE", "/mnt/c/Windows/System32/wsl.exe")
+        distro = os.getenv("WSL_DEPLOY_DISTRO") or os.getenv("WSL_DISTRO_NAME") or "Ubuntu"
+        if Path(wsl_exe).is_file():
+            attempts.append(("wsl-root", [wsl_exe, "-d", distro, "-u", "root", "-e", "bash", start_script]))
+        restart_attempts = []
+        restart_ok = False
+        for label, command in attempts:
+            bash = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=360,
+            )
+            restart_attempts.append({
+                "method": label,
+                "command": command,
+                "exit_code": bash.returncode,
+                "output": bash.stdout.strip(),
+            })
+            if bash.returncode == 0:
+                restart_ok = True
+                break
+        result["restart_attempts"] = restart_attempts
+        result["restart_exit_code"] = restart_attempts[-1]["exit_code"] if restart_attempts else None
+        result["restart_output"] = restart_attempts[-1]["output"] if restart_attempts else ""
+        result["restart_ok"] = restart_ok
         result["ok"] = result["ok"] and result["restart_ok"]
         if not result["restart_ok"]:
             result["next_step"] = "Run the ai-stack deploy/restart capability after reviewing the created workspace."
@@ -2014,16 +2697,95 @@ def fallback_response_text(payload):
         "gateway to zachytila, aby v OpenWebUI nezustala prazdna zprava."
     )
 
+
+def agent_requested_workspace_from_text(text):
+    default, workspaces = load_registry()
+    match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:?\s*([A-Za-z0-9_.-]{{1,80}})\s*$", str(text or ""))
+    if match:
+        return match.group(1)
+    inferred = agent_extract_repo_name(text)
+    if inferred:
+        return inferred
+    if "ai-stack" in workspaces:
+        return "ai-stack"
+    return default
+
+
+def trim_response_text(text, limit=14000):
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit] + f"\n[truncated {len(value) - limit} chars]"
+
+
+def agent_loop_response_text(result):
+    status = "AGENT_LOOP_OK" if result.get("ok") else "AGENT_LOOP_NEEDS_ATTENTION"
+    plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
+    lines = [
+        status,
+        f"requested_workspace={result.get('requested_workspace', '')}",
+        f"controller_workspace={result.get('controller_workspace', '')}",
+        f"workflow={result.get('workflow', plan.get('workflow', ''))}",
+        f"read_only={result.get('read_only', plan.get('read_only', ''))}",
+        f"summary={result.get('summary', '')}",
+    ]
+    if plan.get("reason"):
+        lines.append(f"reason={plan.get('reason')}")
+    answer = str(result.get("answer") or "").strip()
+    if answer:
+        lines.append("")
+        lines.append(answer)
+    for key in ("execution", "followup", "recovery", "plan"):
+        value = result.get(key)
+        if value in (None, {}, []):
+            continue
+        try:
+            rendered = json.dumps(value, ensure_ascii=False, indent=2)
+        except TypeError:
+            rendered = str(value)
+        lines.append("")
+        lines.append(f"{key}:")
+        lines.append("```json")
+        lines.append(trim_response_text(rendered, 10000))
+        lines.append("```")
+    return "\n".join(lines).strip()
+
+
+def explicit_agent_loop_request(text):
+    match = re.search(r"(?im)^\s*GATEWAY_ADMIN_AGENT_LOOP\s+(.+?)\s*$", str(text or ""))
+    if not match:
+        return None
+    try:
+        parts = shlex.split(match.group(1))
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    workspace = parts.pop(0)
+    if "--" not in parts:
+        return None
+    idx = parts.index("--")
+    task = " ".join(parts[idx + 1 :]).strip()
+    if not task:
+        return None
+    return {"workspace": workspace, "task": task}
+
 def normal_chat_requires_tool(payload):
     text = strip_routing(gateway_admin_text(payload)).strip()
     if "GATEWAY_ADMIN_" in text:
         return False
-    risky_re = re.compile(
-        r"(?is)\b(ssh|github|push|pushni|install|nainstaluj|spust|spusť|shell|command|"
+    tool_intent_re = re.compile(
+        r"(?is)\b("
+        r"ssh|github|push|pushni|install|nainstaluj|spust|spusť|run|shell|command|terminal|"
+        r"st[aá]hni|st[aá]hnout|fetch|download|web|internet|http|https|seznam\.cz|"
         r"vygeneruj\s+.*(?:klic|klíč|key)|generate\s+.*key|"
-        r"(?:vytvor|vytvoř|zaloz|založ)\s+.*(?:repo|repository|repozitar|repozitář))\b"
+        r"(?:vytvor|vytvoř|zaloz|založ|inituj|inicializuj)\s+.*"
+        r"(?:repo|repository|repozitar|repozitář|workspace|projekt)|"
+        r"(?:precti|přečti|vysvetli|vysvětli|show|read)\s+.*"
+        r"(?:soubor|file|docker-compose|compose|README|gateway\.py)"
+        r")\b"
     )
-    return bool(risky_re.search(text))
+    return bool(tool_intent_re.search(text))
 
 def sse_line_info(raw):
     line = raw.decode("utf-8", "replace").strip()
@@ -2096,8 +2858,36 @@ def completion(payload):
             "usage": {"prompt_tokens": 0, "completion_tokens": 3, "total_tokens": 3},
         }
 
+    explicit_loop = explicit_agent_loop_request(admin_text)
+    if explicit_loop:
+        try:
+            text = agent_loop_response_text(admin_agent_loop(explicit_loop))
+        except Exception as exc:
+            text = f"CODEX_LOCAL_AGENT_LOOP_FAILED\nerror={type(exc).__name__}: {exc}"
+        return {
+            "id": "chatcmpl-" + uuid.uuid4().hex,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": len(text.split()), "total_tokens": len(text.split())},
+        }
+
     if normal_chat_requires_tool(payload):
-        text = fallback_response_text(payload)
+        admin_text = gateway_admin_text(payload)
+        task = strip_routing(admin_text).strip() or admin_text.strip()
+        try:
+            result = admin_agent_loop({
+                "workspace": agent_requested_workspace_from_text(admin_text),
+                "task": task,
+            })
+            text = agent_loop_response_text(result)
+        except Exception as exc:
+            text = fallback_response_text(payload) + f"\n\nAGENT_LOOP_ERROR: {type(exc).__name__}: {exc}"
         return {
             "id": "chatcmpl-" + uuid.uuid4().hex,
             "object": "chat.completion",
@@ -2240,6 +3030,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_create_local_repo(payload))
+            if self.path == "/v1/admin/agent/loop":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_agent_loop(payload))
             if self.path == "/v1/admin/workspace/run":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)
