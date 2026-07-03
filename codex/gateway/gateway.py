@@ -18,6 +18,8 @@ from workspace_scan import collect, load_workspace
 
 WORKSPACES_FILE = os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json")
 OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1")
+OPENWEBUI_HEALTH_URL = os.getenv("OPENWEBUI_HEALTH_URL", "http://127.0.0.1:9090/")
+OPENWEBUI_LOADER_URL = os.getenv("OPENWEBUI_LOADER_URL", "http://127.0.0.1:9090/static/loader.js")
 REPO_ROOT = Path(WORKSPACES_FILE).resolve().parents[1]
 ADMIN_TOKEN_FILE = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN_FILE", "")
 ADMIN_TOKEN = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN", "")
@@ -351,6 +353,49 @@ def clamp_int(value, default, lower, upper):
     except (TypeError, ValueError):
         number = default
     return max(lower, min(upper, number))
+
+def http_probe(url, timeout=2, max_bytes=8192):
+    started = time.time()
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read(max_bytes)
+            content_type = resp.headers.get("Content-Type", "")
+            return {
+                "ok": True,
+                "url": url,
+                "status": getattr(resp, "status", 200),
+                "content_type": content_type,
+                "bytes": len(body),
+                "duration_ms": int((time.time() - started) * 1000),
+            }
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False,
+            "url": url,
+            "status": exc.code,
+            "error": f"HTTP {exc.code}",
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "url": url,
+            "status": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+
+def runtime_health():
+    root = http_probe(OPENWEBUI_HEALTH_URL, timeout=2, max_bytes=4096)
+    loader = http_probe(OPENWEBUI_LOADER_URL, timeout=2, max_bytes=8192)
+    return {
+        "openwebui": {
+            "ok": bool(root.get("ok")) and bool(loader.get("ok")),
+            "root": root,
+            "loader": loader,
+        }
+    }
 
 
 def blocked_public_ip(ip):
@@ -1885,7 +1930,9 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             default, workspaces = load_registry()
-            return self.sendj({"ok": True, "default": default, "workspaces": sorted(workspaces)})
+            payload = {"ok": True, "default": default, "workspaces": sorted(workspaces)}
+            payload.update(runtime_health())
+            return self.sendj(payload)
         if self.path == "/v1/models":
             now = int(time.time())
             return self.sendj({"object": "list", "data": [{"id": k, "object": "model", "created": now, "owned_by": "local"} for k in MODELS]})
