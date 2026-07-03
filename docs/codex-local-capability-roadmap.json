@@ -61,6 +61,10 @@
       "scope": "agent_metadata",
       "summary": "Vrati runtime commit, fingerprint, model config a readiness stav codex-local gateway."
     },
+    "agent_self_improve": {
+      "scope": "stack_runtime",
+      "summary": "Auditovana rutina pro zpracovani OpenWebUI failure transcriptu, diagnosis/regression artefakty, smoke verify, deploy pripraveni a E2E overeni."
+    },
     "clarify_or_infer_capability": {
       "scope": "mentoring",
       "summary": "Nejužší mentoring krok pro nejednoznacne zadani: nejdriv audit, upresneni nebo inference dalsi capability, az pak rozsirovani scope."

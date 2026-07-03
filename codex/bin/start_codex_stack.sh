@@ -44,11 +44,17 @@ verify_gateway_contract() {
     echo "gateway_health_fetch_failed=true" >&2
     return 1
   fi
-  if ! python3 - "$health_file" <<'PY'
+  if ! PYTHONPATH="$REPO_ROOT:$CODEX_ROOT/bin" \
+    CODEX_WORKSPACES_FILE="$WORKSPACES_FILE" \
+    CODEX_GATEWAY_ADMIN_TOKEN_FILE="$ADMIN_TOKEN_FILE" \
+    python3 - "$health_file" <<'PY'
 import json, sys
+from codex.gateway import gateway
 
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
+expected_epoch = str(getattr(gateway, "GATEWAY_SOURCE_EPOCH", "") or "").strip()
+expected_fingerprint = str(gateway.runtime_fingerprint() or "").strip()
 issues = []
 if data.get("ok") is not True:
     issues.append("health_ok_false")
@@ -58,8 +64,16 @@ if data.get("natural_codex_local_route") != "agent_loop":
     issues.append("natural_codex_local_route")
 if data.get("codex_local_ready") is not True:
     issues.append("codex_local_ready")
-if not str(data.get("runtime_fingerprint") or "").strip():
+source_epoch = str(data.get("gateway_source_epoch") or "").strip()
+runtime_fingerprint = str(data.get("runtime_fingerprint") or "").strip()
+if not source_epoch:
+    issues.append("gateway_source_epoch")
+elif source_epoch != expected_epoch:
+    issues.append(f"gateway_source_epoch_mismatch:{source_epoch}!={expected_epoch}")
+if not runtime_fingerprint:
     issues.append("runtime_fingerprint")
+elif runtime_fingerprint != expected_fingerprint:
+    issues.append(f"runtime_fingerprint_mismatch:{runtime_fingerprint}!={expected_fingerprint}")
 model = data.get("model_runtime") or {}
 if model.get("default_alias") != "codex-local":
     issues.append("model_runtime.default_alias")
@@ -70,9 +84,12 @@ if "structured_backend_usable" not in model:
 if issues:
     print("CODEX_GATEWAY_CONTRACT_FAILED")
     print("issues=" + ",".join(issues))
+    print("expected_gateway_source_epoch=" + expected_epoch)
+    print("expected_runtime_fingerprint=" + expected_fingerprint)
     print(json.dumps(data, ensure_ascii=False, indent=2))
     raise SystemExit(1)
 print("CODEX_GATEWAY_CONTRACT_OK")
+print("gateway_source_epoch=" + source_epoch)
 print("runtime_fingerprint=" + str(data.get("runtime_fingerprint") or "").strip())
 PY
   then

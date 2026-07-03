@@ -232,6 +232,8 @@ python3 -m py_compile \
   codex/bin/filter_route_smoke.py \
   codex/bin/http_retry.py \
   codex/bin/gateway_admin.py \
+  codex/bin/agent_self_improve.py \
+  codex/bin/agent_self_improve_smoke.py \
   codex/bin/owui_chat_turn.py \
   codex/bin/owui_chat_turn_codex_local_route_smoke.py \
   codex/bin/owui_chat_scenarios.py \
@@ -258,6 +260,7 @@ python3 codex/bin/gateway_recovery_smoke.py
 python3 codex/bin/gateway_admin_run_workspace_smoke.py
 python3 codex/bin/gateway_nested_helper_rescue_smoke.py
 python3 codex/bin/gateway_runtime_health_smoke.py
+python3 codex/bin/agent_self_improve_smoke.py
 python3 codex/bin/openwebui_runtime_smoke.py
 python3 codex/bin/container_runner_guard_smoke.py
 python3 codex/bin/mentor_capability_routing_smoke.py

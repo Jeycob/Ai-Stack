@@ -408,6 +408,21 @@ Podobně je tu i `codex/bin/gateway_recovery_smoke.py`. Ten bez živého Dockeru
 
 Vedle toho je tu i `codex/bin/gateway_runtime_health_smoke.py`. Ten čistě offline hlídá kontrakt nového `/health` payloadu: že ready stav vrací `codex_local_ready=true`, `capability_mode=agent-first`, `natural_codex_local_route=agent_loop`, `runtime_commit` a admin token readiness, a že ne-ready stav vrací konkrétní `readiness_issues` místo neurčitého “něco je špatně”. Je to pojistka proti tomu, aby se runtime observability časem nerozpadla a stack znovu nezačal působit zdravě i ve chvíli, kdy capability-first cesta ve skutečnosti není připravená.
 
+Nová vrstva nad tím je `agent_self_improve`. Je to auditovaná rutina pro případy, kdy se codex-local v OpenWebUI zachová špatně: vezme chat transcript nebo chat URL, uloží redigovaný artifact do `codex/audit/self-improve/`, určí typ failu, vytvoří regression scenario, spustí smoke sadu a podle režimu připraví deploy nebo E2E ověření. Spuštění bez živého OpenWebUI:
+
+    python3 codex/bin/agent_self_improve.py \
+      --workspace ai-stack \
+      --transcript-file /tmp/fail-transcript.json \
+      --expected-behavior "workflow=ssh_key_show_public" \
+      --mode verify \
+      --dry-run
+
+Přes gateway existuje stejná capability jako `agent_self_improve` a přímý endpoint `/v1/admin/agent/self-improve`. CLI cesta:
+
+    python3 codex/bin/gateway_admin.py self-improve --workspace ai-stack --chat-url http://192.168.0.48:9090/c/<id>
+
+Rutina je silná, ale není neomezený shell. Nikdy nevypisuje tokeny, `.env` ani private SSH key, patch aplikuje jen z explicitně dodaného patch souboru, nejdřív kontroluje povolené cesty a nikdy nenasazuje po selhaných smoke testech. Typické failure patterns jako `kde ted jsi?`, `jake mas capability?`, `vytvor tam ssh klic a vypis mi public` a bounded repo search jsou pokryté `codex/bin/agent_self_improve_smoke.py`.
+
 Stejná recovery metadata už dnes nenesou jen patch guidance, ale i retry záměr: gateway k failnutému kroku vrací `retry_action`, `retry_runner` a `retry_timeout`. Díky tomu `mentor_codex_local.py improve` po úspěšném safe patchi neudělá jen obecné `verify`, ale zkusí znovu právě ten capability krok, který předtím selhal, typicky `test`, `smoke`, `build` nebo `install`. Když ten retry uspěje, helper ještě jednou krátce přepočítá autopilot a zkusí další bezpečný krok, takže recovery loop nekončí hned v momentě, kdy se odblokuje první symptom.
 
 Na to je navázaný i malý offline guard `codex/bin/mentor_recovery_followup_smoke.py`. Ten ověří, že mentor helper po patchi opravdu skládá `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <retry_action> ...` a jen při chybějícím retry hintu spadne zpět na generický jednokrokový autopilot verify.

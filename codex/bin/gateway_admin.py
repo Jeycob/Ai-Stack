@@ -158,6 +158,17 @@ def parse_args() -> argparse.Namespace:
     web_answer.add_argument("question", nargs="+")
     web_answer.add_argument("--max-bytes", type=int, default=300_000)
     web_answer.add_argument("--timeout-seconds", type=int, default=20)
+
+    self_improve = sub.add_parser("self-improve")
+    add_common_options(self_improve, defaults=False)
+    self_improve.add_argument("--workspace", default="ai-stack")
+    self_improve.add_argument("--chat-id", default="")
+    self_improve.add_argument("--chat-url", default="")
+    self_improve.add_argument("--failure-marker", default="")
+    self_improve.add_argument("--expected-behavior", default="")
+    self_improve.add_argument("--mode", default="diagnose")
+    self_improve.add_argument("--apply", action="store_true", help="Run with dry_run=false.")
+    self_improve.add_argument("--max-cycles", type=int, default=1)
     return parser.parse_args()
 
 
@@ -217,6 +228,19 @@ def main() -> int:
                 "question": " ".join(args.question),
                 "max_bytes": args.max_bytes,
                 "timeout": args.timeout_seconds,
+            }
+            result = request_preview(args, path, payload, "POST") if args.dry_run else admin_request(args, path, payload)
+        elif args.command == "self-improve":
+            path = "/v1/admin/agent/self-improve"
+            payload = {
+                "workspace": args.workspace,
+                "chat_id": args.chat_id,
+                "chat_url": args.chat_url,
+                "failure_marker": args.failure_marker,
+                "expected_behavior": args.expected_behavior,
+                "mode": args.mode,
+                "dry_run": not args.apply,
+                "max_cycles": args.max_cycles,
             }
             result = request_preview(args, path, payload, "POST") if args.dry_run else admin_request(args, path, payload)
         else:

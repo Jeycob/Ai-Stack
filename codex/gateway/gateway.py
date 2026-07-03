@@ -39,6 +39,8 @@ from codex_local_config import (
 from openwebui_runtime import discover_openwebui_base_urls
 from workspace_scan import collect, load_workspace
 
+GATEWAY_SOURCE_EPOCH = "2026-07-04-agent-self-improve-v1"
+
 OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1")
 OPENWEBUI_HEALTH_URL = os.getenv("OPENWEBUI_HEALTH_URL", "http://127.0.0.1:9090/")
 OPENWEBUI_LOADER_URL = os.getenv("OPENWEBUI_LOADER_URL", "http://127.0.0.1:9090/static/loader.js")
@@ -603,6 +605,7 @@ def runtime_health():
         },
         "runtime_repo_root": str(REPO_ROOT),
         "runtime_commit": git_head,
+        "gateway_source_epoch": GATEWAY_SOURCE_EPOCH,
         "runtime_fingerprint": runtime_fingerprint(),
         "gateway_admin": {
             "local_admin_ready": local_admin_ready,
@@ -807,6 +810,7 @@ AGENT_LOOP_WORKFLOWS = {
     "ssh_key_show_public",
     "web_answer",
     "web_fetch",
+    "self_improve",
     "deploy",
     "clarify",
 }
@@ -832,6 +836,8 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "public_web_access": "web_answer",
     "web_answer": "web_answer",
     "web_fetch": "web_fetch",
+    "agent_self_improve": "self_improve",
+    "self_improve": "self_improve",
     "stack_deploy": "deploy",
     "deploy": "deploy",
     "clarify_or_infer_capability": "clarify",
@@ -958,6 +964,18 @@ CORE_AGENT_CAPABILITIES = {
         "scope": "public_web",
         "implemented": True,
     },
+    "agent_self_improve": {
+        "workflow": "self_improve",
+        "summary": "Audited routine for collecting OpenWebUI failures, creating regression artifacts, verifying, and preparing deploy/E2E.",
+        "scope": "stack_runtime",
+        "implemented": True,
+    },
+    "self_improve": {
+        "workflow": "self_improve",
+        "summary": "Alias for agent_self_improve.",
+        "scope": "stack_runtime",
+        "implemented": True,
+    },
     "deploy": {
         "workflow": "deploy",
         "summary": "Alias for ai-stack deploy flow.",
@@ -1050,6 +1068,11 @@ CANONICAL_AGENT_CAPABILITY_ALIASES = {
     "web_fetch": "public_web_access",
     "fetch_web": "public_web_access",
     "download_web": "public_web_access",
+    "agent_self_improve": "agent_self_improve",
+    "self_improve": "agent_self_improve",
+    "self_improvement": "agent_self_improve",
+    "improve_agent": "agent_self_improve",
+    "codex_self_improve": "agent_self_improve",
     "deploy": "stack_deploy",
     "stack_deploy": "stack_deploy",
     "restart_stack": "stack_deploy",
@@ -1388,6 +1411,7 @@ def agent_capability_registry_issues():
         "workspace_context_status",
         "capability_catalog_show",
         "agent_runtime_status",
+        "agent_self_improve",
     }
     for capability in sorted(required):
         entry = registry.get(capability)
@@ -1433,6 +1457,7 @@ def agent_capability_catalog():
         "- ssh_key_show_public: return the workspace SSH public key; if missing, create it idempotently first",
         "- web_answer: answer a question from a public HTTP/HTTPS source",
         "- web_fetch: fetch text from a public HTTP/HTTPS source",
+        "- agent_self_improve: collect a chat failure, write diagnosis/regression artifacts, run smoke checks, and prepare deploy/E2E",
         "- deploy: ai-stack deploy/restart flow",
         "- clarify: ask for one missing piece of information instead of pretending to execute",
         "",
@@ -2680,6 +2705,8 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         workflow = "ssh_key_show_public"
     elif workspace_exists and "ssh_key_create" in capabilities:
         workflow = "ssh_key_create"
+    elif "agent_self_improve" in capabilities:
+        workflow = "self_improve"
     elif "stack_deploy" in capabilities or agent_deploy_requested(task):
         workflow = "deploy"
     elif "public_web_access" in capabilities and spec.get("url"):
@@ -2701,7 +2728,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         workflow = "autopilot"
 
     workspace = str(spec.get("current_workspace") or "").strip() or (requested_workspace if workspace_exists else controller_workspace)
-    if workflow in {"bootstrap", "deploy"}:
+    if workflow in {"bootstrap", "deploy", "self_improve"}:
         workspace = controller_workspace
     elif workflow in {"meta", "workspace_search", "review", "edit", "action", "run", "autopilot", "ssh_key_create", "ssh_key_show_public", "workspace_git_publish"}:
         workspace = requested_workspace if workspace_exists else controller_workspace
@@ -3243,6 +3270,27 @@ def admin_agent_loop(payload):
         result["ok"] = bool(deploy.get("ok"))
         result["summary"] = "ai-stack deploy scheduled." if result["ok"] else "ai-stack deploy was not scheduled."
         result["execution"] = deploy
+        return result
+
+    if workflow == "self_improve":
+        execution = admin_agent_self_improve({
+            "workspace": "ai-stack",
+            "mode": "diagnose",
+            "dry_run": True,
+            "prompt": task,
+            "expected_behavior": str(taskspec.get("desired_end_state") or "").strip(),
+            "timeout": 900,
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = "Self-improve diagnosis artifact created." if result["ok"] else "Self-improve needs attention."
+        result["answer"] = (
+            f"AGENT_SELF_IMPROVE {'OK' if result['ok'] else 'NEEDS_ATTENTION'}\n"
+            f"mode={execution.get('mode')}\n"
+            f"dry_run={execution.get('dry_run')}\n"
+            f"artifact_dir={execution.get('artifact_dir')}\n"
+            f"exit_code={execution.get('exit_code')}"
+        )
         return result
 
     if workflow in {"workspace_search", "edit", "action", "autopilot", "ssh_key_create", "ssh_key_show_public"} and not workspace_exists:
@@ -5228,6 +5276,79 @@ def admin_deploy_status(payload):
         "tail": tail_text(log_file),
     }
 
+def admin_agent_self_improve(payload):
+    workspace = str(payload.get("workspace") or "ai-stack").strip() or "ai-stack"
+    mode = str(payload.get("mode") or "diagnose").strip().lower()
+    dry_run = bool(payload.get("dry_run", True))
+    max_cycles = int(payload.get("max_cycles") or 1)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
+    if mode not in {"diagnose", "reproduce", "patch", "verify", "deploy", "e2e", "full"}:
+        raise ValueError("mode must be diagnose|reproduce|patch|verify|deploy|e2e|full")
+    max_cycles = max(1, min(max_cycles, 3))
+
+    script = REPO_ROOT / "codex/bin/agent_self_improve.py"
+    if not script.is_file():
+        raise FileNotFoundError("codex/bin/agent_self_improve.py is missing")
+
+    cmd = [
+        sys.executable,
+        str(script),
+        "--workspace",
+        workspace,
+        "--mode",
+        mode,
+        "--max-cycles",
+        str(max_cycles),
+        "--audit-root",
+        str(REPO_ROOT / "codex/audit/self-improve"),
+        "--json",
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    for key, flag in (
+        ("chat_id", "--chat-id"),
+        ("chat_url", "--chat-url"),
+        ("failure_marker", "--failure-marker"),
+        ("expected_behavior", "--expected-behavior"),
+        ("prompt", "--prompt"),
+        ("patch_file", "--patch-file"),
+        ("e2e_prompt", "--e2e-prompt"),
+    ):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            cmd.extend([flag, value])
+
+    started = time.time()
+    proc = subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=int(payload.get("timeout") or 900),
+    )
+    raw = proc.stdout or ""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = {
+            "ok": False,
+            "raw_output": trim_response_text(raw, 8000),
+        }
+    return {
+        "ok": proc.returncode == 0 and bool(parsed.get("ok", proc.returncode == 0)),
+        "action": "agent_self_improve",
+        "workspace": workspace,
+        "mode": mode,
+        "dry_run": dry_run,
+        "exit_code": proc.returncode,
+        "duration_ms": int((time.time() - started) * 1000),
+        "command": [cmd[0], "codex/bin/agent_self_improve.py", *cmd[2:]],
+        "result": parsed,
+        "artifact_dir": str(parsed.get("artifact_dir") or ""),
+    }
+
 def fallback_response_text(payload):
     text = strip_routing(gateway_admin_text(payload)).strip()
     execute_re = re.compile(
@@ -5251,6 +5372,7 @@ def fallback_response_text(payload):
 def runtime_fingerprint():
     """Hash loaded gateway code objects to detect runtime/repo split-brain."""
     digest = hashlib.sha256()
+    digest.update(GATEWAY_SOURCE_EPOCH.encode("utf-8"))
     targets = [
         ("runtime_health", runtime_health),
         ("completion", completion),
@@ -5266,6 +5388,7 @@ def runtime_fingerprint():
         ("admin_agent_meta", admin_agent_meta),
         ("admin_workspace_search", admin_workspace_search),
         ("admin_agent_loop", admin_agent_loop),
+        ("admin_agent_self_improve", admin_agent_self_improve),
         ("admin_run_workspace", admin_run_workspace),
         ("admin_workspace_git_publish", admin_workspace_git_publish),
     ]
@@ -5354,6 +5477,21 @@ def agent_loop_human_answer(result):
         return (
             "Nasazení ai-stack se nepodařilo naplánovat. "
             + preview_text(execution.get("tail") or execution.get("error") or result.get("summary"))
+        ).strip()
+
+    if workflow == "self_improve":
+        artifact = str(execution.get("artifact_dir") or "").strip()
+        exit_code = execution.get("exit_code")
+        mode = str(execution.get("mode") or "").strip()
+        if result.get("ok"):
+            return (
+                f"Self-improve rutina doběhla v režimu `{mode or 'diagnose'}`. "
+                f"Artifact je v `{artifact}`. exit_code={exit_code}."
+            ).strip()
+        return (
+            f"Self-improve rutina narazila v režimu `{mode or 'diagnose'}`. "
+            f"Artifact: `{artifact or '(missing)'}`. "
+            + preview_text((execution.get("result") or {}).get("raw_output") or result.get("summary"))
         ).strip()
 
     if workflow in {"ssh_key_create", "ssh_key_show_public"}:
@@ -5959,6 +6097,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_agent_loop(payload))
+            if self.path == "/v1/admin/agent/self-improve":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_agent_self_improve(payload))
             if self.path == "/v1/admin/workspace/run":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)

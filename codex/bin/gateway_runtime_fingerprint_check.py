@@ -68,6 +68,7 @@ def main() -> int:
 
     url = args.base_url.rstrip("/") + "/health"
     local_fingerprint = str(gateway.runtime_fingerprint()).strip()
+    local_epoch = str(getattr(gateway, "GATEWAY_SOURCE_EPOCH", "") or "").strip()
     local_root = local_repo_root()
     local_commit = local_repo_commit_short()
     try:
@@ -80,6 +81,7 @@ def main() -> int:
             "url": url,
             "error": f"{type(exc).__name__}: {exc}",
             "local_runtime_fingerprint": local_fingerprint,
+            "local_gateway_source_epoch": local_epoch,
         }
         if args.json:
             print(json.dumps(message, ensure_ascii=False, indent=2))
@@ -90,6 +92,7 @@ def main() -> int:
         return 1
 
     remote_fingerprint = str(payload.get("runtime_fingerprint") or "").strip()
+    remote_epoch = str(payload.get("gateway_source_epoch") or "").strip()
     remote_root = str(payload.get("runtime_repo_root") or "").strip()
     remote_commit = str(payload.get("runtime_commit") or "").strip()
     same_checkout = bool(remote_root) and Path(remote_root).resolve() == Path(local_root).resolve()
@@ -97,12 +100,14 @@ def main() -> int:
     capability_mode = str(payload.get("capability_mode") or "").strip()
     natural_route = str(payload.get("natural_codex_local_route") or "").strip()
     fingerprint_match = bool(remote_fingerprint) and remote_fingerprint == local_fingerprint
+    source_epoch_match = bool(remote_epoch) and remote_epoch == local_epoch
     ok = (
         payload.get("ok") is True
         and capability_mode == "agent-first"
         and natural_route == "agent_loop"
+        and source_epoch_match
         and bool(remote_fingerprint)
-        and (same_commit or fingerprint_match)
+        and (fingerprint_match if same_checkout else (same_commit or fingerprint_match))
     )
     result = {
         "ok": ok,
@@ -111,6 +116,8 @@ def main() -> int:
         "natural_codex_local_route": natural_route,
         "remote_runtime_fingerprint": remote_fingerprint,
         "local_runtime_fingerprint": local_fingerprint,
+        "remote_gateway_source_epoch": remote_epoch,
+        "local_gateway_source_epoch": local_epoch,
         "remote_repo_root": remote_root,
         "local_repo_root": local_root,
         "remote_runtime_commit": remote_commit,
@@ -118,20 +125,27 @@ def main() -> int:
         "same_checkout": same_checkout,
         "same_commit": same_commit,
         "fingerprint_match": fingerprint_match,
+        "source_epoch_match": source_epoch_match,
         "gateway_health": payload,
     }
-    if not remote_fingerprint:
+    if not remote_epoch:
+        result["marker"] = "CODEX_LOCAL_GATEWAY_SOURCE_EPOCH_MISSING"
+        result["recovery"] = "Restartuj ai-stack gateway; /health musí vracet gateway_source_epoch z aktuálního gateway.py."
+    elif not source_epoch_match:
+        result["marker"] = "CODEX_LOCAL_GATEWAY_SOURCE_EPOCH_DRIFT"
+        result["recovery"] = "Běží starý gateway proces nebo jiný checkout. Restartuj stack a ověř gateway_source_epoch."
+    elif not remote_fingerprint:
         result["marker"] = "CODEX_LOCAL_RUNTIME_FINGERPRINT_MISSING"
         result["recovery"] = "Nasad a restartuj aktuální ai-stack runtime; /health musí vracet runtime_fingerprint."
+    elif same_checkout and not fingerprint_match:
+        result["marker"] = "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN"
+        result["recovery"] = "Stejný checkout vrací jiný runtime_fingerprint; běží starý proces. Restartuj stack a znovu ověř /health."
     elif same_commit and not fingerprint_match:
         result["marker"] = "CODEX_LOCAL_RUNTIME_FINGERPRINT_WARNING"
         result["recovery"] = (
             "Runtime běží na správném commitu, ale fingerprint helperu se liší. "
             "Ber to jako diagnostické varování; pokud se objeví skutečné chování starého runtime, restartuj stack."
         )
-    elif same_checkout and remote_fingerprint != local_fingerprint:
-        result["marker"] = "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN"
-        result["recovery"] = "Běží starý runtime proti novějšímu repu. Restartuj stack a znovu ověř /health."
     elif not same_checkout and not same_commit:
         result["marker"] = "CODEX_LOCAL_RUNTIME_CLONE_DRIFT"
         result["recovery"] = "Tento check běží z jiného checkoutu než live runtime a commity se liší. Synchronizuj clone nebo spusť check v runtime checkoutu."
@@ -150,10 +164,13 @@ def main() -> int:
         print(f"same_checkout={'true' if same_checkout else 'false'}")
         print(f"same_commit={'true' if same_commit else 'false'}")
         print(f"fingerprint_match={'true' if fingerprint_match else 'false'}")
+        print(f"source_epoch_match={'true' if source_epoch_match else 'false'}")
         print(f"remote_repo_root={remote_root or 'missing'}")
         print(f"local_repo_root={local_root}")
         print(f"remote_runtime_commit={remote_commit or 'missing'}")
         print(f"local_repo_commit={local_commit or 'missing'}")
+        print(f"remote_gateway_source_epoch={remote_epoch or 'missing'}")
+        print(f"local_gateway_source_epoch={local_epoch or 'missing'}")
         print(f"remote_runtime_fingerprint={remote_fingerprint or 'missing'}")
         print(f"local_runtime_fingerprint={local_fingerprint}")
         if not ok:

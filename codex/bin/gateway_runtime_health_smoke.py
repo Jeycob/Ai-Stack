@@ -44,6 +44,8 @@ def assert_ready_payload() -> None:
         raise SystemExit(f"expected runtime_repo_root={ROOT}, got {payload!r}")
     if payload.get("runtime_commit") != "abc1234":
         raise SystemExit(f"expected runtime_commit=abc1234, got {payload!r}")
+    if payload.get("gateway_source_epoch") != gateway.GATEWAY_SOURCE_EPOCH:
+        raise SystemExit(f"expected gateway source epoch in ready payload, got {payload!r}")
     if not payload.get("runtime_fingerprint"):
         raise SystemExit(f"expected runtime_fingerprint in ready payload, got {payload!r}")
     model_runtime = payload.get("model_runtime") or {}
@@ -109,6 +111,8 @@ def assert_not_ready_payload() -> None:
         raise SystemExit(f"expected admin token missing readiness, got {payload!r}")
     if not payload.get("runtime_fingerprint"):
         raise SystemExit(f"expected runtime_fingerprint even in degraded payload, got {payload!r}")
+    if payload.get("gateway_source_epoch") != gateway.GATEWAY_SOURCE_EPOCH:
+        raise SystemExit(f"expected gateway source epoch even in degraded payload, got {payload!r}")
     print("GATEWAY_RUNTIME_HEALTH_NOT_READY_OK")
 
 

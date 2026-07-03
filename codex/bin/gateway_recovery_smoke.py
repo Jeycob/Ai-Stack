@@ -709,6 +709,39 @@ def assert_workspace_search_capability() -> None:
     print("WORKSPACE_SEARCH_CAPABILITY_OK")
 
 
+def assert_agent_self_improve_capability() -> None:
+    registry = gateway.agent_capability_registry()
+    entry = registry.get("agent_self_improve")
+    if not entry or entry.get("workflow") != "self_improve" or not entry.get("implemented"):
+        raise SystemExit(f"agent_self_improve must be implemented in registry, got {entry!r}")
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "diagnose OpenWebUI failure and create regression artifact",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "failure_pattern_recorded",
+            "required_capabilities": ["self_improvement"],
+            "missing_inputs": [],
+            "risk_level": "medium",
+            "recovery_plan": "collect transcript and run smoke verification",
+            "read_only": False,
+        },
+        "zpracuj fail z OpenWebUI chatu a vytvor self-improve regression",
+        workspace="ai-stack",
+        workspace_exists=True,
+    )
+    if taskspec.get("required_capabilities") != ["agent_self_improve"]:
+        raise SystemExit(f"expected canonical agent_self_improve, got {taskspec!r}")
+    if taskspec.get("missing_capabilities"):
+        raise SystemExit(f"self-improve capability must not be missing, got {taskspec!r}")
+    if plan.get("workflow") != "self_improve":
+        raise SystemExit(f"expected self_improve workflow, got {plan!r}")
+    print("AGENT_SELF_IMPROVE_CAPABILITY_OK")
+
+
 def assert_agent_loop_meta_response() -> None:
     taskspec, plan = _taskspec_plan(
         {
@@ -1206,6 +1239,7 @@ def main() -> int:
     assert_taskspec_unknown_capability_stays_missing()
     assert_taskspec_meta_capabilities()
     assert_workspace_search_capability()
+    assert_agent_self_improve_capability()
     assert_agent_loop_meta_response()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()

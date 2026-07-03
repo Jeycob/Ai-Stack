@@ -1,0 +1,718 @@
+#!/usr/bin/env python3
+"""Audited self-improvement routine for codex-local.
+
+The helper turns a real OpenWebUI failure into durable evidence:
+
+1. collect a transcript or use a provided transcript file
+2. diagnose the failure class and minimal patch scope
+3. write a regression scenario artifact
+4. optionally validate/apply a small guarded patch
+5. run the local smoke suite
+6. optionally schedule deploy and E2E verification
+
+It is intentionally conservative. The script never prints secrets, never reads
+private key material, and never applies a patch unless the caller provides a
+patch file and dry-run is disabled.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import difflib
+import hashlib
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_AUDIT_ROOT = ROOT / "codex/audit/self-improve"
+DEFAULT_OPENWEBUI_BASE_URL = "http://192.168.0.48:9090"
+DEFAULT_OPENWEBUI_KEY_FILE = ROOT / "codex/state/openwebui-api.key"
+DEFAULT_GATEWAY_URL = "http://192.168.0.48:9101"
+
+SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
+    re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----.*?-----END OPENSSH PRIVATE KEY-----", re.S),
+    re.compile(r"(?im)^.*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY).*?$"),
+]
+
+ALLOWED_PATCH_PREFIXES = (
+    "codex/bin/",
+    "codex/gateway/",
+    "docs/",
+)
+ALLOWED_PATCH_FILES = {
+    "README.md",
+    "docker-compose.yml",
+    "start_docker.bat",
+}
+BLOCKED_PATCH_PREFIXES = (
+    "codex/state/",
+    "codex/audit/",
+    "logs/",
+)
+
+VERIFY_COMMANDS = [
+    [
+        "python3",
+        "-m",
+        "py_compile",
+        "codex/gateway/gateway.py",
+        "codex/bin/agent_self_improve.py",
+        "codex/bin/gateway_recovery_smoke.py",
+        "codex/bin/filter_route_smoke.py",
+        "codex/bin/openwebui_gateway_admin_filter.py",
+        "codex/bin/openwebui_codex_auto_tools_filter.py",
+        "codex/bin/gateway_runtime_health_smoke.py",
+        "codex/bin/gateway_runtime_fingerprint_check.py",
+    ],
+    ["python3", "codex/bin/workspace_context_regression_smoke.py"],
+    ["python3", "codex/bin/gateway_recovery_smoke.py"],
+    ["python3", "codex/bin/filter_route_smoke.py", "--json"],
+    ["python3", "codex/bin/gateway_admin_filter_passthrough_smoke.py"],
+    ["python3", "codex/bin/gateway_runtime_health_smoke.py"],
+]
+
+
+def utc_stamp() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def slugify(value: str, fallback: str = "case") -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-")
+    return (slug or fallback)[:80]
+
+
+def redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    text = value
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(redact(payload), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(redact(text), encoding="utf-8")
+
+
+def openwebui_api_key(args: argparse.Namespace) -> str:
+    token = os.getenv(args.openwebui_api_key_env, "").strip()
+    if token:
+        return token
+    key_file = Path(args.openwebui_api_key_file)
+    if key_file.is_file():
+        return key_file.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def parse_chat_id(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        parsed = urllib.parse.urlparse(raw)
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) >= 2 and parts[-2] == "c":
+            return urllib.parse.unquote(parts[-1])
+        return urllib.parse.unquote(parts[-1]) if parts else ""
+    return raw
+
+
+def http_json(method: str, url: str, token: str, payload: dict[str, Any] | None, timeout: float) -> dict[str, Any]:
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with opener.open(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+        return json.loads(raw or "{}")
+
+
+def normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    chat = payload.get("chat") if isinstance(payload.get("chat"), dict) else payload
+    history = chat.get("history") if isinstance(chat.get("history"), dict) else {}
+    messages = history.get("messages") if isinstance(history.get("messages"), dict) else {}
+    ordered: list[dict[str, Any]] = []
+
+    def created(item: dict[str, Any]) -> int:
+        value = item.get("timestamp") or item.get("created_at") or item.get("created") or 0
+        try:
+            return int(value)
+        except Exception:
+            return 0
+
+    for msg_id, message in messages.items():
+        if not isinstance(message, dict):
+            continue
+        ordered.append(
+            {
+                "id": msg_id,
+                "role": str(message.get("role") or ""),
+                "content": str(message.get("content") or ""),
+                "created": created(message),
+                "model": str(message.get("model") or ""),
+            }
+        )
+    ordered.sort(key=lambda item: (item.get("created") or 0, item.get("id") or ""))
+    return {
+        "id": str(chat.get("id") or payload.get("id") or ""),
+        "title": str(chat.get("title") or payload.get("title") or ""),
+        "messages": ordered,
+        "message_count": len(ordered),
+    }
+
+
+def collect_transcript(args: argparse.Namespace) -> dict[str, Any]:
+    if args.transcript_file:
+        payload = json.loads(read_text(Path(args.transcript_file)))
+        if "messages" in payload:
+            return payload
+        return normalize_chat_payload(payload)
+
+    chat_id = parse_chat_id(args.chat_id or args.chat_url)
+    if not chat_id:
+        return {
+            "degraded": True,
+            "reason": "chat_id_missing",
+            "messages": [],
+            "message_count": 0,
+        }
+    token = openwebui_api_key(args)
+    if not token:
+        return {
+            "degraded": True,
+            "reason": "openwebui_api_key_missing",
+            "chat_id": chat_id,
+            "messages": [],
+            "message_count": 0,
+        }
+    url = args.openwebui_base_url.rstrip("/") + f"/api/v1/chats/{urllib.parse.quote(chat_id)}"
+    try:
+        payload = http_json("GET", url, token, None, args.timeout)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+        return {
+            "degraded": True,
+            "reason": "openwebui_fetch_failed",
+            "chat_id": chat_id,
+            "error": f"{type(exc).__name__}: {exc}",
+            "messages": [],
+            "message_count": 0,
+        }
+    transcript = normalize_chat_payload(payload)
+    transcript["chat_id"] = chat_id
+    return transcript
+
+
+def transcript_text(transcript: dict[str, Any]) -> str:
+    lines = []
+    for message in transcript.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        lines.append(f"{message.get('role')}: {message.get('content')}")
+    return "\n\n".join(lines)
+
+
+def last_user_prompt(transcript: dict[str, Any]) -> str:
+    for message in reversed(transcript.get("messages") or []):
+        if isinstance(message, dict) and message.get("role") == "user":
+            return str(message.get("content") or "").strip()
+    return ""
+
+
+def extract_markers(text: str) -> dict[str, Any]:
+    markers: dict[str, Any] = {}
+    workflow = re.findall(r"(?im)\bworkflow=([A-Za-z0-9_.:-]+)", text)
+    if workflow:
+        markers["workflows"] = workflow[-8:]
+    missing = re.findall(r"(?im)missing_capabilities[=:\[]+([^\]\n]+)", text)
+    if missing:
+        markers["missing_capabilities_raw"] = missing[-5:]
+    for marker in (
+        "WORKSPACE_RUN_FAILED",
+        "NEEDS_ATTENTION",
+        "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
+        "CODEX_LOCAL_FILTER_INACTIVE",
+        "CODEX_LOCAL_FILTER_STALE",
+        "GATEWAY_ADMIN_TOKEN_MISSING",
+        "LOCAL_REPO_CREATE_FAILED",
+    ):
+        if marker in text:
+            markers.setdefault("markers", []).append(marker)
+    return markers
+
+
+def classify_failure(text: str, expected_behavior: str, failure_marker: str) -> dict[str, Any]:
+    lower = text.lower()
+    marker = failure_marker or ""
+    expected = expected_behavior or ""
+    category = "unknown"
+    root_cause = "Insufficient evidence; keep diagnosis artifact and add a targeted regression before patching."
+    patch_scope = ["codex/gateway/gateway.py", "codex/bin/gateway_recovery_smoke.py"]
+    recovery = "Add or run a deterministic regression that captures the observed failure before changing routing."
+
+    if "missing_capabilities" in lower or "unsupported capability" in lower:
+        category = "capability_alias_or_registry_bug"
+        root_cause = "TaskSpec capability validation likely used a raw or unsupported capability name instead of canonical form."
+        patch_scope = ["codex/gateway/gateway.py", "docs/codex-local-capability-roadmap.json", "codex/bin/gateway_recovery_smoke.py"]
+        recovery = "Canonicalize capabilities before validation and prove alias support with TaskSpec-path regression tests."
+    elif "workspace_run_failed" in lower or "executed_command=python3 codex/bin/mentor_codex_local.py" in lower:
+        category = "false_executor_or_recursion_bug"
+        root_cause = "A user/meta intent was sent through a workspace command path or helper recursion instead of capability planning."
+        patch_scope = ["codex/gateway/gateway.py", "codex/bin/openwebui_codex_auto_tools_filter.py", "codex/bin/gateway_recovery_smoke.py"]
+        recovery = "Route through TaskSpec/meta capability and block helper recursion from workspace run."
+    elif "failed to fetch" in lower or "timed out" in lower or "disconnect" in lower:
+        category = "transport_timeout_or_streaming_bug"
+        root_cause = "OpenWebUI did not receive progress quickly enough or the gateway/filter path blocked too long."
+        patch_scope = ["codex/gateway/gateway.py", "codex/bin/owui_chat_turn.py", "codex/bin/openwebui_gateway_admin_filter.py"]
+        recovery = "Prefer streaming/heartbeat or scheduled jobs for long-running agent capability work."
+    elif "runtime_fingerprint" in lower or "runtime_commit" in lower or "stale" in lower:
+        category = "runtime_drift"
+        root_cause = "The running gateway process may not match the checked-out ai-stack source."
+        patch_scope = ["codex/gateway/gateway.py", "codex/bin/start_codex_stack.sh", "codex/bin/gateway_runtime_fingerprint_check.py"]
+        recovery = "Fail start/deploy when live epoch/fingerprint does not match the current source."
+    elif any(cue in lower for cue in ("kde ted jsi", "kde teď jsi", "capability", "prepni se")):
+        category = "meta_capability_routing_bug"
+        root_cause = "A deterministic meta intent fell through to review/run instead of workspace context or capability catalog."
+        patch_scope = ["codex/gateway/gateway.py", "codex/bin/gateway_recovery_smoke.py"]
+        recovery = "Represent the meta request as a canonical meta capability and execute it without repo review."
+    elif expected:
+        category = "expected_behavior_regression"
+        root_cause = "Expected behavior was supplied by the caller; create a regression and patch the smallest layer that violates it."
+        recovery = "Use the expected behavior as the assertion before patching."
+
+    return {
+        "category": category,
+        "root_cause": root_cause,
+        "patch_scope": patch_scope,
+        "recovery": recovery,
+        "failure_marker": marker,
+        "expected_behavior": expected,
+    }
+
+
+def infer_regression(transcript: dict[str, Any], diagnosis: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    prompt = args.prompt or last_user_prompt(transcript)
+    text = transcript_text(transcript)
+    expected = args.expected_behavior or diagnosis.get("expected_behavior") or ""
+    cases: list[dict[str, Any]] = []
+
+    known_patterns = [
+        {
+            "name": "meta_workspace_status_test2",
+            "prompt": "repo: Test2\nkde ted jsi?",
+            "expected_workflow": "meta",
+            "expected_capability": "workspace_context_status",
+            "expected_marker": "current_workspace",
+        },
+        {
+            "name": "meta_capability_catalog_test2",
+            "prompt": "repo: Test2\njake mas capability?",
+            "expected_workflow": "meta",
+            "expected_capability": "capability_catalog_show",
+            "expected_marker": "implemented",
+        },
+        {
+            "name": "ssh_public_key_alias_test2",
+            "prompt": "repo: Test2\nvytvor tam ssh klic a vypis mi public",
+            "expected_workflow": "ssh_key_show_public",
+            "expected_capability": "ssh_key_show_public",
+            "expected_marker": "public_key_path",
+        },
+        {
+            "name": "workspace_search_capability_test2",
+            "prompt": "repo: Test2\nprohledej repo a hledej zminky o capability implementaci",
+            "expected_workflow": "workspace_search",
+            "expected_capability": "workspace_search",
+            "expected_marker": "matches",
+        },
+    ]
+    for case in known_patterns:
+        if case["prompt"].splitlines()[-1].lower() in (prompt or text).lower():
+            cases.append(case)
+
+    if not cases and prompt:
+        cases.append(
+            {
+                "name": slugify(hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12], "observed_case"),
+                "prompt": prompt,
+                "expected_behavior": expected or "Preserve user intent, use TaskSpec capability path, and return concrete recovery on blocker.",
+                "expected_workflow": "",
+                "expected_capability": "",
+                "expected_marker": "",
+            }
+        )
+
+    return {
+        "kind": "codex-local-self-improve-regression",
+        "created_at": utc_stamp(),
+        "source_chat_id": transcript.get("chat_id") or transcript.get("id") or "",
+        "diagnosis_category": diagnosis.get("category"),
+        "prompt": prompt,
+        "expected_behavior": expected,
+        "cases": cases,
+        "notes": [
+            "Regression artifact is intentionally data-only; code changes must still target TaskSpec/capability semantics, not one prompt string.",
+            "If a new capability is required, add it to registry, executor, roadmap and tests before marking fixed.",
+        ],
+    }
+
+
+def changed_paths_from_patch(patch_text: str) -> list[str]:
+    paths: list[str] = []
+    for line in patch_text.splitlines():
+        if line.startswith("+++ b/") or line.startswith("--- a/"):
+            rel = line[6:].strip()
+            if rel != "/dev/null":
+                paths.append(rel)
+        elif line.startswith("*** Update File: "):
+            paths.append(line.removeprefix("*** Update File: ").strip())
+        elif line.startswith("*** Add File: "):
+            paths.append(line.removeprefix("*** Add File: ").strip())
+    return sorted({p for p in paths if p})
+
+
+def patch_path_allowed(rel: str) -> bool:
+    normalized = rel.replace("\\", "/").lstrip("/")
+    if any(normalized.startswith(prefix) for prefix in BLOCKED_PATCH_PREFIXES):
+        return False
+    return normalized in ALLOWED_PATCH_FILES or any(normalized.startswith(prefix) for prefix in ALLOWED_PATCH_PREFIXES)
+
+
+def validate_or_apply_patch(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
+    if not args.patch_file:
+        return {
+            "ok": True,
+            "mode": "no_patch_file",
+            "applied": False,
+            "message": "No patch file supplied; self-improve recorded diagnosis/regression and ran verification only.",
+        }
+    patch_path = Path(args.patch_file)
+    patch_text = read_text(patch_path)
+    paths = changed_paths_from_patch(patch_text)
+    blocked = [path for path in paths if not patch_path_allowed(path)]
+    result = {
+        "ok": not blocked,
+        "mode": "dry_run" if args.dry_run else "apply",
+        "patch_file": str(patch_path),
+        "paths": paths,
+        "blocked_paths": blocked,
+        "applied": False,
+    }
+    if blocked:
+        result["message"] = "Patch touches paths outside audited ai-stack self-improve scope."
+        return result
+
+    check = subprocess.run(
+        ["git", "apply", "--check", str(patch_path)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.command_timeout,
+    )
+    result["git_apply_check_exit_code"] = check.returncode
+    result["git_apply_check_output"] = check.stdout[-4000:]
+    if check.returncode != 0:
+        result["ok"] = False
+        result["message"] = "git apply --check failed."
+        return result
+    if args.dry_run:
+        result["message"] = "Patch validated but not applied because dry_run=true."
+        return result
+
+    apply_proc = subprocess.run(
+        ["git", "apply", str(patch_path)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.command_timeout,
+    )
+    result["applied"] = apply_proc.returncode == 0
+    result["ok"] = apply_proc.returncode == 0
+    result["git_apply_exit_code"] = apply_proc.returncode
+    result["git_apply_output"] = apply_proc.stdout[-4000:]
+    write_json(audit_dir / "patch-result.json", result)
+    return result
+
+
+def run_command(command: list[str], timeout: int) -> dict[str, Any]:
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+        return {
+            "command": command,
+            "exit_code": proc.returncode,
+            "duration_ms": int((time.time() - started) * 1000),
+            "output": proc.stdout[-12000:],
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "command": command,
+            "exit_code": 124,
+            "duration_ms": int((time.time() - started) * 1000),
+            "output": str(exc.stdout or exc.stderr or "timed out")[-12000:],
+        }
+
+
+def verify(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
+    commands = VERIFY_COMMANDS
+    results = [run_command(command, args.command_timeout) for command in commands]
+    ok = all(item.get("exit_code") == 0 for item in results)
+    lines = []
+    for item in results:
+        command = " ".join(shlex.quote(part) for part in item["command"])
+        lines.append(f"$ {command}")
+        lines.append(f"exit_code={item['exit_code']} duration_ms={item['duration_ms']}")
+        output = str(item.get("output") or "").strip()
+        if output:
+            lines.append(output)
+        lines.append("")
+    write_text(audit_dir / "test-results.txt", "\n".join(lines))
+    return {"ok": ok, "commands": results}
+
+
+def deploy(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
+    command = [
+        "python3",
+        "codex/bin/gateway_admin.py",
+        "--base-url",
+        args.gateway_url,
+        "deploy",
+        "--branch",
+        args.branch,
+        "--force",
+    ]
+    if args.dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "scheduled": False,
+            "command": command,
+            "message": "Deploy command prepared but not executed because dry_run=true.",
+        }
+    result = run_command(command, args.command_timeout)
+    result["ok"] = result.get("exit_code") == 0
+    write_json(audit_dir / "deploy-result.json", result)
+    return result
+
+
+def e2e(args: argparse.Namespace, audit_dir: Path, regression: dict[str, Any]) -> dict[str, Any]:
+    cases = regression.get("cases") or []
+    prompt = args.e2e_prompt or (cases[0].get("prompt") if cases and isinstance(cases[0], dict) else "")
+    if not prompt:
+        return {"ok": False, "skipped": True, "reason": "no_e2e_prompt"}
+    command = [
+        "python3",
+        "codex/bin/owui_chat_turn.py",
+        "--base-url",
+        args.openwebui_base_url,
+        "--api-key-file",
+        args.openwebui_api_key_file,
+        "--model",
+        args.model,
+        "--stateless",
+        "--prompt",
+        prompt,
+        "--timeout",
+        str(min(args.timeout, 60)),
+        "--total-timeout",
+        str(args.command_timeout),
+        "--attempts",
+        "3",
+        "--skip-codex-preflight",
+    ]
+    if args.dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "executed": False,
+            "command": command,
+        }
+    if not openwebui_api_key(args):
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "openwebui_api_key_missing",
+            "command": command,
+        }
+    result = run_command(command, args.command_timeout)
+    result["ok"] = result.get("exit_code") == 0
+    write_json(audit_dir / "e2e-result.json", result)
+    return result
+
+
+def diff_for_changed_files(paths: list[str]) -> str:
+    chunks = []
+    for rel in paths:
+        path = ROOT / rel
+        if not path.is_file():
+            continue
+        try:
+            current = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        except OSError:
+            continue
+        before = []
+        chunks.extend(difflib.unified_diff(before, current, fromfile=f"a/{rel}", tofile=f"b/{rel}"))
+    return "".join(chunks)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Audited codex-local self-improvement routine.")
+    parser.add_argument("--workspace", default="ai-stack")
+    parser.add_argument("--chat-id", default="")
+    parser.add_argument("--chat-url", default="")
+    parser.add_argument("--transcript-file")
+    parser.add_argument("--prompt", default="")
+    parser.add_argument("--failure-marker", default="")
+    parser.add_argument("--expected-behavior", default="")
+    parser.add_argument("--mode", choices=["diagnose", "reproduce", "patch", "verify", "deploy", "e2e", "full"], default="diagnose")
+    parser.add_argument("--dry-run", action="store_true", default=False)
+    parser.add_argument("--max-cycles", type=int, default=1)
+    parser.add_argument("--patch-file", default="")
+    parser.add_argument("--audit-root", default=str(DEFAULT_AUDIT_ROOT))
+    parser.add_argument("--openwebui-base-url", default=os.getenv("OWUI_BASE_URL", DEFAULT_OPENWEBUI_BASE_URL))
+    parser.add_argument("--openwebui-api-key-env", default="OWUI_API_KEY")
+    parser.add_argument("--openwebui-api-key-file", default=os.getenv("OWUI_API_KEY_FILE", str(DEFAULT_OPENWEBUI_KEY_FILE)))
+    parser.add_argument("--gateway-url", default=os.getenv("CODEX_GATEWAY_URL", DEFAULT_GATEWAY_URL))
+    parser.add_argument("--model", default=os.getenv("CODEX_LOCAL_MODEL", "codex-local"))
+    parser.add_argument("--branch", default="main")
+    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--command-timeout", type=int, default=180)
+    parser.add_argument("--e2e-prompt", default="")
+    parser.add_argument("--json", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", args.workspace):
+        raise SystemExit("workspace must match [A-Za-z0-9_.-]{1,80}")
+    if args.max_cycles < 1 or args.max_cycles > 3:
+        raise SystemExit("max_cycles must be between 1 and 3")
+
+    case_hint = args.failure_marker or args.expected_behavior or args.chat_id or args.chat_url or args.prompt or "case"
+    audit_dir = Path(args.audit_root) / f"{utc_stamp()}-{slugify(case_hint)}"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+
+    transcript = collect_transcript(args)
+    write_json(audit_dir / "transcript.json", transcript)
+
+    text = transcript_text(transcript)
+    if args.prompt:
+        text = text + "\n\nuser: " + args.prompt
+    markers = extract_markers(text)
+    diagnosis = classify_failure(text, args.expected_behavior, args.failure_marker)
+    diagnosis.update(
+        {
+            "workspace": args.workspace,
+            "markers": markers,
+            "artifact_dir": str(audit_dir),
+            "dry_run": bool(args.dry_run),
+            "mode": args.mode,
+        }
+    )
+    write_json(audit_dir / "diagnosis.json", diagnosis)
+
+    regression = infer_regression(transcript, diagnosis, args)
+    write_json(audit_dir / "regression.json", regression)
+
+    patch_result: dict[str, Any] = {"ok": True, "skipped": True}
+    verify_result: dict[str, Any] = {"ok": True, "skipped": True}
+    deploy_result: dict[str, Any] = {"ok": True, "skipped": True}
+    e2e_result: dict[str, Any] = {"ok": True, "skipped": True}
+
+    if args.mode in {"patch", "full"}:
+        patch_result = validate_or_apply_patch(args, audit_dir)
+    if args.mode in {"verify", "full"}:
+        verify_result = verify(args, audit_dir)
+    if args.mode in {"deploy", "full"}:
+        if not verify_result.get("ok") and not verify_result.get("skipped"):
+            deploy_result = {
+                "ok": False,
+                "skipped": True,
+                "reason": "verify_failed",
+                "message": "Self-improve never deploys when verification failed.",
+            }
+        else:
+            deploy_result = deploy(args, audit_dir)
+    if args.mode in {"e2e", "full"}:
+        e2e_result = e2e(args, audit_dir, regression)
+
+    summary = {
+        "ok": all(
+            bool(item.get("ok"))
+            for item in (patch_result, verify_result, deploy_result, e2e_result)
+        ),
+        "artifact_dir": str(audit_dir),
+        "workspace": args.workspace,
+        "mode": args.mode,
+        "dry_run": bool(args.dry_run),
+        "diagnosis_category": diagnosis.get("category"),
+        "root_cause": diagnosis.get("root_cause"),
+        "patch_scope": diagnosis.get("patch_scope"),
+        "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
+        "patch": patch_result,
+        "verify": {
+            "ok": verify_result.get("ok"),
+            "skipped": verify_result.get("skipped", False),
+            "command_count": len(verify_result.get("commands") or []),
+        },
+        "deploy": deploy_result,
+        "e2e": e2e_result,
+    }
+    write_json(audit_dir / "summary.json", summary)
+    if args.json:
+        print(json.dumps(redact(summary), ensure_ascii=False, indent=2))
+    else:
+        print("AGENT_SELF_IMPROVE_OK" if summary["ok"] else "AGENT_SELF_IMPROVE_NEEDS_ATTENTION")
+        print(f"artifact_dir={summary['artifact_dir']}")
+        print(f"diagnosis_category={summary['diagnosis_category']}")
+        print(f"root_cause={summary['root_cause']}")
+        print(f"regression_cases={','.join(summary['regression_cases']) or '(none)'}")
+        print(f"verify_ok={summary['verify']['ok']}")
+        print(f"deploy_ok={summary['deploy'].get('ok')}")
+        print(f"e2e_ok={summary['e2e'].get('ok')}")
+    return 0 if summary["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
