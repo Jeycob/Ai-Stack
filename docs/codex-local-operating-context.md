@@ -38,6 +38,13 @@ python3 codex/bin/owui_chat_turn.py \
   --quiet
 ```
 
+Pro opakovatelny chat-level smoke nad skutecnym audit chatem je tam i
+`codex/bin/owui_chat_smoke.py`. Ten obali `owui_chat_turn.py`, po jednom turnu
+znovu nacte cilovy chat a overi, ze se ve viditelne historii opravdu objevil
+user prompt i dokoncena assistant odpoved pro stejny `turn_key`. Je to
+nejpraktičtejsi helper pro "otestuj to end to end jako user pres OpenWebUI
+chat", kdyz nechces kontrolovat historii rucne.
+
 Pro opakovane mentor workflow nad auditem pouzivej helper
 `codex/bin/mentor_codex_local.py`. Ten sklada visible a technical prompt za
 tebe a vola `owui_chat_turn.py` pod kapotou. Je vhodny pro bezne operace typu

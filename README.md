@@ -256,6 +256,14 @@ Při dlouhých operacích používej helper `codex/bin/owui_chat_turn.py`; ten z
 
 Helper teď navíc používá stabilní turn key odvozený z `chat_id + model + visible prompt + technical prompt`. Když tedy retryneš stejný běžící turn, pokusí se najít už existující nedokončenou assistant zprávu a znovu ji použít místo vytváření dalšího duplicitního user promptu a dalšího `running...` statusu. Výsledek: méně spamu v audit chatu a menší riziko zbytečných opakovaných volání.
 
+Pro skutečný chat-level E2E smoke nad audit chatem je nad tím ještě `codex/bin/owui_chat_smoke.py`. Ten obalí `owui_chat_turn.py`, pošle jeden reálný turn do OpenWebUI, znovu načte chat a zkontroluje, že se ve viditelné historii opravdu objevil user prompt i dokončená assistant odpověď pro stejný `turn_key`. To je nejbližší opakovatelný smoke helper k use-casu “otestuj to jako user přes chat okno”:
+
+    python3 codex/bin/owui_chat_smoke.py \
+      --model codex-local-plan-qwen14b \
+      --visible-prompt "repo: ai-stack\nOdpovez jednim slovem: smoke-ok" \
+      --prompt "repo: ai-stack\nOdpovez jednim slovem: smoke-ok" \
+      --expected-substring smoke
+
 Pro admin nebo patch operace používej oddělený viditelný a technický prompt. Viditelný prompt je lidský popis práce pro audit chat; technický prompt může obsahovat interní gateway/admin marker a diff, ale do viditelné historie se nezapisuje:
 
     python3 codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --visible-prompt-file /tmp/visible.txt --prompt-file /tmp/technical.txt --status-interval 3 --quiet
