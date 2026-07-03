@@ -45,6 +45,11 @@ user prompt i dokoncena assistant odpoved pro stejny `turn_key`. Je to
 nejpraktičtejsi helper pro "otestuj to end to end jako user pres OpenWebUI
 chat", kdyz nechces kontrolovat historii rucne.
 
+`codex/bin/check_ai_stack.sh` umi tenhle audit-chat smoke pridat do bezneho
+stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po
+gateway smoke pusti i `owui_chat_smoke.py`. Bez key se tenhle krok jen preskoci
+misto failu. Vypnout ho jde pres `SKIP_OWUI_CHAT_SMOKE=1`.
+
 Pro opakovane mentor workflow nad auditem pouzivej helper
 `codex/bin/mentor_codex_local.py`. Ten sklada visible a technical prompt za
 tebe a vola `owui_chat_turn.py` pod kapotou. Je vhodny pro bezne operace typu

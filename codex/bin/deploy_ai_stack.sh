@@ -59,6 +59,17 @@ restart_only() {
   printf 'loader_bytes='
   wc -c < "$tmp_loader" | tr -d ' '
   rm -f "$tmp_loader"
+
+  if [ -f "$REPO_ROOT/codex/bin/check_ai_stack.sh" ]; then
+    section "Full stack healthcheck"
+    OPENWEBUI_URL="${OPENWEBUI_URL:-http://127.0.0.1:9090}" \
+    CODEX_GATEWAY_URL="${CODEX_GATEWAY_URL:-http://127.0.0.1:9101}" \
+    OLLAMA_URL="${OLLAMA_URL:-http://192.168.0.48:11434}" \
+    WORKSPACE="${WORKSPACE:-ai-stack}" \
+    MODEL="${MODEL:-codex-local-plan-qwen14b}" \
+    TIMEOUT="${TIMEOUT:-10}" \
+    bash "$REPO_ROOT/codex/bin/check_ai_stack.sh"
+  fi
 }
 
 sync_openwebui_function() {
