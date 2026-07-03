@@ -363,6 +363,28 @@ else
 fi
 
 if [ "${SKIP_RECONCILER_UNIT_TESTS:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI sync helper unit tests ... SKIP (disabled)\n'
+  record_summary "OpenWebUI sync helper unit tests" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/sync_openwebui_function_test.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI sync helper unit tests ...\n'
+  sync_test_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/sync_openwebui_function_test.py" >"$sync_test_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$sync_test_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI sync helper unit tests OK\n'
+    record_summary "OpenWebUI sync helper unit tests" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$sync_test_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI sync helper unit tests FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI sync helper unit tests" "FAIL"
+  fi
+  rm -f "$sync_test_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI sync helper unit tests ... SKIP (python3 or sync_openwebui_function_test.py missing)\n'
+  record_summary "OpenWebUI sync helper unit tests" "SKIP"
+fi
+
+if [ "${SKIP_RECONCILER_UNIT_TESTS:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI reconciler unit tests ... SKIP (disabled)\n'
   record_summary "OpenWebUI reconciler unit tests" "SKIP"
 elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/reconcile_openwebui_functions_test.py" ]; then

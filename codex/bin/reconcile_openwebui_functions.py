@@ -83,10 +83,7 @@ def create_payload(spec: RequiredFunction, content: str) -> dict[str, Any]:
         "content": content,
         "is_active": True,
         "is_global": True,
-        "meta": {
-            "description": "Managed by ai-stack codex-local function reconciler.",
-            "managed_by": "ai-stack",
-        },
+        "meta": sync.desired_meta(content, None),
     }
 
 

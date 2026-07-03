@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import textwrap
 import sys
 import time
 import urllib.error
@@ -22,6 +23,7 @@ from pathlib import Path
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 PRIMARY_MUTABLE_FIELDS = ("id", "name", "type", "meta")
 ROADMAP_SENTINEL = "EMBEDDED_CAPABILITY_ROADMAP = None"
+MANIFEST_FIELD_RE = re.compile(r"(?im)^(title|author|version|description):\s*(.+?)\s*$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,21 +110,135 @@ def runtime_content(args: argparse.Namespace, content: str) -> tuple[str, bool]:
     return content.replace(ROADMAP_SENTINEL, replacement, 1), True
 
 
-def update_payload_variant(args: argparse.Namespace, remote: dict, content: str, include_meta: bool) -> dict:
+def parse_manifest(content: str) -> dict[str, str]:
+    manifest: dict[str, str] = {}
+    head = textwrap.dedent(str(content or "")).split('"""', 2)
+    if len(head) >= 3:
+        header = head[1]
+    else:
+        header = str(content or "").split("\n\n", 1)[0]
+    for key, value in MANIFEST_FIELD_RE.findall(header):
+        manifest[key.lower()] = value.strip()
+    return manifest
+
+
+def desired_meta(content: str, remote: dict | None = None) -> dict:
+    manifest = parse_manifest(content)
+    remote_meta = remote.get("meta") if isinstance(remote, dict) else None
+    merged: dict = {}
+    if isinstance(remote_meta, dict):
+        merged.update(remote_meta)
+    if "description" not in merged and manifest.get("description"):
+        merged["description"] = manifest["description"]
+    if manifest:
+        existing_manifest = merged.get("manifest")
+        if not isinstance(existing_manifest, dict):
+            existing_manifest = {}
+        manifest_payload = dict(existing_manifest)
+        manifest_payload.update(manifest)
+        merged["manifest"] = manifest_payload
+    if "description" not in merged:
+        merged["description"] = "Managed by ai-stack codex-local function sync."
+    return merged
+
+
+def update_payload_variant(
+    args: argparse.Namespace,
+    remote: dict,
+    content: str,
+    *,
+    include_meta: bool,
+    include_flags: bool,
+    include_user_id: bool,
+) -> dict:
     payload = {k: remote[k] for k in PRIMARY_MUTABLE_FIELDS if k in remote}
     if not include_meta:
         payload.pop("meta", None)
+    else:
+        payload["meta"] = desired_meta(content, remote)
     payload["content"] = content
-    payload["is_active"] = target_active(args)
-    payload["is_global"] = target_global(args)
+    if include_flags:
+        payload["is_active"] = target_active(args)
+        payload["is_global"] = target_global(args)
+    if include_user_id and "user_id" in remote:
+        payload["user_id"] = remote["user_id"]
     return payload
 
 
 def update_function_with_fallbacks(args: argparse.Namespace, function_id: str, remote: dict, content: str) -> tuple[dict, str]:
+    full_payload = {k: v for k, v in remote.items() if k not in {"created_at", "updated_at"}}
+    full_payload["content"] = content
+    full_payload["meta"] = desired_meta(content, remote)
+    full_payload["is_active"] = target_active(args)
+    full_payload["is_global"] = target_global(args)
     attempts = [
-        ("full-minus-timestamps", {k: v for k, v in remote.items() if k not in {"created_at", "updated_at"}} | {"content": content, "is_active": target_active(args), "is_global": target_global(args)}),
-        ("id+name+type+meta+content", update_payload_variant(args, remote, content, include_meta=True)),
-        ("id+name+type+content", update_payload_variant(args, remote, content, include_meta=False)),
+        ("full-minus-timestamps", full_payload),
+        (
+            "id+name+type+meta+content+flags+user",
+            update_payload_variant(
+                args,
+                remote,
+                content,
+                include_meta=True,
+                include_flags=True,
+                include_user_id=True,
+            ),
+        ),
+        (
+            "id+name+type+meta+content+user",
+            update_payload_variant(
+                args,
+                remote,
+                content,
+                include_meta=True,
+                include_flags=False,
+                include_user_id=True,
+            ),
+        ),
+        (
+            "id+name+type+meta+content+flags",
+            update_payload_variant(
+                args,
+                remote,
+                content,
+                include_meta=True,
+                include_flags=True,
+                include_user_id=False,
+            ),
+        ),
+        (
+            "id+name+type+meta+content",
+            update_payload_variant(
+                args,
+                remote,
+                content,
+                include_meta=True,
+                include_flags=False,
+                include_user_id=False,
+            ),
+        ),
+        (
+            "id+name+type+content+flags",
+            update_payload_variant(
+                args,
+                remote,
+                content,
+                include_meta=False,
+                include_flags=True,
+                include_user_id=False,
+            ),
+        ),
+        (
+            "id+name+type+content",
+            update_payload_variant(
+                args,
+                remote,
+                content,
+                include_meta=False,
+                include_flags=False,
+                include_user_id=False,
+            ),
+        ),
     ]
     errors: list[str] = []
     for strategy, payload in attempts:

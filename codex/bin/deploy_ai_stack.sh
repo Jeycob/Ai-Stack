@@ -159,6 +159,7 @@ python3 -m py_compile \
   codex/bin/workspace_action.py \
   codex/bin/mentor_codex_local.py \
   codex/bin/sync_openwebui_function.py \
+  codex/bin/sync_openwebui_function_test.py \
   codex/bin/reconcile_openwebui_functions.py \
   codex/bin/reconcile_openwebui_functions_test.py \
   codex/bin/mentor_capability_routing_smoke.py \
@@ -173,6 +174,7 @@ python3 codex/bin/gateway_nested_helper_rescue_smoke.py
 python3 codex/bin/gateway_runtime_health_smoke.py
 python3 codex/bin/container_runner_guard_smoke.py
 python3 codex/bin/mentor_capability_routing_smoke.py
+python3 codex/bin/sync_openwebui_function_test.py
 python3 codex/bin/reconcile_openwebui_functions_test.py
 python3 codex/bin/owui_chat_scenario_catalog_smoke.py
 python3 codex/bin/owui_chat_turn_preflight_smoke.py

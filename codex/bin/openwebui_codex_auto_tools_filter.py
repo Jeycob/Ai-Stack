@@ -8,7 +8,9 @@ description: Dynamically attaches Codex toolsets and routes broader codex-local 
 import re
 import shlex
 import json
+import os
 import sys
+import importlib.util
 from pathlib import Path
 from typing import Optional
 
@@ -19,7 +21,44 @@ MODULE_DIR = Path(__file__).resolve().parent
 if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
-from workspace_context import load_workspace_registry, resolve_workspace_context, strip_workspace_routing
+def _load_workspace_context_module():
+    candidates = []
+    env_path = os.getenv("CODEX_WORKSPACE_CONTEXT_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(MODULE_DIR / "workspace_context.py")
+    for root in (
+        "/data/repositories/ai-stack",
+        "/app/backend/data/repositories/ai-stack",
+        "/Repositories/ai-stack",
+        "/mnt/c/Repositories/ai-stack",
+    ):
+        candidates.append(Path(root) / "codex/bin/workspace_context.py")
+    seen = set()
+    for path in candidates:
+        try:
+            key = str(path.resolve())
+        except Exception:
+            key = str(path)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        spec = importlib.util.spec_from_file_location("codex_workspace_context_runtime", path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    raise ModuleNotFoundError(
+        "workspace_context.py not found; set CODEX_WORKSPACE_CONTEXT_PATH or mount ai-stack at /data/repositories/ai-stack"
+    )
+
+
+_workspace_context = _load_workspace_context_module()
+load_workspace_registry = _workspace_context.load_workspace_registry
+resolve_workspace_context = _workspace_context.resolve_workspace_context
+strip_workspace_routing = _workspace_context.strip_workspace_routing
 
 try:
     from pydantic import BaseModel, Field
