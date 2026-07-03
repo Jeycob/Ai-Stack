@@ -223,6 +223,18 @@ Pro admin nebo patch operace používej oddělený viditelný a technický promp
 
     python3 codex/bin/owui_chat_turn.py --model codex-local-plan-qwen14b --visible-prompt-file /tmp/visible.txt --prompt-file /tmp/technical.txt --status-interval 3 --quiet
 
+Pro běžné mentorování codex-local bez ručního skládání promptů je nad tím ještě malý orchestrátor:
+
+    python3 codex/bin/mentor_codex_local.py action Odysseus-Lite test
+
+Nebo například:
+
+    python3 codex/bin/mentor_codex_local.py scan Odysseus-Lite
+    python3 codex/bin/mentor_codex_local.py run ai-stack -- git status --short --branch
+    python3 codex/bin/mentor_codex_local.py deploy
+
+`mentor_codex_local.py` vytváří lidský visible prompt do audit chatu a vedle něj technický prompt pro gateway admin workflow, takže Codex může co nejvíc práce offloadnout na codex-local bez ručního psaní interních markerů.
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

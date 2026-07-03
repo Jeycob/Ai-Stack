@@ -131,6 +131,7 @@ python3 -m py_compile \
   codex/bin/add_workspace.py \
   codex/bin/workspace_scan.py \
   codex/bin/workspace_action.py \
+  codex/bin/mentor_codex_local.py \
   codex/bin/sync_openwebui_function.py
 
 section "Validating shell helpers"

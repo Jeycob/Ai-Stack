@@ -36,6 +36,11 @@ python3 codex/bin/owui_chat_turn.py \
   --quiet
 ```
 
+Pro opakovane mentor workflow nad auditem pouzivej helper
+`codex/bin/mentor_codex_local.py`. Ten sklada visible a technical prompt za
+tebe a vola `owui_chat_turn.py` pod kapotou. Je vhodny pro bezne operace typu
+scan workspace, install/test/build/lint, explicitni run command nebo deploy.
+
 Pro admin operace pouzivej `--no-live-status`, pokud odpoved ma byt kratka a deterministicka. Pro dlouhe modelove analyzy live status zapni.
 
 OpenWebUI API key nepredavej v prikazu. Helpery ho ctou z `OWUI_API_KEY`,
