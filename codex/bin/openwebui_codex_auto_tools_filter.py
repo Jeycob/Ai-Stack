@@ -1,7 +1,7 @@
 """
 title: Codex Auto Tools Filter
 author: OpenAI Codex
-version: 0.1.5
+version: 0.1.6
 description: Dynamically attaches Codex toolsets and routes safe codex-local natural-language admin intents.
 """
 
@@ -105,6 +105,8 @@ class Filter:
         command = self._natural_workspace_run_command(text)
         if not command:
             command = self._natural_workspace_common_command(text)
+        if not command:
+            command = self._natural_workspace_action_command(text)
         if not command:
             command = self._natural_create_repo_command(text)
         if not command and self._mentions_ai_stack(text):
@@ -212,6 +214,22 @@ class Filter:
         for needles, command in checks:
             if any(needle in lower for needle in needles):
                 return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {command}"
+        return None
+
+    def _natural_workspace_action_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        actions = [
+            (["nainstaluj zavislosti", "nainstaluj závislosti", "install dependencies", "prepare environment"], "install", 1800),
+            (["spust testy", "spusť testy", "run tests", "otestuj projekt"], "test", 1800),
+            (["postav projekt", "build project", "udělej build", "udelej build", "spust build", "spusť build"], "build", 1800),
+            (["spust lint", "spusť lint", "run lint", "zkontroluj lint", "lint projekt"], "lint", 1200),
+        ]
+        for needles, action, timeout in actions:
+            if any(needle in lower for needle in needles):
+                return f"GATEWAY_ADMIN_WORKSPACE_ACTION {workspace} {action} --timeout {timeout}"
         return None
 
     def _workspace_from_text(self, text: str) -> str | None:

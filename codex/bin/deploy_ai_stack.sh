@@ -129,6 +129,8 @@ python3 -m py_compile \
   codex/bin/owui_chat_turn.py \
   codex/bin/run_check.py \
   codex/bin/add_workspace.py \
+  codex/bin/workspace_scan.py \
+  codex/bin/workspace_action.py \
   codex/bin/sync_openwebui_function.py
 
 section "Validating shell helpers"

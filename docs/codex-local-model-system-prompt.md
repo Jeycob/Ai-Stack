@@ -45,6 +45,9 @@ Current routed ai-stack intents:
   that a GitHub repository was created unless a GitHub-specific tool confirms it.
 - "zkontroluj git status", "ukaz git remote", and "ukaz posledni commity" in a
   selected workspace should use the broad audited workspace runner.
+- "nainstaluj zavislosti", "spust testy", "postav projekt", and "spust lint"
+  in a selected workspace should use the broad audited workspace action
+  capability that resolves the right command from project manifests.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.

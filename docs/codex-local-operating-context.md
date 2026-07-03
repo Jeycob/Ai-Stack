@@ -60,10 +60,12 @@ lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
 
 `Codex Auto Tools Filter` ma rozpoznavat prirozene intenty typu "pullni
 ai-stack a nasad", "ukaz deploy status", "vytvor nove repository Test2 a
-vygeneruj ssh klic", bezne repo kontroly typu "zkontroluj git status" nebo
+vygeneruj ssh klic", bezne repo kontroly typu "zkontroluj git status",
+developerske workflow typu "nainstaluj zavislosti" nebo "spust testy", a
 explicitni "repo: X / spust prikaz: ...". Nemel by vyrabet novy marker pro
 kazdou drobnost; cilem jsou sirsi capability workflow: deploy/status,
-workspace-run, create-repo recipe a pozdeji dalsi profile-based schopnosti.
+workspace-run, workspace-action, create-repo recipe a pozdeji dalsi
+profile-based schopnosti.
 Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
 ## Bezpecnostni pravidla
@@ -85,6 +87,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_GIT_DIFF [path]`: ukaze diff jen pro whitelisted commitovatelne soubory. Bezpecne pred pushem.
 - `GATEWAY_ADMIN_REPO_GUARD [workspace] [branch]`: read-only kontrola registrovaneho workspace, branch, dirty stavu a suspicious/sensitive cest bez vypisu obsahu souboru.
 - `GATEWAY_ADMIN_WORKSPACE_SCAN [workspace]`: read-only scan manifestu, jazyku, package script names a navrzenych build/test prikazu bez spousteni prikazu.
+- `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint> [--timeout seconds] [--env KEY=VALUE] [--dry-run]`: capability-based provedeni beznych developerskych akci nad registrovanym workspace. Resolver vybere prikaz z manifestu a scriptu projektu a spusti ho auditovane pres gateway.
 - `GATEWAY_ADMIN_READ <path>`: precte whitelisted soubor bez cisel radku.
 - `GATEWAY_ADMIN_READ_NUMBERED <path> [start] [end]`: precte whitelisted soubor s realnymi cisly radku. Pouzivat pred presnymi patchemi.
 - `GATEWAY_ADMIN_APPLY_NOW`: aplikuje prilozeny unified diff na whitelisted soubory a provede validaci Python souboru.

@@ -112,6 +112,8 @@ class Filter:
             return self._direct_response(body, self._gateway_smoke(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CHECK_STACK"):
             return self._direct_response(body, self._check_ai_stack(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
+            return self._direct_response(body, self._workspace_action_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE"):
             return self._direct_response(body, self._run_workspace_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
@@ -1042,6 +1044,65 @@ class Filter:
             f"workspace={result.get('workspace', workspace)}\n"
             f"cwd={result.get('cwd', '(unknown)')}\n"
             f"command={self._shell_join(result.get('command', command))}\n"
+            f"exit_code={result.get('exit_code')}\n"
+            f"runner_exit_code={result.get('runner_exit_code')}\n"
+            f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
+            + self._details("output", output)
+        )
+
+    def _workspace_action_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_ACTION\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+        parts = shlex.split(m.group(1))
+        if len(parts) < 2:
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+
+        workspace = parts.pop(0)
+        action = parts.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+        if action not in {"install", "test", "build", "lint"}:
+            raise ValueError("Action must be one of install, test, build, lint")
+
+        timeout = 900
+        env_map = {}
+        dry_run = False
+        while parts:
+            opt = parts.pop(0)
+            if opt == "--timeout" and parts:
+                timeout = int(parts.pop(0))
+                continue
+            if opt == "--env" and parts:
+                item = parts.pop(0)
+                if "=" not in item:
+                    raise ValueError("--env expects KEY=VALUE")
+                key, value = item.split("=", 1)
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key):
+                    raise ValueError(f"Unsafe env key: {key}")
+                env_map[key] = value
+                continue
+            if opt == "--dry-run":
+                dry_run = True
+                continue
+            raise ValueError(f"Unknown GATEWAY_ADMIN_WORKSPACE_ACTION option: {opt}")
+
+        if timeout < 1 or timeout > 3600:
+            raise ValueError("Timeout must be between 1 and 3600 seconds")
+
+        payload = {"workspace": workspace, "action": action, "timeout": timeout, "dry_run": dry_run}
+        if env_map:
+            payload["env"] = env_map
+        result = self._gateway_admin_request("/v1/admin/workspace/action", payload, timeout=max(timeout + 45, 90))
+        output = self._trim(str(result.get("output", "")), 24000)
+        status = "WORKSPACE_ACTION_OK" if result.get("ok") else "WORKSPACE_ACTION_FAILED"
+        return (
+            f"{status}\n"
+            f"workspace={result.get('workspace', workspace)}\n"
+            f"action={result.get('action', action)}\n"
+            f"resolved_from={result.get('resolved_from', '(unknown)')}\n"
+            f"command={self._shell_join(result.get('command', []))}\n"
+            f"planned_only={result.get('planned_only', False)}\n"
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"

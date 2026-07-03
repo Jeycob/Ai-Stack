@@ -207,7 +207,7 @@ def direct_messages(payload_messages, workspace_name, snapshot, mode):
         "Normal chat is read-only: do not claim shell commands, package installs, key generation, "
         "GitHub repository creation, pushes, or file edits were executed. "
         "If the user asks to create, modify, install, generate keys, push, or run commands, first say clearly that you did not execute it. "
-        "Then explain that execution requires an explicit whitelisted admin/tool workflow. "
+        "Then explain that execution requires an audited capability workflow for that workspace. "
         "For build/edit requests, propose a plan or patch, but do not ask for OS basics already visible in the snapshot."
     )
     msgs = [{"role": "system", "content": system}, {"role": "system", "content": snapshot}]
@@ -646,6 +646,56 @@ def admin_run_workspace(payload):
     result["runner_exit_code"] = proc.returncode
     return result
 
+def admin_workspace_action(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    action = str(payload.get("action") or "").strip()
+    timeout = int(payload.get("timeout") or 900)
+    env_map = payload.get("env") or {}
+    dry_run = bool(payload.get("dry_run", False))
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
+    if action not in {"install", "test", "build", "lint"}:
+        raise ValueError("action must be one of install, test, build, lint")
+    if timeout < 1 or timeout > 3600:
+        raise ValueError("timeout must be between 1 and 3600")
+    if not isinstance(env_map, dict):
+        raise ValueError("env must be an object")
+
+    script = REPO_ROOT / "codex/bin/workspace_action.py"
+    if not script.is_file():
+        raise FileNotFoundError("codex/bin/workspace_action.py is missing")
+
+    cmd = [os.environ.get("PYTHON", "python3"), str(script), action, "--timeout", str(timeout), "--json"]
+    if dry_run:
+        cmd.append("--dry-run")
+    for key, value in env_map.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("env keys and values must be strings")
+        cmd.extend(["--env", f"{key}={value}"])
+    cmd.extend(["--workspace", workspace, "--workspaces-file", WORKSPACES_FILE])
+    proc = subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=max(timeout + 30, 60),
+    )
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        result = {
+            "ok": proc.returncode == 0,
+            "workspace": workspace,
+            "action": action,
+            "exit_code": proc.returncode,
+            "output": proc.stdout,
+        }
+    result["workspace"] = workspace
+    result["runner_exit_code"] = proc.returncode
+    return result
+
 def pid_running(pid):
     try:
         os.kill(pid, 0)
@@ -977,6 +1027,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_run_workspace(payload))
+            if self.path == "/v1/admin/workspace/action":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_workspace_action(payload))
             if self.path == "/v1/admin/stack/deploy":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)

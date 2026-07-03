@@ -90,7 +90,7 @@ Příklad rychlého read-only scanu workspace:
     repo: ai-stack
     GATEWAY_ADMIN_WORKSPACE_SCAN ai-stack
 
-Proč se běžný chat sám nepustí do akce: modely `codex-local-*` mají normální chat cestu schválně read-only. Umí číst snapshot workspace, vysvětlovat a navrhovat plán nebo patch. Rizikové akce jako shell, instalace balíčků, generování SSH klíčů, vytváření GitHub repozitářů, push a reálné editace souborů musí jít přes explicitní whitelisted admin/tool workflow. Gateway takový požadavek v běžném chatu zachytí a místo prázdné nebo zavádějící odpovědi vysvětlí, že nic neprovedla.
+Proč se běžný chat sám nepustí do akce: modely `codex-local-*` mají normální chat cestu schválně read-only. Umí číst snapshot workspace, vysvětlovat a navrhovat plán nebo patch. Rizikové akce jako shell, instalace balíčků, generování SSH klíčů, vytváření GitHub repozitářů, push a reálné editace souborů musí jít přes auditovaný capability workflow pro daný workspace. Gateway takový požadavek v běžném chatu zachytí a místo prázdné nebo zavádějící odpovědi vysvětlí, že nic neprovedla.
 
 Příklad vytvoření nového lokálního repozitáře, deploy SSH klíče a workspace:
 
@@ -120,6 +120,28 @@ Auto-tools filter to přeloží na:
     GATEWAY_ADMIN_RUN_WORKSPACE Test2 --timeout 300 -- git status --short --branch
 
 U nejběžnějších read-only repo akcí není nutné psát ani `spusť příkaz:`. Například `repo: Test2` a “zkontroluj git status” se přeloží na stejný workspace runner s `git status --short --branch`; “ukaž git remote” na `git remote -v`; “ukaž poslední commity” na `git log -5 --oneline`.
+
+Podobně existuje širší workflow i pro běžné developerské akce. Například:
+
+    repo: Test2
+    nainstaluj závislosti
+
+nebo:
+
+    repo: Test2
+    spusť testy
+
+Auto-tools filter to přeloží na:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_WORKSPACE_ACTION Test2 install --timeout 1800
+
+nebo:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_WORKSPACE_ACTION Test2 test --timeout 1800
+
+Resolver se dívá na manifesty workspace a volí přirozený příkaz pro daný stack, například `npm install`, `python -m pip install -r requirements.txt`, `cargo test`, `go test ./...` nebo `./gradlew test`. Když vhodný příkaz nenašel, vrátí auditovatelný `unsupported` výsledek místo předstírání úspěchu.
 
 Příklad čtení whitelisted souboru:
 
@@ -151,6 +173,11 @@ Příklad příkazu s delším timeoutem:
     repo: ai-stack
     GATEWAY_ADMIN_RUN_WORKSPACE ai-stack --timeout 120 -- python3 -m py_compile codex/gateway/gateway.py
 
+Příklad capability-based akce nad workspace:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_WORKSPACE_ACTION ai-stack lint --dry-run
+
 Příklad registrace nového workspace přes gateway admin endpoint:
 
     repo: ai-stack
@@ -170,7 +197,7 @@ Deploy skript nejdřív provede `git pull --ff-only`, ověří Python soubory a 
 
 Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `tail` nebo `log_tail` balí do rozbalovacích `<details>` bloků, aby chat zůstal čitelný. OpenWebUI raw HTML v Markdownu escapuje, proto `openwebui/loader.js` tyto doslovné bloky po vykreslení zprávy převádí na skutečné lokální dropdowny.
 
-`Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat přirozené požadavky a mapovat je na několik širších capability workflow. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`; “vytvoř nové repository Test2 a vygeneruj ssh klíč” přepíše na `GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart`; běžné repo kontroly jako git status/remote/log nebo explicitní “spusť příkaz:” v registrovaném workspace přepíše na `GATEWAY_ADMIN_RUN_WORKSPACE`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá auditovatelný admin workflow.
+`Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat přirozené požadavky a mapovat je na několik širších capability workflow. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`; “vytvoř nové repository Test2 a vygeneruj ssh klíč” přepíše na `GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart`; běžné repo kontroly jako git status/remote/log nebo explicitní “spusť příkaz:” v registrovaném workspace přepíše na `GATEWAY_ADMIN_RUN_WORKSPACE`; běžné developerské akce jako install/test/build/lint přepíše na `GATEWAY_ADMIN_WORKSPACE_ACTION`. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá auditovatelný admin workflow.
 
 System prompt pro stránku nastavení modelu v OpenWebUI je verzovaný v `docs/codex-local-model-system-prompt.md`. Jeho úloha je naučit model mluvit lidsky a nepodsouvat uživateli interní markery; skutečné provedení akcí má stále zajišťovat filter/tool vrstva.
 
