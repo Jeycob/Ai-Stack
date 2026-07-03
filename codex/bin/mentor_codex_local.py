@@ -132,7 +132,7 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
         }
         visible = f"repo: {args.workspace}\n{action_labels[args.action]}"
         technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_ACTION {args.workspace} {args.action} --timeout {args.timeout}"
-        if args.dry_run_action:
+        if getattr(args, "dry_run_action", False):
             technical += " --dry-run"
         return visible, technical
 
@@ -319,6 +319,40 @@ def choose_workflow(task: str) -> str:
     return classify_task(task)["workflow"]
 
 
+def extract_create_repo_name(task: str) -> str:
+    patterns = [
+        r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:nove|nové|new\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+        r"(?i)\b(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, task)
+        if match:
+            name = match.group(1).strip()
+            if name.lower() not in {"ai-stack", "smoke"}:
+                return name
+    return ""
+
+
+def wants_github_repo(task: str) -> bool:
+    lower = task.lower()
+    return "github" in lower or "git@github.com" in lower
+
+
+def infer_workspace_action(task: str) -> str:
+    lower = task.lower()
+    action_map = [
+        ("install", ("nainstaluj zavislosti", "nainstaluj závislosti", "install dependencies", "prepare environment")),
+        ("test", ("spust testy", "spusť testy", "run tests", "otestuj projekt")),
+        ("build", ("postav projekt", "build project", "udělej build", "udelej build", "spust build", "spusť build")),
+        ("lint", ("spust lint", "spusť lint", "run lint", "zkontroluj lint", "lint projekt")),
+        ("verify", ("over projekt", "ověř projekt", "zkontroluj projekt", "verify project", "proveď ověření", "proveď overeni")),
+    ]
+    for action, needles in action_map:
+        if any(needle in lower for needle in needles):
+            return action
+    return ""
+
+
 def classify_task(task: str) -> dict[str, str]:
     lower = task.lower()
     roadmap = load_capability_roadmap()
@@ -331,6 +365,9 @@ def classify_task(task: str) -> dict[str, str]:
         guardrail_summary: str,
         capability_id: str = "",
         missing_capability_hint: str = "",
+        action_name: str = "",
+        repo_name: str = "",
+        repo_github: str = "",
     ) -> dict[str, str]:
         capability = roadmap.get(capability_id, {}) if capability_id else {}
         return {
@@ -343,8 +380,51 @@ def classify_task(task: str) -> dict[str, str]:
             "capability_scope": str(capability.get("scope", "")),
             "capability_summary": str(capability.get("summary", "")),
             "missing_capability_hint": missing_capability_hint,
+            "action_name": action_name,
+            "repo_name": repo_name,
+            "repo_github": repo_github,
         }
 
+    repo_name = extract_create_repo_name(task)
+    if repo_name:
+        return result(
+            "capability",
+            "create-repo",
+            "The task directly asks for repository bootstrap, which already matches an audited create-repo capability flow.",
+            "high",
+            "Repository bootstrap is broader than a tiny patch, but it is still a named audited workflow and does not need a generic unrestricted runtime.",
+            "workspace_repo_bootstrap",
+            "If repo bootstrap later grows into package install, service wiring, or GitHub release automation, split that into the next audited capability instead of widening create-repo.",
+            repo_name=repo_name,
+            repo_github="yes" if wants_github_repo(task) else "no",
+        )
+    if any(
+        token in lower
+        for token in (
+            "pullni ai-stack",
+            "pullnout ai-stack",
+            "nasad ai-stack",
+            "nasaď ai-stack",
+            "aktualizuj stack",
+            "update stack",
+            "deploy ai-stack",
+            "restartni stack",
+            "restartni openwebui",
+            "restartuj openwebui",
+            "restart gateway",
+            "self-deploy",
+            "self deploy",
+        )
+    ):
+        return result(
+            "capability",
+            "deploy",
+            "The task is an ai-stack deployment/restart request and fits the dedicated audited deploy workflow.",
+            "high",
+            "Stack restart is broader than repo-safe editing, but we already have a named deploy flow with preflight, restart, and smoke checks.",
+            "stack_deploy",
+            "If deployment later needs host package changes or wider infra orchestration, add a dedicated stack-runtime capability instead of widening deploy blindly.",
+        )
     if any(token in lower for token in ("github actions", "create github repo", "vytvor github", "pushni do githubu", "release", "publish package")):
         return result(
             "capability",
@@ -364,6 +444,19 @@ def classify_task(task: str) -> dict[str, str]:
             "Current repo-safe and workspace-safe flows are not enough for host-level package/service changes without an explicit audited runtime capability.",
             "host_runtime_package_install",
             "Add or invoke a dedicated host-runtime capability for package installs or service restarts instead of broadening workspace execution implicitly.",
+        )
+
+    action_name = infer_workspace_action(task)
+    if action_name:
+        return result(
+            "capability",
+            "action",
+            "The task explicitly requests a standard workspace capability step, so we can route it directly instead of stopping at audit-only review.",
+            "high",
+            "Install/test/build/lint/verify are already bounded workspace capabilities, so broader runtime access is unnecessary here.",
+            "next_workspace_capability",
+            "If the requested step needs more than the standard workspace capability set, expose that next capability explicitly instead of widening action flow.",
+            action_name=action_name,
         )
 
     if any(token in lower for token in ("git status", "git remote", "git log", "spusť příkaz:", "spust prikaz:", "run command")):
@@ -923,7 +1016,16 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
         return build_and_invoke_mode(run_args)
 
     routed = argparse.Namespace(**vars(args))
-    routed.mode = workflow
+    if workflow == "action":
+        routed.mode = "action"
+        routed.action = decision["action_name"]
+    elif workflow == "create-repo":
+        routed.mode = "create-repo"
+        routed.name = decision["repo_name"]
+        routed.github = decision["repo_github"] == "yes"
+        routed.restart = True
+    else:
+        routed.mode = workflow
     routed.mentor_visible_context = visible_brief_block(decision, args.workspace, args.task)
     routed.mentor_technical_context = "MENTOR_EXECUTION_BRIEF\n" + execution_brief_block(decision, args.workspace, args.task)
     return build_and_invoke_mode(routed)
@@ -949,6 +1051,15 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
     if workflow == "run":
         command = extract_run_command(task)
         return f"python3 codex/bin/mentor_codex_local.py delegate {workspace} $'repo: {workspace}\\nspusť příkaz: {command}'" if command else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+    if workflow == "action":
+        action_name = decision.get("action_name", "")
+        return f"python3 codex/bin/mentor_codex_local.py action {workspace} {action_name}" if action_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+    if workflow == "create-repo":
+        repo_name = decision.get("repo_name", "")
+        github_flag = " --github" if decision.get("repo_github") == "yes" else ""
+        return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+    if workflow == "deploy":
+        return "python3 codex/bin/mentor_codex_local.py deploy"
     if workflow == "apply-safe":
         return f"python3 codex/bin/mentor_codex_local.py apply-safe {workspace}"
     if workflow == "improve":
@@ -962,6 +1073,23 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
     workflow = decision["workflow"]
     if workflow == "run":
         return task if task.lower().startswith("repo: ") else f"repo: {workspace}\n{task}"
+    if workflow == "action":
+        action_name = decision.get("action_name", "")
+        action_prompts = {
+            "install": "Nainstaluj závislosti a vrať stručný výsledek.",
+            "test": "Spusť testy a vrať stručný výsledek.",
+            "build": "Spusť build a vrať stručný výsledek.",
+            "lint": "Spusť lint a vrať stručný výsledek.",
+            "verify": "Ověř projekt a vrať stručný audit výsledků.",
+        }
+        return f"repo: {workspace}\n{action_prompts.get(action_name, task)}"
+    if workflow == "create-repo":
+        repo_name = decision.get("repo_name", "")
+        if repo_name:
+            suffix = " a rovnou připrav i GitHub remote." if decision.get("repo_github") == "yes" else "."
+            return f"repo: ai-stack\nVytvoř nové repository {repo_name}{suffix}"
+    if workflow == "deploy":
+        return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
     if workflow == "apply-safe":
         return f"repo: {workspace}\nUprav malý bezpečný patch a auditovaně ho aplikuj."
     if workflow == "improve":
@@ -992,6 +1120,17 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
         lines.append("goal=run audited workspace command and summarize output")
         if command:
             lines.append(f"command_hint={command}")
+    elif workflow == "action":
+        action_name = decision.get("action_name", "")
+        lines.append(f"goal=execute audited workspace action {action_name or 'capability'} and summarize the outcome")
+        lines.append("guardrail=stay inside the standard workspace capability set and stop before broader runtime changes")
+    elif workflow == "create-repo":
+        repo_name = decision.get("repo_name", "")
+        lines.append(f"goal=bootstrap repository {repo_name or '(unspecified)'} through the audited create-repo workflow")
+        lines.append("guardrail=use repo bootstrap capability instead of broad host/runtime mutation")
+    elif workflow == "deploy":
+        lines.append("goal=run the audited ai-stack deploy flow with pull, restart, and smoke checks")
+        lines.append("guardrail=prefer named deploy flow over ad-hoc docker or root commands")
     elif workflow == "apply-safe":
         lines.append("goal=prepare and apply a minimal safe patch inside the guarded ai-stack scope")
         lines.append("guardrail=stay inside safe files and validate the diff before apply")
@@ -1172,6 +1311,25 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
         steps.append(("delegate", recommended_next_step(decision, workspace, task)))
         return steps
 
+    if workflow == "action":
+        steps.append(("action", recommended_next_step(decision, workspace, task)))
+        if capability_id:
+            steps.append(("capability-watch", f"if the standard action scope is not enough, consider capability: {capability_id}"))
+        return steps
+
+    if workflow == "create-repo":
+        steps.append(("create-repo", recommended_next_step(decision, workspace, task)))
+        if decision.get("repo_github") == "yes":
+            steps.append(("post-create", "verify GitHub remote, deploy key, and workspace registration"))
+        else:
+            steps.append(("post-create", "verify workspace registration and initial git status"))
+        return steps
+
+    if workflow == "deploy":
+        steps.append(("deploy", "python3 codex/bin/mentor_codex_local.py deploy"))
+        steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
+        return steps
+
     if workflow == "apply-safe":
         steps.append(("apply-safe", f"python3 codex/bin/mentor_codex_local.py apply-safe {workspace}"))
         steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
@@ -1306,6 +1464,24 @@ def run_next_helper_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_boundary_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    print(f"MENTOR_BOUNDARY_WORKSPACE={args.workspace}")
+    print(f"MENTOR_BOUNDARY_TASK={args.task}")
+    print(f"MENTOR_BOUNDARY_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_BOUNDARY_RUNTIME_PROFILE={decision['runtime_profile']}")
+    print(f"MENTOR_BOUNDARY_CONFIDENCE={decision['confidence']}")
+    print(f"MENTOR_BOUNDARY_REASON={decision['reason']}")
+    print(f"MENTOR_BOUNDARY_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"MENTOR_BOUNDARY_CAPABILITY_ID={decision['capability_id']}")
+    print(f"MENTOR_BOUNDARY_CAPABILITY_SCOPE={decision['capability_scope']}")
+    print(f"MENTOR_BOUNDARY_CAPABILITY_SUMMARY={decision['capability_summary']}")
+    print(f"MENTOR_BOUNDARY_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+    print(f"MENTOR_BOUNDARY_NEXT_HELPER={recommended_next_step(decision, args.workspace, args.task)}")
+    print_execution_brief("MENTOR_BOUNDARY", decision, args.workspace, args.task)
+    return 0
+
+
 def run_brief_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"MENTOR_BRIEF_WORKSPACE={args.workspace}")
@@ -1339,6 +1515,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_plan_sequence(args)
     if args.mode == "next-helper":
         return run_next_helper_sequence(args)
+    if args.mode == "boundary":
+        return run_boundary_sequence(args)
     if args.mode == "brief":
         return run_brief_sequence(args)
     if args.mode == "top":
@@ -1460,6 +1638,11 @@ def parse_args() -> argparse.Namespace:
     next_helper.add_argument("--tasks", action="append", default=[], help="Task text; can be repeated")
     next_helper.add_argument("--task-file", help="Path to a newline-delimited task file")
     next_helper.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; next-helper mode never calls OpenWebUI")
+
+    boundary = sub.add_parser("boundary", help="Explain current guardrails, capability scope, and what blocks a wider action for a task")
+    boundary.add_argument("workspace")
+    boundary.add_argument("task")
+    boundary.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; boundary mode never calls OpenWebUI")
 
     brief = sub.add_parser("brief", help="Produce a minimal execution brief for a task: tiny mentor context, next helper, and guardrails")
     brief.add_argument("workspace")

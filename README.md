@@ -298,7 +298,7 @@ Když chceš jen rychle zjistit, jakou šířku pravomocí by helper pro úkol z
 
     python3 codex/bin/mentor_codex_local.py profile ai-stack "Uprav README a aplikuj malý patch"
 
-`profile` a `delegate` navíc nově vrací i `confidence`, `guardrail_summary` a `missing_capability_hint`, takže je hned vidět, proč helper zůstal v review scope, kdy mu stačí capability runner, kdy už je rozumné přejít do safe patch nebo širšího `improve` flow, a jaká přesná capability vrstva ještě chybí, pokud je úkol širší než současné guardraily.
+`profile` a `delegate` navíc nově vrací i `confidence`, `guardrail_summary` a `missing_capability_hint`, takže je hned vidět, proč helper zůstal v review scope, kdy mu stačí capability runner, kdy už je rozumné přejít do safe patch nebo širšího `improve` flow, a jaká přesná capability vrstva ještě chybí, pokud je úkol širší než současné guardraily. Zároveň už helper není zbytečně úzký u přímých capability úkolů: požadavky typu `spusť testy`, `nainstaluj závislosti`, `ověř projekt`, `vytvoř repository Test2` nebo `pullni ai-stack a nasaď` umí klasifikovat rovnou na auditované workflow `action`, `create-repo` nebo `deploy`, místo aby končil jen obecným `audit`.
 
 Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.
 
@@ -323,6 +323,10 @@ Stejný brief už jde nově vyžádat i přirozeně přes OpenWebUI chat. Požad
 Když chceš ještě menší odpověď a jde ti jen o další praktický krok, použij `next-helper`: vrátí pouze nejlepší další helper command, důvod a malý execution brief.
 
     python3 codex/bin/mentor_codex_local.py next-helper ai-stack "Fixni to a dotáhni co zvládneš."
+
+Když naopak potřebuješ vysvětlit, proč helper nezvolil širší akci a co ho brzdí, použij `boundary`: vrátí guardrail summary, capability scope, missing capability hint a další doporučený helper krok.
+
+    python3 codex/bin/mentor_codex_local.py boundary ai-stack "Vytvoř release a pushni to na GitHub"
 
 Když už máš víc úkolů najednou a chceš, aby si helper sám srovnal pořadí a šířku pravomocí, použij `backlog`. Nad každým taskem udělá stejnou klasifikaci jako `profile/report/plan`, ale vrátí prioritizovanou frontu s `NEXT_HELPER`, `PLAN_CMD` a připraveným audit chat promptem:
 
@@ -357,6 +361,10 @@ Když chceš ještě levnější variantu jen pro “co je první a proč”, po
 I tohle už jde přirozeně z OpenWebUI chatu: když uživatel napíše více bodů a otázku typu `Co má dělat jako první?`, `Který úkol je první?`, `Jaký je top task?` nebo `Proč je to první?`, filter to přeloží na lehký `mentor_codex_local.py top`. Když místo toho napíše `Jen doporuč první krok bez spuštění`, stále se použije `dispatch --recommend-only`.
 
 Podobně i pro single-task otázky typu `Jaký helper mám spustit dál pro ...?`, `Co mám pustit dál pro ...?` nebo `next helper for ...` filter nově routuje na `mentor_codex_local.py next-helper`.
+
+Stejně tak už jde přirozeně vyžádat i guardrail vysvětlení: formulace typu `Proč to nejde pro ...?`, `Jaké guardraily platí pro ...?`, `Jaká capability chybí pro ...?` nebo `Why can't it do this for ...?` filter přeloží na `mentor_codex_local.py boundary`.
+
+Tohle je důležitý směr celé autonomie: méně jednorázových whitelist markerů a víc širších auditovaných capability scope. V praxi to znamená, že codex-local má být samostatnější hlavně u standardních workflow, která už máme pojmenovaná a ohraničená, ne přes neomezený shell.
 
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 

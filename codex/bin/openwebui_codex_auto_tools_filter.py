@@ -108,6 +108,8 @@ class Filter:
 
         command = self._natural_workspace_brief_command(text)
         if not command:
+            command = self._natural_workspace_boundary_command(text)
+        if not command:
             command = self._natural_workspace_next_helper_command(text)
         if not command:
             command = self._natural_workspace_top_command(text)
@@ -237,6 +239,90 @@ class Filter:
         if not task:
             return None
         return self._brief_helper_command(workspace, task)
+
+    def _boundary_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "boundary",
+            workspace,
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _extract_boundary_task(self, text: str) -> str | None:
+        patterns = [
+            r"(?is)\b(?:proc|proč)\s+(?:to\s+)?(?:nejde|nelze)\b.*?\bpro\s+(.+?)\s*$",
+            r"(?is)\b(?:jake|jaké|jaky|jaký)\s+guardraily\b.*?\bpro\s+(.+?)\s*$",
+            r"(?is)\b(?:jaka|jaká|jaky|jaký)\s+capability\b.*?\bchybi\b.*?\bpro\s+(.+?)\s*$",
+            r"(?is)\b(?:why\s+can't|why\s+cant|why\s+not)\b.*?\bfor\s+(.+?)\s*$",
+            r"(?is)\b(?:sirsi|širší)\s+scope\b.*?\bpro\s+(.+?)\s*$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                candidate = match.group(1).strip().strip("\"'")
+                candidate = re.sub(r"(?i)^(?:task|ukol|úkol)\s*:\s*", "", candidate).strip()
+                candidate = candidate.rstrip("?. ")
+                if candidate:
+                    return candidate
+
+        lines = self._non_repo_lines(text)
+        filtered = []
+        for line in lines:
+            lower = line.lower()
+            if any(
+                needle in lower
+                for needle in (
+                    "proc to nejde",
+                    "proč to nejde",
+                    "proc to nelze",
+                    "proč to nelze",
+                    "jake guardraily",
+                    "jaké guardraily",
+                    "jaka capability chybi",
+                    "jaká capability chybí",
+                    "sirsi scope",
+                    "širší scope",
+                    "why can't",
+                    "why cant",
+                    "why not",
+                )
+            ):
+                continue
+            filtered.append(line)
+        if filtered:
+            return " ".join(filtered)
+        return None
+
+    def _natural_workspace_boundary_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        if not any(
+            needle in lower
+            for needle in (
+                "proc to nejde",
+                "proč to nejde",
+                "proc to nelze",
+                "proč to nelze",
+                "jake guardraily",
+                "jaké guardraily",
+                "jaka capability chybi",
+                "jaká capability chybí",
+                "sirsi scope",
+                "širší scope",
+                "why can't",
+                "why cant",
+                "why not",
+            )
+        ):
+            return None
+        task = self._extract_boundary_task(text)
+        if not task:
+            return None
+        return self._boundary_helper_command(workspace, task)
 
     def _next_helper_command(self, workspace: str, task: str) -> str:
         command = [

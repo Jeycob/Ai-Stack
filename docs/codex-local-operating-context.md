@@ -211,6 +211,12 @@ Priklad ultra-levkeho helper navadeni, kdy chceme jen dalsi konkretni command be
 python3 codex/bin/mentor_codex_local.py next-helper ai-stack "Fixni to a dotahni co zvladnes."
 ```
 
+Priklad guardrail/capability-boundary vysvetleni, kdy chceme vedet proc helper nevolil sirsi akci:
+
+```bash
+python3 codex/bin/mentor_codex_local.py boundary ai-stack "Vytvor release a pushni to na GitHub"
+```
+
 Priklad mentor planu, ktery z jednoho tasku vrati kratkou 2-4 krokovou posloupnost:
 
 ```bash
@@ -275,7 +281,16 @@ Next-helper vraci:
 - `MENTOR_NEXT_HELPER_REASON`: proc je tenhle helper dalsi spravna volba.
 - `MENTOR_NEXT_HELPER_EXECUTION_BRIEF`: nejmensi mentor payload pro dalsi krok.
 
+Boundary vraci:
+
+- `MENTOR_BOUNDARY_GUARDRAIL_SUMMARY`: proc dnesni scope staci nebo nestaci.
+- `MENTOR_BOUNDARY_CAPABILITY_SCOPE`: na jaky capability scope task narazi.
+- `MENTOR_BOUNDARY_MISSING_CAPABILITY_HINT`: jaky dalsi capability scope by daval smysl pridat nebo explicitne pouzit.
+- `MENTOR_BOUNDARY_NEXT_HELPER`: jaky helper ma smysl pustit dal misto slepeho rozsirovani pravomoci.
+
 `delegate` navic tenhle execution brief nese dal i do dalsich helper promptu. Prakticky to znamena, ze pri prechodu z `dispatch` nebo `delegate` do `audit`/`autopilot`/`improve` uz dalsi modelovy krok nedostane jen obecny workflow prompt, ale i maly stabilni kontext ve visible casti (`Mentor brief:`) a v technicke casti (`MENTOR_EXECUTION_BRIEF`).
+
+Stejny princip plati i pro sirsi capability flow: helper nema zustavat zbytecne uzky u tasku, ktere uz umi auditovane provest. Proto dnes umi klasifikovat i prime capability pozadavky typu `spust testy`, `nainstaluj zavislosti`, `over projekt`, `vytvor repository Test2` nebo `pullni ai-stack a nasad` rovnou na workflow `action`, `create-repo` nebo `deploy`, misto toho aby vsechno shazoval do obecneho `audit`.
 
 `openwebui_codex_auto_tools_filter.py` umi tenhle use-case uz i prirozene routovat z chatu: kdyz uzivatel napise `repo: <workspace>` a pozadavek typu `Dej mi kratky mentor brief pro ...`, `Jaky brief ma dostat model pro ...` nebo `execution brief`, filter to prelozi na `mentor_codex_local.py brief` pres `GATEWAY_ADMIN_RUN_WORKSPACE`.
 
@@ -312,7 +327,7 @@ Top navic vraci:
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 
-`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi ze single-task nebo vice-task promptu vyrobit brief, next-helper, backlog, dispatch nebo top helper call, takze codex-local dostane i lehkou prioritizacni a mentor vrstvu bez rucniho skladani admin markeru.
+`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi ze single-task nebo vice-task promptu vyrobit brief, next-helper, boundary, backlog, dispatch nebo top helper call, takze codex-local dostane i lehkou prioritizacni a mentor vrstvu bez rucniho skladani admin markeru.
 
 Aktualni runtime profily:
 
@@ -320,6 +335,11 @@ Aktualni runtime profily:
 - `capability`: auditovane capability kroky typu `run`, `install`, `test`, `build`, `lint`, `verify`, `autopilot`.
 - `safe_patch`: maly patch v omezenem ai-stack safe scope.
 - `runtime`: sirsi agenticky posun projektu, typicky `improve`, tedy capability first a patch az kdyz je to potreba.
+
+Aktualni capability-roadmap registry nově rozlisuje i:
+
+- `workspace_repo_bootstrap`: bootstrap noveho repo/workspace vcetne SSH klice a pripadneho GitHub remote.
+- `stack_deploy`: auditovany ai-stack deploy flow pro pull, restart a smoke checky.
 
 ## Pro nove nastroje
 

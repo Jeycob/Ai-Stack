@@ -17,6 +17,14 @@
       "scope": "workspace_capability",
       "summary": "Dalsi pojmenovany capability krok pro workspace, kdy je potreba rozsireni nad install/test/build/lint bez slepeho rozsirovani autopilota."
     },
+    "workspace_repo_bootstrap": {
+      "scope": "workspace_bootstrap",
+      "summary": "Auditovana bootstrap vrstva pro zalozeni noveho lokalniho nebo GitHub-backed repository, generovani deploy SSH klice a registraci workspace."
+    },
+    "stack_deploy": {
+      "scope": "stack_runtime",
+      "summary": "Auditovany ai-stack deploy flow pro git pull, restart gateway/OpenWebUI a nasledne smoke checky bez potreby ad-hoc root prikazu v chatu."
+    },
     "clarify_or_infer_capability": {
       "scope": "mentoring",
       "summary": "Nejužší mentoring krok pro nejednoznacne zadani: nejdriv audit, upresneni nebo inference dalsi capability, az pak rozsirovani scope."
