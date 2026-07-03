@@ -49,21 +49,29 @@ def check(condition: bool, message: str) -> None:
         raise SmokeError(message)
 
 
+def assistant_text(data: dict[str, Any]) -> str:
+    choices = data.get("choices") or []
+    return choices[0].get("message", {}).get("content", "") if choices else ""
+
+
 def test_health(base_url: str, timeout: float) -> None:
-    log("[1/5] GET /health")
+    log("[1/6] GET /health")
     data = request_json("GET", f"{base_url}/health", timeout)
     check(data.get("ok") is True, f"health response is not ok: {data}")
+    check(data.get("capability_mode") == "agent-first", f"unexpected capability mode: {data}")
+    check(data.get("natural_codex_local_route") == "agent_loop", f"unexpected natural route: {data}")
+    check(bool(data.get("runtime_fingerprint")), f"missing runtime_fingerprint in health payload: {data}")
 
 
 def test_models(base_url: str, timeout: float, model: str) -> None:
-    log("[2/5] GET /v1/models")
+    log("[2/6] GET /v1/models")
     data = request_json("GET", f"{base_url}/v1/models", timeout)
     models = [item.get("id") for item in data.get("data", []) if isinstance(item, dict)]
     check(model in models, f"model {model!r} not found in {models}")
 
 
 def test_workspaces(base_url: str, timeout: float, workspace: str) -> None:
-    log("[3/5] GET /v1/workspaces")
+    log("[3/6] GET /v1/workspaces")
     data = request_json("GET", f"{base_url}/v1/workspaces", timeout)
     workspaces = data.get("workspaces") or {}
     check(isinstance(workspaces, dict), f"workspaces is not a dict: {data}")
@@ -79,16 +87,30 @@ def chat_payload(model: str, workspace: str, prompt: str, stream: bool) -> dict[
 
 
 def test_chat(base_url: str, timeout: float, model: str, workspace: str) -> None:
-    log("[4/5] POST /v1/chat/completions stream=false")
+    log("[4/6] POST /v1/chat/completions stream=false")
     payload = chat_payload(model, workspace, "Odpovez jednim slovem: ok", False)
     data = request_json("POST", f"{base_url}/v1/chat/completions", timeout, payload)
-    choices = data.get("choices") or []
-    content = choices[0].get("message", {}).get("content", "") if choices else ""
+    content = assistant_text(data)
     check(isinstance(content, str) and content.strip(), f"empty non-stream response: {data}")
 
 
+def test_codex_local_natural_agent_loop(base_url: str, timeout: float, model: str, workspace: str) -> None:
+    log("[5/6] POST /v1/chat/completions natural codex-local review")
+    payload = chat_payload(
+        model,
+        workspace,
+        "Prohlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni stručný závěr.",
+        False,
+    )
+    data = request_json("POST", f"{base_url}/v1/chat/completions", timeout, payload)
+    content = assistant_text(data)
+    check("AGENT_LOOP" in content, f"natural codex-local prompt did not route through agent loop: {content[:500]!r}")
+    check("planner_source=" in content, f"agent loop response is missing planner_source: {content[:500]!r}")
+    check("workflow=review" in content, f"natural codex-local review did not resolve to review workflow: {content[:500]!r}")
+
+
 def test_stream(base_url: str, timeout: float, model: str, workspace: str) -> None:
-    log("[5/5] POST /v1/chat/completions stream=true")
+    log("[6/6] POST /v1/chat/completions stream=true")
     payload = chat_payload(model, workspace, "Odpovez tremi kratkymi slovy: stream smoke ok", True)
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
@@ -137,6 +159,7 @@ def main() -> int:
         test_models(base_url, args.timeout, args.model)
         test_workspaces(base_url, args.timeout, args.workspace)
         test_chat(base_url, args.timeout, args.model, args.workspace)
+        test_codex_local_natural_agent_loop(base_url, args.timeout, args.model, args.workspace)
         test_stream(base_url, args.timeout, args.model, args.workspace)
     except SmokeError as exc:
         print(f"SMOKE FAILED: {exc}", file=sys.stderr)

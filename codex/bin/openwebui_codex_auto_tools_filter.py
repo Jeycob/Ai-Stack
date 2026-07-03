@@ -116,6 +116,60 @@ class Filter:
             return
         msg["content"] = text
 
+    def _agent_loop_admin_command(self, workspace: str, task: str) -> str:
+        target = (workspace or "ai-stack").strip() or "ai-stack"
+        prompt = " ".join(str(task or "").split()).strip()
+        if not prompt:
+            prompt = "Analyzuj projekt a navrhni další bezpečný capability krok."
+        return f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(target)} -- {shlex.quote(prompt[:3000])}"
+
+    def _mentor_helper_task(self, workspace: str, mode: str, *args: str) -> str:
+        workspace = (workspace or "ai-stack").strip() or "ai-stack"
+        parts = [str(item).strip() for item in args if str(item).strip()]
+        task = parts[0] if parts else ""
+        lower_task = task.lower()
+
+        if mode == "brief":
+            return task or f"Shrň stručný execution brief pro workspace {workspace}."
+        if mode == "review":
+            return task or f"Proveď review workspace {workspace}. Nic needituj. Najdi hlavní rizika a navrhni další krok."
+        if mode == "boundary":
+            return task or f"Popiš boundary a capability hranice workspace {workspace}. Nic needituj."
+        if mode == "profile":
+            return task or f"Analyzuj runtime/capability profil workspace {workspace}. Nic needituj."
+        if mode == "report":
+            return task or f"Vytvoř kompaktní technický report pro workspace {workspace}. Nic needituj."
+        if mode == "plan":
+            return task or f"Připrav krátký sekvenční plán pro workspace {workspace}. Nic needituj."
+        if mode == "scaffold-plan":
+            return task or f"Navrhni scaffold/bootstrap plán pro workspace {workspace}. Nic needituj."
+        if mode == "next-helper":
+            return task or f"Urči další nejlepší capability krok pro workspace {workspace}. Nic needituj."
+        if mode == "release-prep":
+            return f"Zkontroluj release readiness workspace {workspace}, shrň blokery a navrhni další krok."
+        if mode == "publish-plan":
+            return f"Připrav publish plán pro workspace {workspace} a navrhni další auditované kroky."
+        if mode == "deploy":
+            return "Pullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
+        if mode == "push-check":
+            return "Zkontroluj, jestli jsou změny připravené na push, a stručně řekni co případně blokuje publish."
+        if mode == "push":
+            return "Commitni povolené změny a pushni je do GitHubu. Po dokončení napiš stručný stav."
+        if mode == "web-answer":
+            return task or "Odpověz na veřejnou webovou otázku a vrať stručný výsledek."
+        if mode == "web-fetch":
+            return task or "Načti veřejný web a vrať stručný textový výsledek."
+        if mode == "create-repo":
+            github = any(part == "--github" for part in parts[1:])
+            repo_name = task or workspace
+            suffix = " a připrav i GitHub remote." if github else "."
+            return f"Vytvoř nové repository {repo_name}{suffix}"
+        if mode == "bootstrap-dispatch":
+            if "--execute" in parts[1:] or "pust" in lower_task or "rozbeh" in lower_task or "rozběh" in lower_task:
+                return task or f"Bootstrapuj workspace {workspace} a pokračuj nejbližším bezpečným capability krokem."
+            return task or f"Navrhni bootstrap první krok pro workspace {workspace}."
+        return task or f"Analyzuj workspace {workspace} a pokračuj nejbližším bezpečným capability krokem."
+
     def _mentor_helper_command(
         self,
         workspace: str,
@@ -124,12 +178,12 @@ class Filter:
         timeout: int = 120,
         stateless: bool = True,
     ) -> str:
-        command = ["python3", "codex/bin/mentor_codex_local.py", mode]
-        if stateless:
-            command.append("--stateless-turns")
-        command.append(workspace)
-        command.extend(args)
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout {timeout} -- {shlex.join(command)}"
+        del timeout, stateless
+        task = self._mentor_helper_task(workspace, mode, *args)
+        target_workspace = workspace
+        if mode in {"create-repo", "bootstrap-dispatch", "deploy", "push", "push-check"}:
+            target_workspace = "ai-stack"
+        return self._agent_loop_admin_command(target_workspace, task)
 
     def _looks_like_read_only_repo_analysis(self, text: str) -> bool:
         workspace = self._workspace_from_text(text)
@@ -606,10 +660,12 @@ class Filter:
         return self._mentor_helper_command(workspace, "scaffold-plan", task, timeout=120)
 
     def _bootstrap_dispatch_helper_command(self, workspace: str, task: str, execute: bool = True) -> str:
-        built = ["python3", "codex/bin/mentor_codex_local.py", "bootstrap-dispatch", "--stateless-turns", workspace, task, "--timeout", "1800"]
+        prompt = task or f"Bootstrapuj workspace {workspace}."
         if execute:
-            built.append("--execute")
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 1800 -- {shlex.join(built)}"
+            prompt = prompt.rstrip(".") + " Pokračuj nejbližším bezpečným capability krokem a vrať konkrétní výsledek."
+        else:
+            prompt = prompt.rstrip(".") + " Navrhni první bootstrap krok. Nic ještě nespouštěj."
+        return self._agent_loop_admin_command("ai-stack", prompt)
 
     def _natural_workspace_bootstrap_dispatch_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -815,19 +871,16 @@ class Filter:
         return self._next_helper_command(workspace, task)
 
     def _mentor_tasks_helper_command(self, mode: str, workspace: str, tasks: list[str], recommend_only: bool = False) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            mode,
-            "--stateless-turns",
-            workspace,
-        ]
+        joined = "\n".join(f"- {task.strip()}" for task in tasks if task.strip())
+        if mode == "top":
+            prompt = f"Ve workspace {workspace} vyber z těchto úkolů ten nejdůležitější a stručně zdůvodni pořadí:\n{joined}"
+        elif mode == "dispatch":
+            prompt = f"Ve workspace {workspace} vyber další capability krok nad tímto backlogem a stručně zdůvodni volbu:\n{joined}"
+        else:
+            prompt = f"Ve workspace {workspace} analyzuj tento backlog a navrhni další krok:\n{joined}"
         if recommend_only:
-            command.append("--recommend-only")
-        task_flag = "--tasks" if mode in {"dispatch", "top"} else "--task"
-        for task in tasks:
-            command.extend([task_flag, task])
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 180 -- {shlex.join(command)}"
+            prompt += "\nNic nespouštěj, jen doporuč další bezpečný capability krok."
+        return self._agent_loop_admin_command(workspace, prompt)
 
     def _natural_workspace_top_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -1341,7 +1394,7 @@ class Filter:
         return shlex.quote("Update ai-stack via codex-local")
 
     def _bootstrap_improve_helper_command(self, task: str) -> str:
-        return self._mentor_helper_command("ai-stack", "bootstrap-improve", task, timeout=240)
+        return f"GATEWAY_ADMIN_AGENT_LOOP ai-stack -- {shlex.quote(task[:3000])}"
 
     def _natural_workspace_ssh_key_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -1626,7 +1679,10 @@ class Filter:
         return None
 
     def _delegate_helper_command(self, workspace: str, task: str) -> str:
-        return self._mentor_helper_command(workspace, "delegate", task, timeout=180)
+        # Route broad "take it from here" prompts straight into the capability-first
+        # agent loop. The older nested mentor helper path could recurse back into
+        # OpenWebUI visible-chat helpers and stall on chat GET/POST timeouts.
+        return f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(workspace)} -- {shlex.quote(task[:3000])}"
 
     def _natural_workspace_delegate_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)

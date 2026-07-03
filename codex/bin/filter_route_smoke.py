@@ -85,14 +85,14 @@ LEGACY_SCENARIOS: tuple[RouteScenario, ...] = (
     RouteScenario(
         name="follow-through-delegate",
         prompt="repo: ai-stack\nNavrhni dalsi krok a dotahni co pujde.",
-        expected=("GATEWAY_ADMIN_RUN_WORKSPACE ai-stack", "mentor_codex_local.py delegate --stateless-turns ai-stack"),
-        unexpected=("GATEWAY_ADMIN_WORKSPACE_AUTOPILOT ai-stack --recommend-only",),
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "Navrhni dalsi krok a dotahni co pujde."),
+        unexpected=("GATEWAY_ADMIN_WORKSPACE_AUTOPILOT ai-stack --recommend-only", "mentor_codex_local.py delegate"),
     ),
     RouteScenario(
         name="autonomous-delegate",
         prompt="repo: ai-stack\nFixni to a udelej maximum, co pujde.",
-        expected=("GATEWAY_ADMIN_RUN_WORKSPACE ai-stack", "mentor_codex_local.py delegate --stateless-turns ai-stack"),
-        unexpected=("GATEWAY_ADMIN_WORKSPACE_AUTOPILOT ai-stack",),
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "Fixni to a udelej maximum, co pujde."),
+        unexpected=("GATEWAY_ADMIN_WORKSPACE_AUTOPILOT ai-stack", "mentor_codex_local.py delegate"),
     ),
     RouteScenario(
         name="simple-create-repo",
@@ -127,8 +127,8 @@ LEGACY_SCENARIOS: tuple[RouteScenario, ...] = (
     RouteScenario(
         name="bootstrap-improve",
         prompt="Vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus to rozbehnout.",
-        expected=("mentor_codex_local.py bootstrap-improve --stateless-turns ai-stack", "React appku"),
-        unexpected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart",),
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "React appku"),
+        unexpected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart", "mentor_codex_local.py bootstrap-improve"),
     ),
     RouteScenario(
         name="read-only-architecture-analysis-stays-direct",

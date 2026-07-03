@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+from container_runner_guard import inspect_container_state
 from workspace_scan import collect, load_workspace
 
 
@@ -37,6 +38,34 @@ SMOKE_READY_PATTERNS = [
 
 class ActionError(RuntimeError):
     pass
+
+
+class RunnerBoundaryError(ActionError):
+    def __init__(
+        self,
+        *,
+        workspace: str,
+        runner: str,
+        container: str,
+        cwd: str,
+        command: list[str],
+        executed_command: list[str],
+        marker: str,
+        error: str,
+        recovery: str,
+        output: str,
+    ) -> None:
+        super().__init__(recovery)
+        self.workspace = workspace
+        self.runner = runner
+        self.container = container
+        self.cwd = cwd
+        self.command = command
+        self.executed_command = executed_command
+        self.marker = marker
+        self.error = error
+        self.recovery = recovery
+        self.output = output
 
 
 def command_available(command: list[str], root: Path) -> bool:
@@ -218,6 +247,20 @@ def run_dev_command(
     if runner == "container":
         if not workspace:
             raise ActionError("Container runner requires --workspace, not --root.")
+        state = inspect_container_state(workspace)
+        if not state.get("ok"):
+            raise RunnerBoundaryError(
+                workspace=workspace,
+                runner=runner,
+                container=container_name(workspace),
+                cwd="/workspace",
+                command=command,
+                executed_command=docker_exec_command(workspace, command, env),
+                marker=str(state.get("marker") or "WORKSPACE_CONTAINER_PRECHECK_FAILED"),
+                error=str(state.get("error") or "container_precheck_failed"),
+                recovery=str(state.get("recovery") or "Workspace container není připravený."),
+                output=str(state.get("diagnostic_output") or ""),
+            )
         executed = docker_exec_command(workspace, command, env)
         proc = subprocess.run(
             executed,
@@ -407,6 +450,25 @@ def run_verify(
             )
             ok = False
             break
+        except RunnerBoundaryError as exc:
+            executed_steps.append(
+                {
+                    **step,
+                    "ok": False,
+                    "runner": exc.runner,
+                    "container": exc.container,
+                    "cwd": exc.cwd,
+                    "command": exc.command,
+                    "executed_command": exc.executed_command,
+                    "exit_code": None,
+                    "error": exc.error,
+                    "marker": exc.marker,
+                    "recovery": exc.recovery,
+                    "output": exc.output,
+                }
+            )
+            ok = False
+            break
 
     summary_lines = []
     for step in executed_steps:
@@ -415,7 +477,7 @@ def run_verify(
         elif step.get("ok"):
             summary_lines.append(f"{step['action']}: ok")
         else:
-            reason = step.get("error") or f"exit {step.get('exit_code')}"
+            reason = step.get("marker") or step.get("error") or f"exit {step.get('exit_code')}"
             summary_lines.append(f"{step['action']}: failed ({reason})")
 
     return {
@@ -467,14 +529,38 @@ def run_smoke(
     smoke_env.setdefault("PYTHONUNBUFFERED", "1")
 
     wrapped_command = ["timeout", "--signal=TERM", f"{smoke_window}s", *command]
-    proc, executed_command, cwd, container = run_dev_command(
-        wrapped_command,
-        root,
-        max(timeout + 5, smoke_window + 5),
-        smoke_env,
-        runner,
-        workspace,
-    )
+    try:
+        proc, executed_command, cwd, container = run_dev_command(
+            wrapped_command,
+            root,
+            max(timeout + 5, smoke_window + 5),
+            smoke_env,
+            runner,
+            workspace,
+        )
+    except RunnerBoundaryError as exc:
+        return {
+            "ok": False,
+            "planned_only": False,
+            "action": "smoke",
+            "root": str(root),
+            "runner": exc.runner,
+            "container": exc.container,
+            "cwd": exc.cwd,
+            "command": exc.command,
+            "executed_command": exc.executed_command,
+            "resolved_from": resolved_from,
+            "wrapped_command": wrapped_command,
+            "smoke_window_s": smoke_window,
+            "startup_detected": False,
+            "timed_window_exit": False,
+            "duration_ms": int((time.time() - started) * 1000),
+            "exit_code": None,
+            "error": exc.error,
+            "marker": exc.marker,
+            "recovery": exc.recovery,
+            "output": exc.output,
+        }
     output = normalize_output(proc.stdout)
     startup_detected = smoke_ready(output)
     ok = startup_detected and proc.returncode in {0, 124, 143}
@@ -593,6 +679,23 @@ def main() -> int:
             "output": normalize_output(exc.stdout) + normalize_output(exc.stderr),
             "error": "timeout",
         }
+    except RunnerBoundaryError as exc:
+        result = {
+            "ok": False,
+            "planned_only": False,
+            "action": args.action,
+            "root": str(root),
+            "runner": exc.runner,
+            "container": exc.container,
+            "cwd": exc.cwd,
+            "command": exc.command,
+            "executed_command": exc.executed_command,
+            "duration_ms": int((time.time() - started) * 1000),
+            "output": exc.output,
+            "error": exc.error,
+            "marker": exc.marker,
+            "recovery": exc.recovery,
+        }
     except ActionError as exc:
         result = {
             "ok": False,
@@ -616,6 +719,8 @@ def main() -> int:
         print(f"runner={result.get('runner', '')}")
         if result.get("container"):
             print(f"container={result['container']}")
+        if result.get("marker"):
+            print(f"marker={result['marker']}")
         if result.get("cwd"):
             print(f"cwd={result['cwd']}")
         if "resolved_from" in result:
@@ -656,6 +761,8 @@ def main() -> int:
             print(f"timeout={result['timeout']}")
         if "error" in result:
             print(f"error={result['error']}")
+        if result.get("recovery"):
+            print(f"recovery={result['recovery']}")
         print("output:")
         print(str(result.get("output", "")).rstrip())
 

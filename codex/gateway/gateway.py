@@ -5,7 +5,7 @@
 # gateway-scheduled-chat-patch: ok
 # gateway-chat-no-error-patch: ok
 # gateway-chat-fast-ack-patch: ok
-import html, ipaddress, json, os, re, shlex, socket, subprocess, sys, time, uuid, urllib.error, urllib.parse, urllib.request
+import hashlib, html, ipaddress, json, marshal, os, re, shlex, socket, subprocess, sys, time, uuid, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 from pathlib import Path
@@ -403,12 +403,49 @@ def http_probe(url, timeout=2, max_bytes=8192):
 def runtime_health():
     root = http_probe(OPENWEBUI_HEALTH_URL, timeout=2, max_bytes=4096)
     loader = http_probe(OPENWEBUI_LOADER_URL, timeout=2, max_bytes=8192)
+    workspaces_file_exists = Path(WORKSPACES_FILE).is_file()
+    roadmap_exists = CAPABILITY_ROADMAP_FILE.is_file()
+    git_head = run_ro(["git", "rev-parse", "--short", "HEAD"], REPO_ROOT, 8)
+    local_admin_ready = True
+    lan_admin_ready = bool(ADMIN_TOKEN)
+    readiness_issues = []
+    if not workspaces_file_exists:
+        readiness_issues.append("WORKSPACES_FILE_MISSING")
+    if not roadmap_exists:
+        readiness_issues.append("CAPABILITY_ROADMAP_MISSING")
+    if not root.get("ok"):
+        readiness_issues.append("OPENWEBUI_ROOT_UNAVAILABLE")
+    if not loader.get("ok"):
+        readiness_issues.append("OPENWEBUI_LOADER_UNAVAILABLE")
+    if not lan_admin_ready:
+        readiness_issues.append("GATEWAY_ADMIN_TOKEN_MISSING")
+    codex_local_ready = not readiness_issues
     return {
+        "codex_local_ready": codex_local_ready,
+        "capability_mode": "agent-first",
+        "natural_codex_local_route": "agent_loop",
+        "runtime_commit": git_head,
+        "runtime_fingerprint": runtime_fingerprint(),
+        "gateway_admin": {
+            "local_admin_ready": local_admin_ready,
+            "lan_admin_ready": lan_admin_ready,
+            "token_present": bool(ADMIN_TOKEN),
+            "token_file_configured": bool(ADMIN_TOKEN_FILE),
+        },
+        "workspace_registry": {
+            "path": WORKSPACES_FILE,
+            "exists": workspaces_file_exists,
+        },
+        "capability_roadmap": {
+            "path": str(CAPABILITY_ROADMAP_FILE),
+            "exists": roadmap_exists,
+        },
+        "readiness_issues": readiness_issues,
         "openwebui": {
             "ok": bool(root.get("ok")) and bool(loader.get("ok")),
             "root": root,
             "loader": loader,
-        }
+        },
     }
 
 
@@ -695,6 +732,87 @@ def agent_infer_action_from_task(task):
     return ""
 
 
+def agent_infer_followup_actions(task):
+    lower = str(task or "").lower()
+    registry = load_workspace_action_registry()
+    scored = []
+    heuristic_cues = {
+        "install": (
+            "stahni co je treba",
+            "stáhni co je třeba",
+            "stahni co je potreba",
+            "stáhni co je potřeba",
+            "doinstaluj",
+            "nainstaluj",
+            "install",
+        ),
+        "smoke": (
+            "pust to",
+            "pusť to",
+            "spust to",
+            "spusť to",
+            "rozbehni to",
+            "rozběhni to",
+            "startup smoke",
+            "run it",
+        ),
+        "test": (
+            "otestuj",
+            "spust testy",
+            "spusť testy",
+            "run tests",
+        ),
+        "build": (
+            "build",
+            "sestav to",
+            "postav to",
+        ),
+        "verify": (
+            "over to",
+            "ověř to",
+            "zkontroluj to",
+            "verify",
+        ),
+        "lint": (
+            "lint",
+        ),
+    }
+    seen_actions = set()
+    for action, spec in registry.items():
+        if not isinstance(spec, dict):
+            continue
+        cues = spec.get("cues") or []
+        roadmap_match = any(isinstance(cue, str) and cue.lower() in lower for cue in cues)
+        heuristic_match = any(cue in lower for cue in heuristic_cues.get(str(action).strip().lower(), ()))
+        if not (roadmap_match or heuristic_match):
+            continue
+        normalized_action = str(action).strip().lower()
+        priority = int(spec.get("autopilot_priority", 999) or 999)
+        scored.append((priority, normalized_action))
+        seen_actions.add(normalized_action)
+    default_priority = {
+        "install": 10,
+        "verify": 20,
+        "smoke": 30,
+        "test": 40,
+        "build": 50,
+        "lint": 60,
+    }
+    for action, cues in heuristic_cues.items():
+        if action in seen_actions:
+            continue
+        if any(cue in lower for cue in cues):
+            scored.append((default_priority.get(action, 999), action))
+    scored.sort()
+    seen = set()
+    ordered = []
+    for _, action in scored:
+        if action in AGENT_LOOP_ACTIONS and action not in seen:
+            ordered.append(action)
+            seen.add(action)
+    return ordered
+
+
 def agent_edit_requested(task):
     lower = str(task or "").lower()
     cues = (
@@ -793,6 +911,26 @@ def agent_web_question_requested(task):
     return any(cue in lower for cue in cues)
 
 
+def agent_deploy_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "deploy",
+        "self deploy",
+        "self-deploy",
+        "nasad",
+        "nasaď",
+        "nasazeni",
+        "nasazení",
+        "restartni stack",
+        "restartuj stack",
+        "pullni ai-stack",
+        "pull ai-stack",
+        "aktualizuj ai-stack",
+        "update ai-stack",
+    )
+    return any(cue in lower for cue in cues)
+
+
 def agent_run_requested(task):
     lower = str(task or "").lower()
     cues = (
@@ -846,6 +984,55 @@ def agent_infer_command_from_task(task):
     return []
 
 
+def agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists):
+    """Return a small policy fallback when the LLM planner is unavailable.
+
+    The normal path is LLM-first planning. This helper exists only so the
+    gateway can still recover into a bounded capability workflow when the
+    planner call fails or returns unusable output.
+    """
+    url = agent_public_url_from_task(task)
+    inferred_action = agent_infer_action_from_task(task)
+    inferred_followups = agent_infer_followup_actions(task)
+    command = agent_infer_command_from_task(task)
+
+    if agent_read_only_requested(task):
+        workflow = "review"
+    elif agent_deploy_requested(task):
+        workflow = "deploy"
+    elif agent_bootstrap_requested(task):
+        workflow = "bootstrap"
+    elif url and agent_web_question_requested(task):
+        workflow = "web_answer"
+    elif url:
+        workflow = "web_fetch"
+    elif agent_run_requested(task) or command:
+        workflow = "run"
+    elif inferred_action:
+        workflow = "action"
+    elif agent_edit_requested(task):
+        workflow = "edit"
+    else:
+        return None
+
+    raw = {
+        "workflow": workflow,
+        "reason": "Deterministic capability intent matched.",
+        "read_only": workflow == "review",
+        "workspace": requested_workspace if workspace_exists else controller_workspace,
+        "action": inferred_action if workflow == "action" else "",
+        "command": command if workflow == "run" else [],
+        "run_after": inferred_action if workflow == "edit" and inferred_action else "",
+        "followup_actions": inferred_followups if workflow in {"bootstrap", "autopilot"} else [],
+        "repo_name": agent_extract_repo_name(task) if workflow == "bootstrap" else "",
+        "github": "github" in str(task or "").lower(),
+        "url": url,
+        "question": str(task or "").strip() if workflow == "web_answer" else "",
+        "confidence": "high",
+    }
+    return normalize_agent_plan(raw, requested_workspace, controller_workspace, workspace_exists, task), json.dumps(raw, ensure_ascii=False)
+
+
 def normalize_agent_command(value):
     if isinstance(value, list) and value and all(isinstance(item, str) and item.strip() for item in value):
         command = [item.strip() for item in value]
@@ -861,6 +1048,121 @@ def normalize_agent_command(value):
     if "mentor_codex_local.py" in joined or "owui_chat_turn.py" in joined:
         raise ValueError("agent run refuses nested OpenWebUI helper commands")
     return command
+
+
+def nested_helper_command_kind(command):
+    if not isinstance(command, list) or len(command) < 2:
+        return ""
+    if command[0] != "python3":
+        return ""
+    script = str(command[1] or "")
+    if script == "codex/bin/mentor_codex_local.py":
+        return "mentor"
+    if script == "codex/bin/owui_chat_turn.py":
+        return "owui"
+    return ""
+
+
+def parse_nested_mentor_helper_command(command):
+    if nested_helper_command_kind(command) != "mentor":
+        return None
+    idx = 2
+    while idx < len(command) and str(command[idx]).startswith("--"):
+        idx += 1
+    if idx >= len(command):
+        return None
+    mode = str(command[idx] or "").strip()
+    if mode not in {
+        "delegate",
+        "profile",
+        "report",
+        "plan",
+        "next-helper",
+        "bootstrap-improve",
+        "audit",
+        "review",
+        "improve",
+        "autopilot",
+        "apply-safe",
+    }:
+        return None
+    idx += 1
+    while idx < len(command) and str(command[idx]).startswith("--"):
+        idx += 1
+    if idx >= len(command):
+        return None
+    workspace = str(command[idx] or "").strip()
+    idx += 1
+    task = str(command[idx] or "").strip() if idx < len(command) else ""
+    return {"mode": mode, "workspace": workspace, "task": task}
+
+
+def mentor_helper_agent_loop_task(parsed):
+    mode = str((parsed or {}).get("mode") or "").strip()
+    workspace = str((parsed or {}).get("workspace") or "").strip()
+    task = str((parsed or {}).get("task") or "").strip()
+    if mode == "delegate":
+        return task
+    if mode == "review":
+        return task or f"Proveď senior review workspace {workspace}. Nic needituj. Najdi hlavní rizika a navrhni další bezpečný krok."
+    if mode == "audit":
+        return task or f"Proveď technický audit workspace {workspace}. Nic needituj. Řekni 3 největší blockery a navrhni další bezpečný krok."
+    if mode == "improve":
+        return task or f"Pokračuj autonomně ve workspace {workspace}. Proveď nejbližší bezpečný capability krok, případný malý patch a vrať konkrétní výsledek."
+    if mode == "autopilot":
+        return task or f"Ověř workspace {workspace}, pokračuj nejbližším bezpečným capability krokem a vrať stručný průběh."
+    if mode == "bootstrap-improve":
+        return task or f"Bootstrapuj workspace {workspace}, připrav repozitář a pokračuj nejbližším bezpečným capability krokem."
+    if mode == "apply-safe":
+        return task or f"Připrav a auditovaně aplikuj malý bezpečný patch ve workspace {workspace}."
+    if mode in {"profile", "report", "plan", "next-helper"}:
+        return task or f"Prohlédni workspace {workspace}. Nic needituj. Řekni nejbližší další capability krok."
+    return ""
+
+
+def rescue_nested_workspace_helper(workspace, command):
+    parsed = parse_nested_mentor_helper_command(command)
+    if parsed:
+        helper_workspace = str(parsed.get("workspace") or "").strip() or workspace
+        task = mentor_helper_agent_loop_task(parsed)
+        if task:
+            result = admin_agent_loop({"workspace": helper_workspace, "task": task})
+            text = agent_loop_response_text(result)
+            return {
+                "ok": bool(result.get("ok")),
+                "action": "workspace_run_rescued_agent_loop",
+                "workspace": helper_workspace,
+                "runner": "agent_loop",
+                "command": command,
+                "executed_command": ["GATEWAY_ADMIN_AGENT_LOOP", helper_workspace, "--", task],
+                "exit_code": 0 if result.get("ok") else 1,
+                "runner_exit_code": 0 if result.get("ok") else 1,
+                "duration_ms": 0,
+                "output": text,
+                "rescued": True,
+                "rescue_kind": "mentor_helper_to_agent_loop",
+            }
+    if nested_helper_command_kind(command) == "owui":
+        text = (
+            "WORKSPACE_RUN_NESTED_OWUI_HELPER_BLOCKED\n"
+            "reason=direct owui_chat_turn invocation inside workspace run would recurse into OpenWebUI chat flow\n"
+            "recovery=Route the intent through GATEWAY_ADMIN_AGENT_LOOP or run the underlying capability directly instead of calling owui_chat_turn.py."
+        )
+        return {
+            "ok": False,
+            "action": "workspace_run_blocked",
+            "workspace": workspace,
+            "runner": "blocked",
+            "command": command,
+            "executed_command": command,
+            "exit_code": 1,
+            "runner_exit_code": 1,
+            "duration_ms": 0,
+            "output": text,
+            "rescued": False,
+            "rescue_kind": "owui_helper_blocked",
+        }
+    return None
 
 
 def agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
@@ -896,7 +1198,9 @@ def agent_plan_messages(requested_workspace, controller_workspace, workspace_exi
                 "- For an explicit one-off shell/terminal command or a small runtime inspection not covered by named actions, choose run and set command as a JSON string array.\n"
                 "- For 'do what is needed', 'continue autonomously', recovery, or multi-step runtime stabilization, choose autopilot.\n"
                 "- For creating a new repository/workspace/git init/SSH key bootstrap flow, choose bootstrap. "
-                "Put the new repository name in repo_name and any post-bootstrap runtime steps into followup_actions.\n"
+                "Put the new repository name in repo_name and any post-bootstrap runtime steps into followup_actions. "
+                "If the task says things like 'stáhni co je třeba', 'doinstaluj', 'rozběhni to', 'pusť to', "
+                "'otestuj' or similar, translate that into concrete followup_actions such as install, smoke, test, build, or verify.\n"
                 "- If GitHub push/remote is mentioned during bootstrap, set github=true, but do not assume push is already confirmed.\n"
                 "- For public website questions, choose web_answer; for plain fetch, choose web_fetch.\n"
                 "- For ai-stack self-update/deploy/restart prompts, choose deploy.\n"
@@ -955,6 +1259,7 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"
     inferred_action = agent_infer_action_from_task(task)
+    inferred_followups = agent_infer_followup_actions(task)
     bootstrap_requested = agent_bootstrap_requested(task)
     run_requested = agent_run_requested(task)
     if workflow == "bootstrap" and not bootstrap_requested:
@@ -982,6 +1287,8 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         workflow = "edit"
     if workflow == "edit" and not run_after and inferred_action:
         run_after = inferred_action
+    if workflow in {"bootstrap", "autopilot"} and not followup_actions:
+        followup_actions = inferred_followups
     if workflow == "run" and not command:
         command = agent_infer_command_from_task(task)
     if workflow == "run" and not command:
@@ -1060,7 +1367,15 @@ def admin_agent_loop(payload):
     if not task or len(task) > 6000:
         raise ValueError("task must be 1..6000 characters")
     controller_workspace, workspace_exists, workspaces = agent_controller_workspace(requested_workspace)
-    plan, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists)
+    planner_source = "llm"
+    try:
+        plan, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists)
+    except Exception as exc:
+        fallback = agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists)
+        if not fallback:
+            raise RuntimeError(f"agent planner failed and no bounded fallback matched: {exc}") from exc
+        plan, raw_plan = fallback
+        planner_source = "fallback"
 
     result = {
         "ok": False,
@@ -1070,6 +1385,7 @@ def admin_agent_loop(payload):
         "task": task,
         "plan": plan,
         "raw_plan": raw_plan,
+        "planner_source": planner_source,
         "workflow": plan["workflow"],
         "read_only": plan["read_only"],
     }
@@ -1987,6 +2303,24 @@ def admin_run_workspace(payload):
         raise ValueError("env must be an object")
     if runner not in {"container", "host"}:
         raise ValueError("runner must be container or host")
+    if runner == "host" and not bool(payload.get("allow_host")):
+        return {
+            "ok": False,
+            "action": "workspace_run",
+            "workspace": workspace,
+            "runner": runner,
+            "command": command,
+            "error": "host_runner_requires_explicit_capability",
+            "marker": "WORKSPACE_RUN_HOST_REQUIRES_EXPLICIT_CAPABILITY",
+            "recovery": (
+                "Použij container runner, nebo explicitně povol host diagnostiku přes capability/admin vrstvu. "
+                "Codex-local agent loop nesmí tiše spouštět workspace příkazy na hostu."
+            ),
+        }
+
+    rescued = rescue_nested_workspace_helper(workspace, command)
+    if rescued is not None:
+        return rescued
 
     script = REPO_ROOT / "codex/bin/run_check.py"
     if not script.is_file():
@@ -2133,6 +2467,19 @@ def admin_workspace_action(payload):
         raise ValueError("env must be an object")
     if runner not in {"container", "host"}:
         raise ValueError("runner must be container or host")
+    if runner == "host" and not bool(payload.get("allow_host")):
+        return {
+            "ok": False,
+            "workspace": workspace,
+            "action": action,
+            "runner": runner,
+            "error": "host_runner_requires_explicit_capability",
+            "marker": "WORKSPACE_ACTION_HOST_REQUIRES_EXPLICIT_CAPABILITY",
+            "recovery": (
+                "Použij container runner, nebo explicitně povol host diagnostiku přes capability/admin vrstvu. "
+                "Běžné workspace akce nemají tiše padat zpět na host."
+            ),
+        }
 
     script = REPO_ROOT / "codex/bin/workspace_action.py"
     if not script.is_file():
@@ -2698,6 +3045,25 @@ def fallback_response_text(payload):
     )
 
 
+def runtime_fingerprint():
+    """Hash loaded gateway code objects to detect runtime/repo split-brain."""
+    digest = hashlib.sha256()
+    targets = [
+        ("runtime_health", runtime_health),
+        ("completion", completion),
+        ("codex_local_agent_loop_payload", codex_local_agent_loop_payload),
+        ("normal_chat_requires_tool", normal_chat_requires_tool),
+        ("agent_plan", agent_plan),
+        ("normalize_agent_plan", normalize_agent_plan),
+        ("admin_agent_loop", admin_agent_loop),
+        ("admin_run_workspace", admin_run_workspace),
+    ]
+    for name, fn in targets:
+        digest.update(name.encode("utf-8"))
+        digest.update(marshal.dumps(fn.__code__))
+    return digest.hexdigest()[:24]
+
+
 def agent_requested_workspace_from_text(text):
     default, workspaces = load_registry()
     match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:?\s*([A-Za-z0-9_.-]{{1,80}})\s*$", str(text or ""))
@@ -2718,6 +3084,155 @@ def trim_response_text(text, limit=14000):
     return value[:limit] + f"\n[truncated {len(value) - limit} chars]"
 
 
+def preview_text(value, limit=220):
+    text = " ".join(str(value or "").strip().split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + " ..."
+
+
+def shell_join_safe(command):
+    if not isinstance(command, list):
+        return str(command or "")
+    try:
+        return shlex.join([str(item) for item in command])
+    except Exception:
+        return " ".join(str(item) for item in command)
+
+
+def agent_loop_human_answer(result):
+    workflow = str(result.get("workflow") or "").strip()
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+    followup = result.get("followup") if isinstance(result.get("followup"), dict) else {}
+    recovery = result.get("recovery") if isinstance(result.get("recovery"), dict) else {}
+    workspace = str(result.get("requested_workspace") or result.get("controller_workspace") or "").strip()
+
+    if workflow in {"review", "clarify"}:
+        return str(result.get("answer") or "").strip()
+
+    if workflow == "web_answer":
+        return str(execution.get("answer") or result.get("answer") or "").strip()
+
+    if workflow == "web_fetch":
+        final_url = str(execution.get("final_url") or execution.get("url") or "").strip()
+        title = str(execution.get("title") or "").strip()
+        text = preview_text(execution.get("text") or "")
+        if result.get("ok"):
+            pieces = [f"Načetl jsem veřejný web {final_url or '(unknown url)'}."]
+            if title:
+                pieces.append(f"Titul: {title}.")
+            if text:
+                pieces.append(f"Stručný výtah: {text}")
+            return " ".join(pieces).strip()
+        return f"Nepodařilo se načíst veřejný web {final_url or '(unknown url)'}."
+
+    if workflow == "deploy":
+        if result.get("ok"):
+            pid = execution.get("pid")
+            return (
+                f"Nasazení ai-stack jsem naplánoval. "
+                f"Běží na pozadí{f' pod PID {pid}' if pid else ''}; stav zkontroluješ přes deploy status."
+            ).strip()
+        return (
+            "Nasazení ai-stack se nepodařilo naplánovat. "
+            + preview_text(execution.get("tail") or execution.get("error") or result.get("summary"))
+        ).strip()
+
+    if workflow == "run":
+        command = shell_join_safe(execution.get("command") or execution.get("executed_command") or [])
+        runner = str(execution.get("runner") or "container")
+        if result.get("ok"):
+            output = preview_text(execution.get("output") or "")
+            text = f"Ve workspace {workspace} jsem spustil `{command}` přes {runner} runner a příkaz doběhl."
+            if output:
+                text += f" Výstup: {output}"
+            return text
+        marker = str(execution.get("marker") or "").strip()
+        if marker:
+            return (
+                f"Příkaz `{command}` ve workspace {workspace} neproběhl. "
+                + preview_text(execution.get("recovery") or execution.get("output") or result.get("summary"))
+            ).strip()
+        return (
+            f"Příkaz `{command}` ve workspace {workspace} selhal. "
+            + preview_text(execution.get("output") or execution.get("error") or result.get("summary"))
+        ).strip()
+
+    if workflow == "action":
+        action = str((result.get("plan") or {}).get("action") or execution.get("action") or "").strip() or "verify"
+        runner = str(execution.get("runner") or "container").strip() or "container"
+        if result.get("ok"):
+            output = preview_text(execution.get("output") or "")
+            text = f"Ve workspace {workspace} jsem provedl akci `{action}` přes {runner} runner."
+            if output:
+                text += f" Výstup: {output}"
+            return text
+        return (
+            f"Akce `{action}` ve workspace {workspace} selhala. "
+            + preview_text((recovery.get("text") or execution.get("recovery") or execution.get("output") or result.get("summary")))
+        ).strip()
+
+    if workflow == "edit":
+        files = execution.get("files") if isinstance(execution.get("files"), list) else []
+        file_text = ", ".join(str(item) for item in files[:4]) if files else "relevantní soubory"
+        run_after = str((result.get("plan") or {}).get("run_after") or execution.get("run_after") or "").strip()
+        if result.get("ok"):
+            text = f"Ve workspace {workspace} jsem upravil {file_text}."
+            if run_after:
+                text += f" Následné ověření `{run_after}` proběhlo."
+            return text
+        return (
+            f"Editace ve workspace {workspace} narazila na blocker. "
+            + preview_text(recovery.get("text") or execution.get("error") or execution.get("apply_output") or result.get("summary"))
+        ).strip()
+
+    if workflow == "autopilot":
+        steps = execution.get("executed_actions") if isinstance(execution.get("executed_actions"), list) else []
+        step_names = [str(step.get("action")) for step in steps if isinstance(step, dict) and step.get("action")]
+        if result.get("ok"):
+            if step_names:
+                return f"Autopilot ve workspace {workspace} dokončil kroky: {', '.join(step_names)}."
+            return f"Autopilot ve workspace {workspace} doběhl bez chyby."
+        if step_names:
+            return (
+                f"Autopilot ve workspace {workspace} se zastavil po krocích {', '.join(step_names)}. "
+                + preview_text(recovery.get("text") or execution.get("recommendation") or result.get("summary"))
+            ).strip()
+        return (
+            f"Autopilot ve workspace {workspace} nenašel bezpečný další krok. "
+            + preview_text(recovery.get("text") or execution.get("recommendation") or result.get("summary"))
+        ).strip()
+
+    if workflow == "bootstrap":
+        repo_name = str(execution.get("name") or (result.get("plan") or {}).get("repo_name") or workspace).strip()
+        ssh_key = execution.get("ssh_key") if isinstance(execution.get("ssh_key"), dict) else {}
+        ssh_pub = str(ssh_key.get("public_key_path") or "").strip()
+        github_requested = bool(execution.get("github_requested"))
+        if result.get("ok"):
+            text = f"Bootstrap workspace `{repo_name}` doběhl."
+            if ssh_pub:
+                text += f" SSH public key je v `{ssh_pub}`."
+            if github_requested:
+                text += " GitHub část byla zahrnutá."
+            if followup:
+                follow_steps = followup.get("executed_actions") if isinstance(followup.get("executed_actions"), list) else []
+                names = [str(step.get('action')) for step in follow_steps if isinstance(step, dict) and step.get("action")]
+                if names:
+                    text += f" Následně proběhly kroky: {', '.join(names)}."
+            return text
+        if execution.get("partial_ok"):
+            return (
+                f"Bootstrap workspace `{repo_name}` je částečně hotový. "
+                + preview_text(execution.get("next_step") or recovery.get("text") or result.get("summary"))
+            ).strip()
+        return (
+            f"Bootstrap workspace `{repo_name}` selhal. "
+            + preview_text(execution.get("next_step") or execution.get("github_note") or result.get("summary"))
+        ).strip()
+
+    return str(result.get("answer") or "").strip()
+
+
 def agent_loop_response_text(result):
     status = "AGENT_LOOP_OK" if result.get("ok") else "AGENT_LOOP_NEEDS_ATTENTION"
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
@@ -2725,13 +3240,14 @@ def agent_loop_response_text(result):
         status,
         f"requested_workspace={result.get('requested_workspace', '')}",
         f"controller_workspace={result.get('controller_workspace', '')}",
+        f"planner_source={result.get('planner_source', '')}",
         f"workflow={result.get('workflow', plan.get('workflow', ''))}",
         f"read_only={result.get('read_only', plan.get('read_only', ''))}",
         f"summary={result.get('summary', '')}",
     ]
     if plan.get("reason"):
         lines.append(f"reason={plan.get('reason')}")
-    answer = str(result.get("answer") or "").strip()
+    answer = agent_loop_human_answer(result)
     if answer:
         lines.append("")
         lines.append(answer)
@@ -2770,22 +3286,43 @@ def explicit_agent_loop_request(text):
         return None
     return {"workspace": workspace, "task": task}
 
+def codex_local_model_requested(payload):
+    model_name = str((payload or {}).get("model") or "").strip()
+    return model_name.startswith("codex-local-")
+
+def codex_local_agent_loop_payload(payload):
+    """Route natural codex-local prompts through the agent loop by default.
+
+    The local Codex surface should be capability-first, not a plain snapshot
+    chat with a heuristic "tool-like" detector. We still allow explicit admin
+    markers and fixed gateway responses to bypass this path, but otherwise a
+    codex-local model request is treated as an agent-loop request.
+    """
+    if not codex_local_model_requested(payload):
+        return None
+    admin_text = gateway_admin_text(payload)
+    text = strip_routing(admin_text).strip() or str(admin_text or "").strip()
+    if not text or "GATEWAY_ADMIN_" in text:
+        return None
+    return {
+        "workspace": agent_requested_workspace_from_text(admin_text),
+        "task": text[:6000],
+    }
+
 def normal_chat_requires_tool(payload):
+    if codex_local_agent_loop_payload(payload):
+        return True
     text = strip_routing(gateway_admin_text(payload)).strip()
     if "GATEWAY_ADMIN_" in text:
         return False
-    tool_intent_re = re.compile(
-        r"(?is)\b("
-        r"ssh|github|push|pushni|install|nainstaluj|spust|spusť|run|shell|command|terminal|"
-        r"st[aá]hni|st[aá]hnout|fetch|download|web|internet|http|https|seznam\.cz|"
-        r"vygeneruj\s+.*(?:klic|klíč|key)|generate\s+.*key|"
-        r"(?:vytvor|vytvoř|zaloz|založ|inituj|inicializuj)\s+.*"
-        r"(?:repo|repository|repozitar|repozitář|workspace|projekt)|"
-        r"(?:precti|přečti|vysvetli|vysvětli|show|read)\s+.*"
-        r"(?:soubor|file|docker-compose|compose|README|gateway\.py)"
-        r")\b"
+    lower = text.lower()
+    return bool(
+        re.search(r"https?://", text)
+        or "seznam.cz" in lower
+        or "github" in lower
+        or "ssh" in lower
+        or "git push" in lower
     )
-    return bool(tool_intent_re.search(text))
 
 def sse_line_info(raw):
     line = raw.decode("utf-8", "replace").strip()
@@ -2877,6 +3414,30 @@ def completion(payload):
             "usage": {"prompt_tokens": 0, "completion_tokens": len(text.split()), "total_tokens": len(text.split())},
         }
 
+    natural_loop = codex_local_agent_loop_payload(payload)
+    if natural_loop:
+        try:
+            result = admin_agent_loop(natural_loop)
+            text = agent_loop_response_text(result)
+        except Exception as exc:
+            text = (
+                "CODEX_LOCAL_AGENT_LOOP_FAILED\n"
+                f"error={type(exc).__name__}: {exc}\n"
+                "recovery=Zkontroluj gateway health, aktivitu OpenWebUI filtrů a capability executor."
+            )
+        return {
+            "id": "chatcmpl-" + uuid.uuid4().hex,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": len(text.split()), "total_tokens": len(text.split())},
+        }
+
     if normal_chat_requires_tool(payload):
         admin_text = gateway_admin_text(payload)
         task = strip_routing(admin_text).strip() or admin_text.strip()
@@ -2887,7 +3448,30 @@ def completion(payload):
             })
             text = agent_loop_response_text(result)
         except Exception as exc:
-            text = fallback_response_text(payload) + f"\n\nAGENT_LOOP_ERROR: {type(exc).__name__}: {exc}"
+            text = (
+                "CODEX_LOCAL_AGENT_LOOP_FAILED\n"
+                f"error={type(exc).__name__}: {exc}\n"
+                "recovery=Zkontroluj gateway health, aktivitu OpenWebUI filtrů a capability executor."
+            )
+        return {
+            "id": "chatcmpl-" + uuid.uuid4().hex,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": len(text.split()), "total_tokens": len(text.split())},
+        }
+
+    if codex_local_model_requested(payload):
+        text = (
+            "CODEX_LOCAL_AGENT_LOOP_UNROUTED\n"
+            "recovery=Zkontroluj capability-first routing ve gateway a aktivitu OpenWebUI codex filtrů; "
+            "codex-local prompt nesmí tiše spadnout do plain LLM režimu."
+        )
         return {
             "id": "chatcmpl-" + uuid.uuid4().hex,
             "object": "chat.completion",
@@ -3082,7 +3666,13 @@ class H(BaseHTTPRequestHandler):
                 return self.sendj({"error": "not found"}, 404)
             n = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(n).decode() or "{}")
-            if payload.get("stream") and not gateway_fixed_response_requested(payload) and not normal_chat_requires_tool(payload):
+            if (
+                payload.get("stream")
+                and not gateway_fixed_response_requested(payload)
+                and not explicit_agent_loop_request(gateway_admin_text(payload))
+                and not codex_local_agent_loop_payload(payload)
+                and not normal_chat_requires_tool(payload)
+            ):
                 return self.proxy_ollama_sse(payload)
             result = completion(payload)
             return self.sendsse(result) if payload.get("stream") else self.sendj(result)

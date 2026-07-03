@@ -85,6 +85,35 @@ class Filter:
         }
         roadmap = self._load_capability_roadmap_payload()
         self.workspace_actions = self._extract_workspace_actions(roadmap)
+        self.command_handlers = {
+            "GATEWAY_ADMIN_DIAG": self._diag,
+            "GATEWAY_ADMIN_PROBE": self._probe_paths,
+            "GATEWAY_ADMIN_READ_NUMBERED": self._read_numbered_requested_file,
+            "GATEWAY_ADMIN_READ": self._read_requested_file,
+            "GATEWAY_ADMIN_EXPLAIN_FILE": self._explain_file_admin,
+            "GATEWAY_ADMIN_SSH_KEYGEN": self._ssh_keygen,
+            "GATEWAY_ADMIN_INSTALL_SSH_CLIENT": self._install_ssh_client,
+            "GATEWAY_ADMIN_GIT_STATUS": self._git_status,
+            "GATEWAY_ADMIN_GIT_DIFF": self._git_diff,
+            "GATEWAY_ADMIN_REPO_GUARD": self._repo_guard,
+            "GATEWAY_ADMIN_WORKSPACE_SCAN": self._workspace_scan,
+            "GATEWAY_ADMIN_GIT_UNTRACK_IGNORED": self._git_untrack_ignored,
+            "GATEWAY_ADMIN_SMOKE": self._gateway_smoke,
+            "GATEWAY_ADMIN_CHECK_STACK": self._check_ai_stack,
+            "GATEWAY_ADMIN_WEB_ANSWER": self._web_answer_admin,
+            "GATEWAY_ADMIN_WEB_FETCH": self._web_fetch_admin,
+            "GATEWAY_ADMIN_AGENT_LOOP": self._agent_loop_admin,
+            "GATEWAY_ADMIN_WORKSPACE_ACTION": self._workspace_action_admin,
+            "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT": self._workspace_autopilot_admin,
+            "GATEWAY_ADMIN_WORKSPACE_EDIT": self._workspace_edit_admin,
+            "GATEWAY_ADMIN_RUN_WORKSPACE": self._run_workspace_admin,
+            "GATEWAY_ADMIN_RUN_WORKSPACE_STATUS": self._run_workspace_status_admin,
+            "GATEWAY_ADMIN_ADD_WORKSPACE": self._add_workspace_admin,
+            "GATEWAY_ADMIN_CREATE_LOCAL_REPO": self._create_local_repo_admin,
+            "GATEWAY_ADMIN_DEPLOY_STACK": self._deploy_stack_admin,
+            "GATEWAY_ADMIN_DEPLOY_STATUS": self._deploy_status_admin,
+            "GATEWAY_ADMIN_GIT_PUSH": self._git_push,
+        }
 
     def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
         if self.valves.inject_instructions and self._is_ai_stack_request(body):
@@ -106,61 +135,9 @@ class Filter:
                 raise RuntimeError("NO_PATCH_FOUND: GATEWAY_ADMIN_APPLY_NOW requires a fenced unified diff block.")
             result = self._apply_from_text(normalized)
             return self._direct_response(body, result)
-
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DIAG"):
-            return self._direct_response(body, self._diag())
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_PROBE"):
-            return self._direct_response(body, self._probe_paths())
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_READ_NUMBERED"):
-            return self._direct_response(body, self._read_numbered_requested_file(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_READ"):
-            return self._direct_response(body, self._read_requested_file(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_EXPLAIN_FILE"):
-            return self._direct_response(body, self._explain_file_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SSH_KEYGEN"):
-            return self._direct_response(body, self._ssh_keygen(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_INSTALL_SSH_CLIENT"):
-            return self._direct_response(body, self._install_ssh_client())
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_STATUS"):
-            return self._direct_response(body, self._git_status())
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_DIFF"):
-            return self._direct_response(body, self._git_diff(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_REPO_GUARD"):
-            return self._direct_response(body, self._repo_guard(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_SCAN"):
-            return self._direct_response(body, self._workspace_scan(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_UNTRACK_IGNORED"):
-            return self._direct_response(body, self._git_untrack_ignored())
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SMOKE"):
-            return self._direct_response(body, self._gateway_smoke(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CHECK_STACK"):
-            return self._direct_response(body, self._check_ai_stack(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WEB_ANSWER"):
-            return self._direct_response(body, self._web_answer_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WEB_FETCH"):
-            return self._direct_response(body, self._web_fetch_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_AGENT_LOOP"):
-            return self._direct_response(body, self._agent_loop_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
-            return self._direct_response(body, self._workspace_action_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT"):
-            return self._direct_response(body, self._workspace_autopilot_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_EDIT"):
-            return self._direct_response(body, self._workspace_edit_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE"):
-            return self._direct_response(body, self._run_workspace_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE_STATUS"):
-            return self._direct_response(body, self._run_workspace_status_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
-            return self._direct_response(body, self._add_workspace_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CREATE_LOCAL_REPO"):
-            return self._direct_response(body, self._create_local_repo_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DEPLOY_STACK"):
-            return self._direct_response(body, self._deploy_stack_admin(latest_user))
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_DEPLOY_STATUS"):
-            return self._direct_response(body, self._deploy_status_admin())
-        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_GIT_PUSH"):
-            return self._direct_response(body, self._git_push(latest_user))
+        command, handler = self._match_admin_handler(latest_user)
+        if command and handler:
+            return self._direct_response(body, self._invoke_admin_handler(command, handler, latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_APPLY_NOW"):
             normalized = re.sub(
                 r"(?im)^(\s*)GATEWAY_ADMIN_APPLY_NOW(\s*)$",
@@ -212,27 +189,28 @@ class Filter:
         return body
 
     def _dispatch_admin_command(self, command: str) -> str:
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_EXPLAIN_FILE"):
-            return self._explain_file_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_SSH_KEYGEN"):
-            return self._ssh_keygen(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
-            return self._workspace_action_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_WORKSPACE_EDIT"):
-            return self._workspace_edit_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_RUN_WORKSPACE"):
-            return self._run_workspace_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_RUN_WORKSPACE_STATUS"):
-            return self._run_workspace_status_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_CREATE_LOCAL_REPO"):
-            return self._create_local_repo_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_ANSWER"):
-            return self._web_answer_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_FETCH"):
-            return self._web_fetch_admin(command)
-        if self._admin_command_requested(command, "GATEWAY_ADMIN_AGENT_LOOP"):
-            return self._agent_loop_admin(command)
+        matched, handler = self._match_admin_handler(command)
+        if matched and handler:
+            return self._invoke_admin_handler(matched, handler, command)
         raise ValueError(f"Unsupported natural admin command: {command.splitlines()[0]}")
+
+    def _match_admin_handler(self, text: str) -> tuple[str | None, object | None]:
+        for command, handler in self.command_handlers.items():
+            if self._admin_command_requested(text, command):
+                return command, handler
+        return None, None
+
+    def _invoke_admin_handler(self, command: str, handler: object, text: str) -> str:
+        if command in {
+            "GATEWAY_ADMIN_DIAG",
+            "GATEWAY_ADMIN_PROBE",
+            "GATEWAY_ADMIN_INSTALL_SSH_CLIENT",
+            "GATEWAY_ADMIN_GIT_STATUS",
+            "GATEWAY_ADMIN_GIT_UNTRACK_IGNORED",
+            "GATEWAY_ADMIN_DEPLOY_STATUS",
+        }:
+            return handler()
+        return handler(text)
 
     def outlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
         return body
@@ -1428,6 +1406,8 @@ class Filter:
             return self._dispatch_admin_command(rescue)
 
         payload = {"workspace": workspace, "timeout": timeout, "runner": runner, "command": command}
+        if runner == "host":
+            payload["allow_host"] = True
         if background:
             payload["background"] = True
         if env_map:
@@ -1503,6 +1483,9 @@ class Filter:
             if any(cue in task_lower for cue in ("ssh key", "ssh klic", "ssh klíč", "github key")):
                 key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{helper_workspace}")[:64].strip("-") or "github-workspace"
                 return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(helper_workspace + '@local')}"
+        agent_loop_task = self._mentor_helper_agent_loop_task(parsed)
+        if helper_workspace and agent_loop_task:
+            return f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(helper_workspace)} -- {shlex.quote(agent_loop_task[:3000])}"
         return None
 
     def _canonicalize_nested_helper_command(self, command: list[str]) -> list[str]:
@@ -1534,7 +1517,19 @@ class Filter:
         if idx >= len(command):
             return None
         mode = command[idx]
-        if mode not in {"delegate", "profile", "report", "plan", "next-helper", "bootstrap-improve"}:
+        if mode not in {
+            "delegate",
+            "profile",
+            "report",
+            "plan",
+            "next-helper",
+            "bootstrap-improve",
+            "audit",
+            "review",
+            "improve",
+            "autopilot",
+            "apply-safe",
+        }:
             return None
         idx += 1
         while idx < len(command) and command[idx].startswith("--"):
@@ -1545,6 +1540,26 @@ class Filter:
         idx += 1
         task = command[idx] if idx < len(command) else ""
         return {"mode": mode, "workspace": workspace, "task": task}
+
+    def _mentor_helper_agent_loop_task(self, parsed: dict[str, str]) -> str:
+        mode = str(parsed.get("mode") or "")
+        workspace = str(parsed.get("workspace") or "").strip()
+        task = str(parsed.get("task") or "").strip()
+        if mode == "delegate":
+            return task
+        if mode == "review":
+            return task or f"Proveď senior review workspace {workspace}. Nic needituj. Najdi hlavní rizika a navrhni další bezpečný krok."
+        if mode == "audit":
+            return task or f"Proveď technický audit workspace {workspace}. Nic needituj, pokud to není nutné. Navrhni jeden nejlepší další capability krok."
+        if mode == "improve":
+            return task or f"Pokračuj autonomně ve workspace {workspace}. Nejprve proveď nejbližší bezpečný capability krok, pak případný malý patch a vrať konkrétní výsledek."
+        if mode == "autopilot":
+            return task or f"Ověř workspace {workspace}, pokračuj nejbližším bezpečným capability krokem a vrať stručný průběh."
+        if mode == "bootstrap-improve":
+            return task or f"Bootstrapuj workspace {workspace}, připrav repozitář a pokračuj nejbližším bezpečným capability krokem."
+        if mode == "apply-safe":
+            return task or f"Připrav a auditovaně aplikuj malý bezpečný patch ve workspace {workspace}."
+        return ""
 
     def _workspace_edit_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_EDIT\s+(.+?)\s*$", text)
@@ -1690,6 +1705,8 @@ class Filter:
             raise ValueError("Timeout must be between 1 and 3600 seconds")
 
         payload = {"workspace": workspace, "action": action, "timeout": timeout, "dry_run": dry_run, "runner": runner}
+        if runner == "host":
+            payload["allow_host"] = True
         if env_map:
             payload["env"] = env_map
         result = self._gateway_admin_request("/v1/admin/workspace/action", payload, timeout=max(timeout + 45, 90))

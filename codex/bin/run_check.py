@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from container_runner_guard import inspect_container_state
+
 
 DEFAULT_ROOT = Path(os.getenv("AI_STACK_ROOT", "/mnt/c/Repositories/ai-stack"))
 WORKSPACES_FILE = Path(os.getenv("CODEX_WORKSPACES_FILE", str(DEFAULT_ROOT / "codex/workspaces.json")))
@@ -57,6 +59,24 @@ def run_checked_command(workspace, cwd, command, timeout, env, runner):
         executed = command
         display_cwd = str(cwd)
     elif runner == "container":
+        state = inspect_container_state(workspace)
+        if not state.get("ok"):
+            return {
+                "ok": False,
+                "workspace": workspace,
+                "runner": runner,
+                "container": container_name(workspace),
+                "cwd": "/workspace",
+                "host_cwd": str(cwd),
+                "command": command,
+                "executed_command": docker_exec_command(workspace, command, env),
+                "exit_code": None,
+                "duration_ms": int((time.time() - started) * 1000),
+                "output": str(state.get("diagnostic_output") or ""),
+                "error": state.get("error"),
+                "marker": state.get("marker"),
+                "recovery": state.get("recovery"),
+            }
         executed = docker_exec_command(workspace, command, env)
         proc = subprocess.run(
             executed,
@@ -163,6 +183,8 @@ def main():
         print(f"runner={result['runner']}")
         if result.get("container"):
             print(f"container={result['container']}")
+        if result.get("marker"):
+            print(f"marker={result['marker']}")
         print(f"cwd={result['cwd']}")
         print(f"command={' '.join(result['command'])}")
         print(f"executed_command={' '.join(result['executed_command'])}")
@@ -173,6 +195,8 @@ def main():
             print(f"timeout={result['timeout']}")
         if "error" in result:
             print(f"error={result['error']}")
+        if result.get("recovery"):
+            print(f"recovery={result['recovery']}")
         print("output:")
         print(result["output"].rstrip())
 

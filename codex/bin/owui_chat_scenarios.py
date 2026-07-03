@@ -34,6 +34,7 @@ class Scenario:
     expected_substrings: tuple[str, ...]
     total_timeout: float = 240.0
     status_interval: float = 3.0
+    mutating: bool = False
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -75,6 +76,22 @@ SCENARIOS: dict[str, Scenario] = {
         prompt_template="repo: {workspace}\nNavrhni dalsi krok.",
         expected_substrings=("AGENT_LOOP", "workflow=autopilot"),
     ),
+    "bootstrap-followthrough": Scenario(
+        name="bootstrap-followthrough",
+        description="Natural repository bootstrap plus follow-through request routed into bootstrap capability flow.",
+        prompt_template="vytvor repozitar: svatektest a pak stahni co je treba a pust to",
+        expected_substrings=("AGENT_LOOP", "workflow=bootstrap"),
+        total_timeout=480.0,
+        mutating=True,
+    ),
+    "safe-edit-verify": Scenario(
+        name="safe-edit-verify",
+        description="Natural coding change plus verification request routed into edit capability flow.",
+        prompt_template="repo: {workspace}\nPridej do README kratky priklad a pak over projekt.",
+        expected_substrings=("AGENT_LOOP", "workflow=edit"),
+        total_timeout=480.0,
+        mutating=True,
+    ),
 }
 
 
@@ -93,6 +110,11 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(SCENARIOS.keys()) + ["all"],
         default=[],
         help="Scenario name; can be repeated. Default runs agent-review and verify-project.",
+    )
+    parser.add_argument(
+        "--include-mutating",
+        action="store_true",
+        help="Allow scenarios that may create/edit state through the live capability chain.",
     )
     parser.add_argument("--list", action="store_true", help="List available scenarios and exit")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable results")
@@ -114,13 +136,24 @@ def selected_scenarios(args: argparse.Namespace) -> list[Scenario]:
         return []
     names = args.scenario or ["agent-review", "verify-project"]
     if "all" in names:
-        names = list(SCENARIOS.keys())
+        names = [
+            name
+            for name, scenario in SCENARIOS.items()
+            if args.include_mutating or not scenario.mutating
+        ]
     deduped: list[Scenario] = []
     seen: set[str] = set()
     for name in names:
         if name in seen:
             continue
-        deduped.append(SCENARIOS[name])
+        scenario = SCENARIOS[name]
+        if scenario.mutating and not args.include_mutating:
+            raise SystemExit(
+                "OWUI_CHAT_SCENARIOS_BLOCKED\n"
+                f"reason=scenario {name!r} is mutating\n"
+                "recovery=rerun with --include-mutating when you intentionally want live repo/container changes"
+            )
+        deduped.append(scenario)
         seen.add(name)
     return deduped
 
@@ -242,7 +275,8 @@ def main() -> int:
     args = parse_args()
     if args.list:
         for scenario in SCENARIOS.values():
-            print(f"{scenario.name}: {scenario.description}")
+            marker = " [mutating]" if scenario.mutating else ""
+            print(f"{scenario.name}{marker}: {scenario.description}")
         return 0
 
     scenarios = selected_scenarios(args)

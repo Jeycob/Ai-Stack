@@ -38,6 +38,44 @@ gateway_diag() {
   fi
 }
 
+verify_gateway_contract() {
+  local health_file="$STATE_ROOT/gateway-health.json"
+  if ! curl -fsS http://127.0.0.1:9101/health -o "$health_file"; then
+    echo "gateway_health_fetch_failed=true" >&2
+    return 1
+  fi
+  if ! python3 - "$health_file" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+issues = []
+if data.get("ok") is not True:
+    issues.append("health_ok_false")
+if data.get("capability_mode") != "agent-first":
+    issues.append("capability_mode")
+if data.get("natural_codex_local_route") != "agent_loop":
+    issues.append("natural_codex_local_route")
+if data.get("codex_local_ready") is not True:
+    issues.append("codex_local_ready")
+if not str(data.get("runtime_fingerprint") or "").strip():
+    issues.append("runtime_fingerprint")
+if issues:
+    print("CODEX_GATEWAY_CONTRACT_FAILED")
+    print("issues=" + ",".join(issues))
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+    raise SystemExit(1)
+print("CODEX_GATEWAY_CONTRACT_OK")
+print("runtime_fingerprint=" + str(data.get("runtime_fingerprint") or "").strip())
+PY
+  then
+    echo "--- gateway /health ---" >&2
+    cat "$health_file" >&2 || true
+    echo "--- end gateway /health ---" >&2
+    return 1
+  fi
+}
+
 mkdir -p "$STATE_ROOT" "$AUDIT_ROOT"
 chown -R "$AI_USER:$AI_USER" "$STATE_ROOT" "$AUDIT_ROOT" || true
 
@@ -149,6 +187,10 @@ runuser -u "$AI_USER" -- bash -lc "PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FI
 gateway_pid="$(cat "$STATE_ROOT/codex-gateway.pid" 2>/dev/null || true)"
 for i in {1..30}; do
   if curl -fsS http://127.0.0.1:9101/health >/dev/null 2>&1; then
+    if ! verify_gateway_contract; then
+      gateway_diag
+      exit 1
+    fi
     echo "Codex gateway OK"
     echo "Codex stack OK"
     exit 0

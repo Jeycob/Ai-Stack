@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Offline regression smoke for codex-local preflight guards in owui_chat_turn.
+
+This verifies that codex-local turns fail fast with explicit recovery markers
+when capability-first runtime prerequisites are not ready, instead of falling
+through to a plain OpenWebUI model completion.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+TURN_PATH = ROOT / "codex/bin/owui_chat_turn.py"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Offline regression smoke for owui_chat_turn codex-local preflight.")
+    parser.add_argument("--model", default="codex-local-plan-qwen14b")
+    return parser.parse_args()
+
+
+def load_turn_module():
+    spec = importlib.util.spec_from_file_location("owui_chat_turn_preflight_test", TURN_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load turn helper from {TURN_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SmokeArgs:
+    model = "codex-local-plan-qwen14b"
+    no_follow_scheduled = True
+    response_json_out = ""
+    out = ""
+    skip_codex_preflight = False
+    base_url = "http://192.168.0.48:9090"
+    timeout = 5.0
+    total_timeout = 30.0
+    api_key_file = str(ROOT / "codex/state/openwebui-api.key")
+
+
+def local_runtime_fingerprint(turn) -> str:
+    fn = getattr(turn, "local_gateway_runtime_fingerprint", None)
+    if not callable(fn):
+        raise SystemExit("PREFLIGHT_SMOKE_SETUP_FAILED\nreason=local_gateway_runtime_fingerprint missing")
+    value = str(fn()).strip()
+    if not value:
+        raise SystemExit("PREFLIGHT_SMOKE_SETUP_FAILED\nreason=empty local gateway fingerprint")
+    return value
+
+
+def assert_token_missing_short_circuits(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        raise AssertionError("completion endpoint should not be reached when preflight fails")
+
+    def fake_health(_args):
+        return {
+            "ok": True,
+            "codex_local_ready": False,
+            "capability_mode": "agent-first",
+            "natural_codex_local_route": "agent_loop",
+            "runtime_fingerprint": local_runtime_fingerprint(turn),
+            "gateway_admin": {"lan_admin_ready": False},
+            "readiness_issues": ["GATEWAY_ADMIN_TOKEN_MISSING"],
+        }
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = fake_health
+    turn.run_codex_reconcile_check = lambda _args: {"ok": True}
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
+    joined = "\n".join(text_chunks)
+    if rc != 23:
+        raise SystemExit(f"PREFLIGHT_TOKEN_MISSING_FAILED\nreason=unexpected exit code {rc}")
+    if "GATEWAY_ADMIN_TOKEN_MISSING" not in joined:
+        raise SystemExit(f"PREFLIGHT_TOKEN_MISSING_FAILED\nreason=missing marker in {joined!r}")
+    if calls:
+        raise SystemExit(f"PREFLIGHT_TOKEN_MISSING_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_TOKEN_MISSING_OK")
+
+
+def assert_filter_stale_short_circuits(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        raise AssertionError("completion endpoint should not be reached when filter reconcile fails")
+
+    def fake_health(_args):
+        return {
+            "ok": True,
+            "codex_local_ready": True,
+            "capability_mode": "agent-first",
+            "natural_codex_local_route": "agent_loop",
+            "runtime_fingerprint": local_runtime_fingerprint(turn),
+            "gateway_admin": {"lan_admin_ready": True},
+            "readiness_issues": [],
+        }
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = fake_health
+    turn.run_codex_reconcile_check = lambda _args: {
+        "ok": False,
+        "issues": [],
+        "results": [{"issues": ["CODEX_LOCAL_FILTER_STALE"]}],
+        "recovery": "Run: python3 codex/bin/reconcile_openwebui_functions.py",
+    }
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
+    joined = "\n".join(text_chunks)
+    if rc != 23:
+        raise SystemExit(f"PREFLIGHT_FILTER_STALE_FAILED\nreason=unexpected exit code {rc}")
+    if "CODEX_LOCAL_FILTER_STALE" not in joined:
+        raise SystemExit(f"PREFLIGHT_FILTER_STALE_FAILED\nreason=missing marker in {joined!r}")
+    if calls:
+        raise SystemExit(f"PREFLIGHT_FILTER_STALE_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_FILTER_STALE_OK")
+
+
+def assert_ready_reaches_completion(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        if path != "/api/chat/completions":
+            raise AssertionError(f"ready stateless path touched unexpected endpoint: {method} {path}")
+        return 200, {"choices": [{"message": {"content": "READY_OK"}}]}
+
+    def fake_health(_args):
+        return {
+            "ok": True,
+            "codex_local_ready": True,
+            "capability_mode": "agent-first",
+            "natural_codex_local_route": "agent_loop",
+            "runtime_fingerprint": local_runtime_fingerprint(turn),
+            "gateway_admin": {"lan_admin_ready": True},
+            "readiness_issues": [],
+        }
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = fake_health
+    turn.run_codex_reconcile_check = lambda _args: {"ok": True}
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
+    joined = "\n".join(text_chunks)
+    if rc != 0:
+        raise SystemExit(f"PREFLIGHT_READY_FAILED\nreason=unexpected exit code {rc}")
+    if "READY_OK" not in joined:
+        raise SystemExit(f"PREFLIGHT_READY_FAILED\nreason=missing completion text in {joined!r}")
+    if calls != [("POST", "/api/chat/completions")]:
+        raise SystemExit(f"PREFLIGHT_READY_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_READY_OK")
+
+
+def assert_runtime_split_brain_short_circuits(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        raise AssertionError("completion endpoint should not be reached when runtime fingerprint mismatches")
+
+    def fake_health(_args):
+        return {
+            "ok": True,
+            "codex_local_ready": True,
+            "capability_mode": "agent-first",
+            "natural_codex_local_route": "agent_loop",
+            "runtime_fingerprint": "stale-runtime-fingerprint",
+            "gateway_admin": {"lan_admin_ready": True},
+            "readiness_issues": [],
+        }
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = fake_health
+    turn.run_codex_reconcile_check = lambda _args: {"ok": True}
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
+    joined = "\n".join(text_chunks)
+    if rc != 23:
+        raise SystemExit(f"PREFLIGHT_RUNTIME_SPLIT_BRAIN_FAILED\nreason=unexpected exit code {rc}")
+    if "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN" not in joined:
+        raise SystemExit(f"PREFLIGHT_RUNTIME_SPLIT_BRAIN_FAILED\nreason=missing marker in {joined!r}")
+    if calls:
+        raise SystemExit(f"PREFLIGHT_RUNTIME_SPLIT_BRAIN_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_RUNTIME_SPLIT_BRAIN_OK")
+
+
+def main() -> int:
+    _args = parse_args()
+    turn = load_turn_module()
+    assert_token_missing_short_circuits(turn)
+    turn = load_turn_module()
+    assert_filter_stale_short_circuits(turn)
+    turn = load_turn_module()
+    assert_runtime_split_brain_short_circuits(turn)
+    turn = load_turn_module()
+    assert_ready_reaches_completion(turn)
+    print("OWUI_CHAT_TURN_PREFLIGHT_SMOKE_OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

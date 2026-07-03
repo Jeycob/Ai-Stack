@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Cheap offline checks for gateway admin workspace-run helper normalization."""
+"""Cheap offline checks for gateway admin workspace-run helper normalization.
+
+The important regression here is that nested mentor/OpenWebUI helper commands
+must not recurse back into the visible chat path. They should be flattened into
+direct gateway capability calls, typically the agent loop.
+"""
 
 from __future__ import annotations
 
@@ -76,8 +81,11 @@ def main() -> int:
         {"model": "codex-local-plan-qwen14b", "messages": [{"role": "user", "content": read_only_prompt}]},
         read_only_prompt,
     )
-    if routed is not None:
-        raise AssertionError(f"read-only-analysis: expected direct model path, got {routed!r}")
+    if routed != (
+        "GATEWAY_ADMIN_AGENT_LOOP ai-stack -- "
+        "'Prohlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni 3 největší blockery autonomie a navrhni další bezpečný krok.'"
+    ):
+        raise AssertionError(f"read-only-analysis: expected agent-loop route, got {routed!r}")
 
     bootstrap_prompt = (
         "repo Test3\n"
@@ -87,8 +95,35 @@ def main() -> int:
         {"model": "codex-local-plan-qwen14b", "messages": [{"role": "user", "content": bootstrap_prompt}]},
         bootstrap_prompt,
     )
-    if routed != "GATEWAY_ADMIN_CREATE_LOCAL_REPO Test3":
-        raise AssertionError(f"create-workspace-git-ssh: expected create-local-repo, got {routed!r}")
+    if routed != "GATEWAY_ADMIN_AGENT_LOOP Test3 -- 'vytvor workspace a initni git a vygeneruj ssh klic'":
+        raise AssertionError(f"create-workspace-git-ssh: expected agent-loop route, got {routed!r}")
+
+    delegate = [
+        "python3",
+        "codex/bin/mentor_codex_local.py",
+        "delegate",
+        "--stateless-turns",
+        "ai-stack",
+        "Prohlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni 3 největší blockery autonomie a navrhni další bezpečný krok.",
+    ]
+    rescued = filt._workspace_run_rescue_command("ai-stack", delegate)
+    expected_rescue = (
+        "GATEWAY_ADMIN_AGENT_LOOP ai-stack -- "
+        "'Prohlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni 3 největší blockery autonomie a navrhni další bezpečný krok.'"
+    )
+    if rescued != expected_rescue:
+        raise AssertionError(f"delegate-rescue: expected {expected_rescue!r}, got {rescued!r}")
+
+    review = [
+        "python3",
+        "codex/bin/mentor_codex_local.py",
+        "review",
+        "--stateless-turns",
+        "ai-stack",
+    ]
+    rescued_review = filt._workspace_run_rescue_command("ai-stack", review)
+    if not rescued_review or "GATEWAY_ADMIN_AGENT_LOOP ai-stack --" not in rescued_review or "Proveď senior review workspace ai-stack." not in rescued_review:
+        raise AssertionError(f"review-rescue: expected direct agent-loop rescue, got {rescued_review!r}")
 
     print("GATEWAY_ADMIN_RUN_WORKSPACE_SMOKE_OK")
     return 0

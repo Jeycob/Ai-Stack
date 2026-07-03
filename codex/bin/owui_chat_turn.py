@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -27,6 +28,7 @@ import urllib.error
 import urllib.request
 from http.client import BadStatusLine, RemoteDisconnected
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 
 DEFAULT_BASE_URL = "http://192.168.0.48:9090"
@@ -34,6 +36,10 @@ DEFAULT_CHAT_ID = "57529037-84b9-42e1-8bae-9eab35b601bd"
 DEFAULT_MODEL = "codex-local-plan-qwen14b"
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 DEFAULT_API_KEY_FILE = Path(__file__).resolve().parents[1] / "state/openwebui-api.key"
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+DEFAULT_RECONCILE_SCRIPT = ROOT / "codex/bin/reconcile_openwebui_functions.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=os.getenv("OWUI_STATELESS", "").strip().lower() in {"1", "true", "yes", "on"},
         help="Skip visible chat GET/POST mutations and call only /api/chat/completions.",
+    )
+    parser.add_argument(
+        "--skip-codex-preflight",
+        action="store_true",
+        default=os.getenv("OWUI_SKIP_CODEX_PREFLIGHT", "").strip().lower() in {"1", "true", "yes", "on"},
+        help="Skip codex-local capability-first preflight checks before calling OpenWebUI completions.",
     )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
@@ -168,6 +180,180 @@ def http_request(
             time.sleep(min(remaining, retry_delay(args, attempt - 1)))
 
     raise RuntimeError(f"HTTP request failed after retries: {last_error}")
+
+
+def is_codex_local_model(model: str) -> bool:
+    return str(model or "").startswith("codex-local-")
+
+
+def default_gateway_base_url(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "127.0.0.1"
+    scheme = parsed.scheme or "http"
+    netloc = host
+    if parsed.username or parsed.password:
+        auth = parsed.username or ""
+        if parsed.password:
+            auth += ":" + parsed.password
+        netloc = auth + "@" + netloc
+    if ":" in host and not host.startswith("["):
+        netloc = f"[{host}]"
+    netloc += ":9101"
+    return urlunparse((scheme, netloc, "", "", "", ""))
+
+
+def gateway_base_url(args: argparse.Namespace) -> str:
+    value = os.getenv("CODEX_GATEWAY_URL", "").strip()
+    if value:
+        return value.rstrip("/")
+    return default_gateway_base_url(args.base_url).rstrip("/")
+
+
+def gateway_health_status(args: argparse.Namespace) -> dict:
+    url = f"{gateway_base_url(args)}/health"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+    client = opener()
+    with client.open(req, timeout=args.timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+        return json.loads(raw or "{}")
+
+
+def local_gateway_runtime_fingerprint() -> str:
+    try:
+        from codex.gateway import gateway as gateway_module
+    except Exception:
+        return ""
+    fn = getattr(gateway_module, "runtime_fingerprint", None)
+    if not callable(fn):
+        return ""
+    try:
+        value = str(fn()).strip()
+    except Exception:
+        return ""
+    return value
+
+
+def run_codex_reconcile_check(args: argparse.Namespace) -> dict:
+    script = DEFAULT_RECONCILE_SCRIPT
+    if not script.is_file():
+        return {
+            "ok": False,
+            "issues": ["CODEX_LOCAL_RECONCILER_MISSING"],
+            "recovery": f"Restore missing script: {script}",
+        }
+    cmd = [
+        sys.executable,
+        str(script),
+        "--base-url",
+        args.base_url,
+        "--api-key-file",
+        args.api_key_file,
+        "--check-only",
+        "--json",
+    ]
+    proc = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=max(10.0, min(args.total_timeout, 60.0)),
+    )
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return {
+            "ok": False,
+            "issues": ["CODEX_LOCAL_RECONCILE_PARSE_FAILED"],
+            "recovery": "Run: python3 codex/bin/reconcile_openwebui_functions.py --check-only --json",
+            "raw": (proc.stdout or "")[:2000],
+        }
+    return payload if isinstance(payload, dict) else {
+        "ok": False,
+        "issues": ["CODEX_LOCAL_RECONCILE_BAD_PAYLOAD"],
+        "recovery": "Run: python3 codex/bin/reconcile_openwebui_functions.py --check-only --json",
+    }
+
+
+def codex_preflight_failure_text(marker: str, recovery: str, *, details: dict | None = None) -> str:
+    lines = [marker]
+    if recovery.strip():
+        lines.append(f"recovery={recovery.strip()}")
+    if details:
+        try:
+            rendered = json.dumps(details, ensure_ascii=False, indent=2)
+        except TypeError:
+            rendered = str(details)
+        lines.extend(["details:", "```json", rendered[:12000], "```"])
+    return "\n".join(lines).strip()
+
+
+def codex_preflight_guard(args: argparse.Namespace) -> str | None:
+    if args.skip_codex_preflight or not is_codex_local_model(args.model):
+        return None
+
+    try:
+        health = gateway_health_status(args)
+    except Exception as exc:
+        return codex_preflight_failure_text(
+            "CODEX_LOCAL_GATEWAY_UNAVAILABLE",
+            f"Zkontroluj gateway na {gateway_base_url(args)}/health a pak spusť bash codex/bin/check_ai_stack.sh",
+            details={"error": f"{type(exc).__name__}: {exc}", "gateway_url": gateway_base_url(args)},
+        )
+
+    readiness_issues = [str(item) for item in (health.get("readiness_issues") or [])]
+    capability_mode = str(health.get("capability_mode") or "").strip()
+    natural_route = str(health.get("natural_codex_local_route") or "").strip()
+    if capability_mode != "agent-first" or natural_route != "agent_loop":
+        return codex_preflight_failure_text(
+            "CODEX_LOCAL_AGENT_ROUTE_DEGRADED",
+            "Restartuj gateway/runtime a ověř agent-first routing přes bash codex/bin/check_ai_stack.sh",
+            details={"gateway_health": health},
+        )
+    if health.get("gateway_admin", {}).get("lan_admin_ready") is False or "GATEWAY_ADMIN_TOKEN_MISSING" in readiness_issues:
+        return codex_preflight_failure_text(
+            "GATEWAY_ADMIN_TOKEN_MISSING",
+            "Ulož gateway admin token a znovu spusť codex/bin/start_codex_stack.sh nebo bash codex/bin/check_ai_stack.sh",
+            details={"gateway_health": health},
+        )
+    if health.get("codex_local_ready") is not True:
+        marker = readiness_issues[0] if readiness_issues else "CODEX_LOCAL_RUNTIME_NOT_READY"
+        return codex_preflight_failure_text(
+            marker,
+            "Oprav readiness issues z /health a pak spusť bash codex/bin/check_ai_stack.sh",
+            details={"gateway_health": health},
+        )
+
+    remote_fingerprint = str(health.get("runtime_fingerprint") or "").strip()
+    local_fingerprint = local_gateway_runtime_fingerprint()
+    if not remote_fingerprint:
+        return codex_preflight_failure_text(
+            "CODEX_LOCAL_RUNTIME_FINGERPRINT_MISSING",
+            "Nasad a restartuj aktuální ai-stack runtime; /health musí vracet runtime_fingerprint.",
+            details={"gateway_health": health, "local_runtime_fingerprint": local_fingerprint},
+        )
+    if local_fingerprint and remote_fingerprint != local_fingerprint:
+        return codex_preflight_failure_text(
+            "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
+            "Běží starý gateway/runtime proces nad novějším repem. Restartuj stack přes codex/bin/start_codex_stack.sh nebo codex/bin/deploy_ai_stack.sh.",
+            details={
+                "gateway_health": health,
+                "local_runtime_fingerprint": local_fingerprint,
+                "remote_runtime_fingerprint": remote_fingerprint,
+            },
+        )
+
+    reconcile = run_codex_reconcile_check(args)
+    if not bool(reconcile.get("ok")):
+        issues = [str(item) for item in (reconcile.get("issues") or [])]
+        if not issues:
+            for result in reconcile.get("results") or []:
+                issues.extend(str(item) for item in (result.get("issues") or []))
+        marker = issues[0] if issues else "CODEX_LOCAL_FILTER_STALE"
+        recovery = str(reconcile.get("recovery") or "Run: python3 codex/bin/reconcile_openwebui_functions.py").strip()
+        return codex_preflight_failure_text(marker, recovery, details=reconcile)
+
+    return None
 
 
 def append_message(
@@ -347,6 +533,27 @@ def response_text(completion: dict | list | str) -> str:
     return content if isinstance(content, str) else ""
 
 
+def completion_exit_code(completion_status: int, completion: dict | list | str) -> int:
+    return 0 if completion_status < 400 or is_expected_admin_detail(completion) else 22
+
+
+def log_visible_chat_degraded(args: argparse.Namespace, stage: str, exc: Exception) -> None:
+    log(
+        args,
+        (
+            "OWUI_VISIBLE_CHAT_DEGRADED "
+            f"stage={stage} "
+            "recovery=Retry OpenWebUI chat sync or rerun with --stateless "
+            f"error={type(exc).__name__}: {exc}"
+        ),
+    )
+
+
+def fallback_to_stateless(args: argparse.Namespace, technical_prompt: str, stage: str, exc: Exception) -> int:
+    log_visible_chat_degraded(args, stage, exc)
+    return run_stateless_completion(args, technical_prompt, skip_preflight=True)
+
+
 def is_expected_admin_detail(completion: dict | list | str) -> bool:
     if not isinstance(completion, dict):
         return False
@@ -479,7 +686,14 @@ def follow_scheduled_admin_job(
     return last_text
 
 
-def run_stateless_completion(args: argparse.Namespace, technical_prompt: str) -> int:
+def run_stateless_completion(args: argparse.Namespace, technical_prompt: str, skip_preflight: bool = False) -> int:
+    if not skip_preflight:
+        preflight = codex_preflight_guard(args)
+        if preflight:
+            if args.out:
+                Path(args.out).write_text(preflight, encoding="utf-8")
+            print(preflight)
+            return 23
     payload = {"model": args.model, "messages": [{"role": "user", "content": technical_prompt}], "stream": False}
     completion_status, completion = http_request(args, "POST", "/api/chat/completions", payload, allow_error=True)
     text = response_text(completion)
@@ -499,7 +713,7 @@ def run_stateless_completion(args: argparse.Namespace, technical_prompt: str) ->
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
     print(text)
-    return 0 if completion_status < 400 or is_expected_admin_detail(completion) else 22
+    return completion_exit_code(completion_status, completion)
 
 
 def main() -> int:
@@ -507,11 +721,25 @@ def main() -> int:
     technical_prompt = read_prompt(args)
     if args.stateless:
         return run_stateless_completion(args, technical_prompt)
+    preflight = codex_preflight_guard(args)
+    if preflight:
+        if args.out:
+            Path(args.out).write_text(preflight, encoding="utf-8")
+        print(preflight)
+        return 23
     visible_prompt = read_visible_prompt(args, technical_prompt)
     turn_key = effective_turn_key(args, visible_prompt, technical_prompt)
-    status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
+    try:
+        status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
+    except Exception as exc:
+        return fallback_to_stateless(args, technical_prompt, "load-chat", exc)
     if status >= 400 or not isinstance(chat_response, dict):
-        raise RuntimeError(f"Unable to load chat {args.chat_id}: {chat_response}")
+        return fallback_to_stateless(
+            args,
+            technical_prompt,
+            "load-chat",
+            RuntimeError(f"Unable to load chat {args.chat_id}: {chat_response}"),
+        )
 
     chat = chat_response["chat"]
     chat["title"] = args.title
@@ -526,39 +754,53 @@ def main() -> int:
         history["currentId"] = user_id
         chat["history"] = history
         chat["messages"] = list(messages.keys())
-        http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+        try:
+            http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+        except Exception as exc:
+            return fallback_to_stateless(args, technical_prompt, "append-user", exc)
 
     live_stop: threading.Event | None = None
     live_thread: threading.Thread | None = None
     started = time.monotonic()
     if not args.no_live_status:
         if live_message_id is None:
-            status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
-            if status < 400 and isinstance(chat_response, dict):
-                chat = chat_response["chat"]
-                history = chat.setdefault("history", {})
-                messages = history.setdefault("messages", {})
-                live_message_id = append_message(
-                    messages,
-                    user_id,
-                    "assistant",
-                    running_text(args, started, "sent to OpenWebUI gateway"),
-                    args.model,
-                    int(time.time()),
-                    done=False,
-                    turn_key=turn_key,
-                )
-                history["currentId"] = live_message_id
-                chat["history"] = history
-                chat["messages"] = list(messages.keys())
-                chat["title"] = args.title
-                http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+            try:
+                status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
+                if status < 400 and isinstance(chat_response, dict):
+                    chat = chat_response["chat"]
+                    history = chat.setdefault("history", {})
+                    messages = history.setdefault("messages", {})
+                    live_message_id = append_message(
+                        messages,
+                        user_id,
+                        "assistant",
+                        running_text(args, started, "sent to OpenWebUI gateway"),
+                        args.model,
+                        int(time.time()),
+                        done=False,
+                        turn_key=turn_key,
+                    )
+                    history["currentId"] = live_message_id
+                    chat["history"] = history
+                    chat["messages"] = list(messages.keys())
+                    chat["title"] = args.title
+                    http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+            except Exception as exc:
+                log_visible_chat_degraded(args, "start-live-status", exc)
+                live_message_id = None
         if live_message_id is not None:
             live_stop, live_thread = start_live_status(args, live_message_id, started)
 
     model_messages = messages_for_model(messages, user_id, technical_prompt, args.send_history)
     completion_payload = {"model": args.model, "messages": model_messages, "stream": False}
-    completion_status, completion = http_request(args, "POST", "/api/chat/completions", completion_payload, allow_error=True)
+    try:
+        completion_status, completion = http_request(args, "POST", "/api/chat/completions", completion_payload, allow_error=True)
+    except Exception as exc:
+        if live_stop is not None:
+            live_stop.set()
+        if live_thread is not None:
+            live_thread.join(timeout=2.0)
+        return fallback_to_stateless(args, technical_prompt, "chat-completions", exc)
     if live_stop is not None:
         live_stop.set()
     if live_thread is not None:
@@ -578,30 +820,41 @@ def main() -> int:
     if completion_status >= 400 and not is_expected_admin_detail(completion):
         text = f"OpenWebUI/model call failed with HTTP {completion_status}:\n{text}"
 
-    if live_message_id is not None and update_visible_assistant(args, live_message_id, text, done=True):
+    updated_visible = False
+    if live_message_id is not None:
+        try:
+            updated_visible = update_visible_assistant(args, live_message_id, text, done=True)
+        except Exception as exc:
+            log_visible_chat_degraded(args, "finalize-live-status", exc)
+            updated_visible = False
+
+    if updated_visible:
         if args.out:
             Path(args.out).write_text(text, encoding="utf-8")
         print(text)
-        return 0 if completion_status < 400 or is_expected_admin_detail(completion) else 22
+        return completion_exit_code(completion_status, completion)
 
-    status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
-    if status >= 400 or not isinstance(chat_response, dict):
-        raise RuntimeError(f"Unable to reload chat {args.chat_id}: {chat_response}")
-    chat = chat_response["chat"]
-    history = chat.setdefault("history", {})
-    messages = history.setdefault("messages", {})
-    current_id = history.get("currentId") or user_id
-    assistant_id = append_message(messages, current_id, "assistant", text, args.model, int(time.time()), turn_key=turn_key)
-    history["currentId"] = assistant_id
-    chat["history"] = history
-    chat["messages"] = list(messages.keys())
-    chat["title"] = args.title
-    http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+    try:
+        status, chat_response = http_request(args, "GET", f"/api/v1/chats/{args.chat_id}")
+        if status >= 400 or not isinstance(chat_response, dict):
+            raise RuntimeError(f"Unable to reload chat {args.chat_id}: {chat_response}")
+        chat = chat_response["chat"]
+        history = chat.setdefault("history", {})
+        messages = history.setdefault("messages", {})
+        current_id = history.get("currentId") or user_id
+        assistant_id = append_message(messages, current_id, "assistant", text, args.model, int(time.time()), turn_key=turn_key)
+        history["currentId"] = assistant_id
+        chat["history"] = history
+        chat["messages"] = list(messages.keys())
+        chat["title"] = args.title
+        http_request(args, "POST", f"/api/v1/chats/{args.chat_id}", {"chat": chat})
+    except Exception as exc:
+        log_visible_chat_degraded(args, "append-assistant", exc)
 
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
     print(text)
-    return 0 if completion_status < 400 or is_expected_admin_detail(completion) else 22
+    return completion_exit_code(completion_status, completion)
 
 
 if __name__ == "__main__":

@@ -2249,57 +2249,66 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
 
 
 def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -> str:
-    def helper(mode: str, *parts: str, nested: bool = True) -> str:
-        cmd = ["python3", "codex/bin/mentor_codex_local.py", mode]
-        if nested:
-            cmd.append("--stateless-turns")
-        cmd.extend(parts)
-        return shlex.join(cmd)
+    def agent_loop(workspace_name: str, prompt: str) -> str:
+        target = (workspace_name or "ai-stack").strip() or "ai-stack"
+        text = " ".join(str(prompt or "").split()).strip()
+        if not text:
+            text = "Analyzuj projekt a navrhni další bezpečný capability krok."
+        return f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(target)} -- {shlex.quote(text[:3000])}"
 
     workflow = decision["workflow"]
     task = task.strip()
     if workflow == "run":
         command = extract_run_command(task)
-        return helper("delegate", workspace, f"repo: {workspace}\nspusť příkaz: {command}") if command else helper("audit", workspace)
+        if command:
+            return agent_loop(workspace, f"repo: {workspace}\nspusť příkaz: {command}")
+        return agent_loop(workspace, f"repo: {workspace}\nAnalyzuj projekt a navrhni další bezpečný capability krok. Nic needituj.")
     if workflow == "action":
         action_name = decision.get("action_name", "")
-        return helper("action", workspace, action_name) if action_name else helper("audit", workspace)
+        if action_name:
+            action_prompts = {
+                "install": "Nainstaluj závislosti a vrať stručný výsledek.",
+                "test": "Spusť testy a vrať stručný výsledek.",
+                "build": "Spusť build a vrať stručný výsledek.",
+                "lint": "Spusť lint a vrať stručný výsledek.",
+                "verify": "Ověř projekt a vrať stručný audit výsledků.",
+                "smoke": "Zkus projekt auditovaně rozběhnout a vrať stručný startup výsledek.",
+            }
+            return agent_loop(workspace, f"repo: {workspace}\n{action_prompts.get(action_name, task)}")
+        return agent_loop(workspace, f"repo: {workspace}\nAnalyzuj projekt a navrhni další bezpečný capability krok. Nic needituj.")
     if workflow == "create-repo":
         repo_name = decision.get("repo_name", "")
         if repo_name:
-            parts = [repo_name]
-            if decision.get("repo_github") == "yes":
-                parts.append("--github")
-            parts.append("--restart")
-            return helper("create-repo", *parts)
-        return helper("audit", workspace)
+            suffix = " a připrav i GitHub remote." if decision.get("repo_github") == "yes" else "."
+            return agent_loop("ai-stack", f"repo: ai-stack\nVytvoř nové repository {repo_name}{suffix}")
+        return agent_loop(workspace, f"repo: {workspace}\nAnalyzuj projekt a navrhni další bezpečný capability krok. Nic needituj.")
     if workflow == "bootstrap-improve":
-        return helper("bootstrap-dispatch", workspace, task, "--execute")
+        return agent_loop("ai-stack", f"repo: ai-stack\n{task}\nPokračuj bootstrapem a nejbližším bezpečným capability krokem.")
     if workflow == "deploy":
-        return helper("deploy")
+        return agent_loop("ai-stack", "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav.")
     if workflow == "web-answer":
         url = extract_public_url(task)
-        return helper("web-answer", url, task) if url else helper("audit", workspace)
+        return agent_loop("ai-stack", task if url else f"repo: {workspace}\nAnalyzuj projekt a navrhni další bezpečný capability krok. Nic needituj.")
     if workflow == "web-fetch":
         url = extract_public_url(task)
-        return helper("web-fetch", url) if url else helper("audit", workspace)
+        return agent_loop("ai-stack", task if url else f"repo: {workspace}\nAnalyzuj projekt a navrhni další bezpečný capability krok. Nic needituj.")
     if workflow == "publish-plan":
-        return helper("publish-plan", workspace)
+        return agent_loop(workspace, f"repo: {workspace}\nPřiprav krátký publish plán pro release/publikaci a navrhni další auditované kroky.")
     if workflow == "release-prep":
-        return helper("release-prep", workspace)
+        return agent_loop(workspace, f"repo: {workspace}\nZkontroluj release readiness, shrň blokery a navrhni další krok před publikací.")
     if workflow == "push-check":
-        return helper("push-check")
+        return agent_loop("ai-stack", "repo: ai-stack\nZkontroluj, jestli jsou změny připravené na push, a stručně řekni co případně blokuje publish.")
     if workflow == "push":
-        return helper("push")
+        return agent_loop("ai-stack", "repo: ai-stack\nCommitni povolené změny a pushni je do GitHubu. Po dokončení napiš stručný stav.")
     if workflow == "review":
-        return helper("review", workspace)
+        return agent_loop(workspace, f"repo: {workspace}\nProveď review, najdi hlavní rizika a navrhni další krok. Nic needituj.")
     if workflow == "apply-safe":
-        return helper("apply-safe", workspace)
+        return agent_loop(workspace, f"repo: {workspace}\nUprav malý bezpečný patch a auditovaně ho aplikuj.")
     if workflow == "improve":
-        return helper("improve", workspace)
+        return agent_loop(workspace, f"repo: {workspace}\nFixni to a dotáhni co zvládneš.")
     if workflow == "autopilot":
-        return helper("autopilot", workspace)
-    return helper("audit", workspace)
+        return agent_loop(workspace, f"repo: {workspace}\nOvěř projekt a pokračuj sám.")
+    return agent_loop(workspace, f"repo: {workspace}\nAnalyzuj projekt a navrhni další krok. Nic needituj.")
 
 
 def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task: str) -> str:

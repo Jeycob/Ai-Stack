@@ -132,9 +132,23 @@ python3 -m py_compile \
   codex/gateway/gateway.py \
   codex/bin/openwebui_gateway_admin_filter.py \
   codex/bin/openwebui_codex_auto_tools_filter.py \
+  codex/bin/codex_gateway_smoke.py \
+  codex/bin/gateway_recovery_smoke.py \
+  codex/bin/gateway_admin_run_workspace_smoke.py \
+  codex/bin/gateway_nested_helper_rescue_smoke.py \
+  codex/bin/gateway_runtime_health_smoke.py \
+  codex/bin/gateway_runtime_fingerprint_check.py \
+  codex/bin/container_runner_guard.py \
+  codex/bin/container_runner_guard_smoke.py \
+  codex/bin/mentor_capability_routing_smoke.py \
+  codex/bin/owui_chat_scenario_catalog_smoke.py \
+  codex/bin/owui_chat_turn_preflight_smoke.py \
+  codex/bin/owui_chat_turn_visible_fallback_smoke.py \
+  codex/bin/filter_route_smoke.py \
   codex/bin/http_retry.py \
   codex/bin/gateway_admin.py \
   codex/bin/owui_chat_turn.py \
+  codex/bin/owui_chat_turn_codex_local_route_smoke.py \
   codex/bin/owui_chat_scenarios.py \
   codex/bin/run_check.py \
   codex/bin/add_workspace.py \
@@ -143,7 +157,23 @@ python3 -m py_compile \
   codex/bin/mentor_codex_local.py \
   codex/bin/sync_openwebui_function.py \
   codex/bin/reconcile_openwebui_functions.py \
-  codex/bin/reconcile_openwebui_functions_test.py
+  codex/bin/reconcile_openwebui_functions_test.py \
+  codex/bin/mentor_capability_routing_smoke.py \
+  codex/bin/gateway_admin_run_workspace_smoke.py
+
+section "Offline routing and recovery smoke"
+python3 codex/bin/filter_route_smoke.py --json
+python3 codex/bin/gateway_recovery_smoke.py
+python3 codex/bin/gateway_admin_run_workspace_smoke.py
+python3 codex/bin/gateway_nested_helper_rescue_smoke.py
+python3 codex/bin/gateway_runtime_health_smoke.py
+python3 codex/bin/container_runner_guard_smoke.py
+python3 codex/bin/mentor_capability_routing_smoke.py
+python3 codex/bin/reconcile_openwebui_functions_test.py
+python3 codex/bin/owui_chat_scenario_catalog_smoke.py
+python3 codex/bin/owui_chat_turn_preflight_smoke.py
+python3 codex/bin/owui_chat_turn_codex_local_route_smoke.py --help >/dev/null
+python3 codex/bin/owui_chat_turn_visible_fallback_smoke.py
 
 section "Validating shell helpers"
 bash -n \

@@ -10,7 +10,7 @@ TIMEOUT="${TIMEOUT:-10}"
 OWUI_CHAT_SMOKE_EXPECTED="${OWUI_CHAT_SMOKE_EXPECTED:-smoke}"
 OWUI_CHAT_SMOKE_VISIBLE="${OWUI_CHAT_SMOKE_VISIBLE:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
 OWUI_CHAT_SMOKE_PROMPT="${OWUI_CHAT_SMOKE_PROMPT:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
-OWUI_CHAT_SCENARIOS="${OWUI_CHAT_SCENARIOS:-agent-review,verify-project}"
+OWUI_CHAT_SCENARIOS="${OWUI_CHAT_SCENARIOS:-agent-review,explicit-agent-loop,verify-project}"
 SUMMARY_ONLY="${CHECK_AI_STACK_SUMMARY_ONLY:-0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -202,8 +202,276 @@ fi
 
 check_url 'Ollama version endpoint' "$OLLAMA_URL/api/version"
 check_json_contains 'Codex gateway health' "$CODEX_GATEWAY_URL/health" '"ok": true'
+check_json_contains 'Codex gateway capability mode' "$CODEX_GATEWAY_URL/health" '"capability_mode": "agent-first"'
+check_json_contains 'Codex gateway natural route' "$CODEX_GATEWAY_URL/health" '"natural_codex_local_route": "agent_loop"'
+check_json_contains 'Codex gateway codex-local readiness' "$CODEX_GATEWAY_URL/health" '"codex_local_ready": true'
 check_json_contains 'Codex gateway model alias' "$CODEX_GATEWAY_URL/v1/models" "$MODEL"
 check_json_contains 'Codex gateway workspace registry' "$CODEX_GATEWAY_URL/v1/workspaces" "$WORKSPACE"
+
+if [ "${SKIP_FILTER_ROUTE_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex filter route smoke ... SKIP (disabled)\n'
+  record_summary "Codex filter route smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/filter_route_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex filter route smoke ...\n'
+  filter_route_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/filter_route_smoke.py" --json >"$filter_route_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$filter_route_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex filter route smoke OK\n'
+    record_summary "Codex filter route smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$filter_route_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex filter route smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex filter route smoke" "FAIL"
+  fi
+  rm -f "$filter_route_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex filter route smoke ... SKIP (python3 or filter_route_smoke.py missing)\n'
+  record_summary "Codex filter route smoke" "SKIP"
+fi
+
+if [ "${SKIP_GATEWAY_RECOVERY_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway recovery smoke ... SKIP (disabled)\n'
+  record_summary "Codex gateway recovery smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_recovery_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway recovery smoke ...\n'
+  gateway_recovery_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/gateway_recovery_smoke.py" >"$gateway_recovery_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_recovery_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway recovery smoke OK\n'
+    record_summary "Codex gateway recovery smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_recovery_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway recovery smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex gateway recovery smoke" "FAIL"
+  fi
+  rm -f "$gateway_recovery_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway recovery smoke ... SKIP (python3 or gateway_recovery_smoke.py missing)\n'
+  record_summary "Codex gateway recovery smoke" "SKIP"
+fi
+
+if [ "${SKIP_GATEWAY_ADMIN_WORKSPACE_RUN_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway admin workspace-run smoke ... SKIP (disabled)\n'
+  record_summary "Codex gateway admin workspace-run smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_admin_run_workspace_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway admin workspace-run smoke ...\n'
+  gateway_admin_run_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/gateway_admin_run_workspace_smoke.py" >"$gateway_admin_run_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_admin_run_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway admin workspace-run smoke OK\n'
+    record_summary "Codex gateway admin workspace-run smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_admin_run_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway admin workspace-run smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex gateway admin workspace-run smoke" "FAIL"
+  fi
+  rm -f "$gateway_admin_run_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway admin workspace-run smoke ... SKIP (python3 or gateway_admin_run_workspace_smoke.py missing)\n'
+  record_summary "Codex gateway admin workspace-run smoke" "SKIP"
+fi
+
+if [ "${SKIP_GATEWAY_NESTED_HELPER_RESCUE_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway nested helper rescue smoke ... SKIP (disabled)\n'
+  record_summary "Codex gateway nested helper rescue smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_nested_helper_rescue_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway nested helper rescue smoke ...\n'
+  gateway_nested_helper_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/gateway_nested_helper_rescue_smoke.py" >"$gateway_nested_helper_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_nested_helper_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway nested helper rescue smoke OK\n'
+    record_summary "Codex gateway nested helper rescue smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_nested_helper_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway nested helper rescue smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex gateway nested helper rescue smoke" "FAIL"
+  fi
+  rm -f "$gateway_nested_helper_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway nested helper rescue smoke ... SKIP (python3 or gateway_nested_helper_rescue_smoke.py missing)\n'
+  record_summary "Codex gateway nested helper rescue smoke" "SKIP"
+fi
+
+if [ "${SKIP_GATEWAY_RUNTIME_HEALTH_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime health smoke ... SKIP (disabled)\n'
+  record_summary "Codex gateway runtime health smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_runtime_health_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime health smoke ...\n'
+  gateway_runtime_health_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/gateway_runtime_health_smoke.py" >"$gateway_runtime_health_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_runtime_health_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime health smoke OK\n'
+    record_summary "Codex gateway runtime health smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_runtime_health_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime health smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex gateway runtime health smoke" "FAIL"
+  fi
+  rm -f "$gateway_runtime_health_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime health smoke ... SKIP (python3 or gateway_runtime_health_smoke.py missing)\n'
+  record_summary "Codex gateway runtime health smoke" "SKIP"
+fi
+
+if [ "${SKIP_CONTAINER_RUNNER_GUARD_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Container runner guard smoke ... SKIP (disabled)\n'
+  record_summary "Container runner guard smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/container_runner_guard_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Container runner guard smoke ...\n'
+  container_guard_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/container_runner_guard_smoke.py" >"$container_guard_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$container_guard_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Container runner guard smoke OK\n'
+    record_summary "Container runner guard smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$container_guard_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Container runner guard smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Container runner guard smoke" "FAIL"
+  fi
+  rm -f "$container_guard_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Container runner guard smoke ... SKIP (python3 or container_runner_guard_smoke.py missing)\n'
+  record_summary "Container runner guard smoke" "SKIP"
+fi
+
+if [ "${SKIP_RECONCILER_UNIT_TESTS:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI reconciler unit tests ... SKIP (disabled)\n'
+  record_summary "OpenWebUI reconciler unit tests" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/reconcile_openwebui_functions_test.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI reconciler unit tests ...\n'
+  reconciler_test_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/reconcile_openwebui_functions_test.py" >"$reconciler_test_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$reconciler_test_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI reconciler unit tests OK\n'
+    record_summary "OpenWebUI reconciler unit tests" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$reconciler_test_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI reconciler unit tests FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI reconciler unit tests" "FAIL"
+  fi
+  rm -f "$reconciler_test_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI reconciler unit tests ... SKIP (python3 or reconcile_openwebui_functions_test.py missing)\n'
+  record_summary "OpenWebUI reconciler unit tests" "SKIP"
+fi
+
+if [ "${SKIP_GATEWAY_RUNTIME_FINGERPRINT_CHECK:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint check ... SKIP (disabled)\n'
+  record_summary "Codex gateway runtime fingerprint check" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_runtime_fingerprint_check.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint check ...\n'
+  gateway_runtime_fp_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/gateway_runtime_fingerprint_check.py" \
+      --base-url "$CODEX_GATEWAY_URL" >"$gateway_runtime_fp_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_runtime_fp_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint check OK\n'
+    record_summary "Codex gateway runtime fingerprint check" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_runtime_fp_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint check FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex gateway runtime fingerprint check" "FAIL"
+  fi
+  rm -f "$gateway_runtime_fp_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint check ... SKIP (python3 or gateway_runtime_fingerprint_check.py missing)\n'
+  record_summary "Codex gateway runtime fingerprint check" "SKIP"
+fi
+
+if [ "${SKIP_MENTOR_CAPABILITY_ROUTING_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Mentor capability routing smoke ... SKIP (disabled)\n'
+  record_summary "Mentor capability routing smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/mentor_capability_routing_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Mentor capability routing smoke ...\n'
+  mentor_capability_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/mentor_capability_routing_smoke.py" >"$mentor_capability_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$mentor_capability_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Mentor capability routing smoke OK\n'
+    record_summary "Mentor capability routing smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$mentor_capability_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Mentor capability routing smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Mentor capability routing smoke" "FAIL"
+  fi
+  rm -f "$mentor_capability_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Mentor capability routing smoke ... SKIP (python3 or mentor_capability_routing_smoke.py missing)\n'
+  record_summary "Mentor capability routing smoke" "SKIP"
+fi
+
+if [ "${SKIP_OWUI_CHAT_SCENARIO_CATALOG_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenario catalog smoke ... SKIP (disabled)\n'
+  record_summary "OpenWebUI chat scenario catalog smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/owui_chat_scenario_catalog_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenario catalog smoke ...\n'
+  owui_scenario_catalog_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/owui_chat_scenario_catalog_smoke.py" >"$owui_scenario_catalog_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_scenario_catalog_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenario catalog smoke OK\n'
+    record_summary "OpenWebUI chat scenario catalog smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_scenario_catalog_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenario catalog smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI chat scenario catalog smoke" "FAIL"
+  fi
+  rm -f "$owui_scenario_catalog_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat scenario catalog smoke ... SKIP (python3 or owui_chat_scenario_catalog_smoke.py missing)\n'
+  record_summary "OpenWebUI chat scenario catalog smoke" "SKIP"
+fi
+
+if [ "${SKIP_OWUI_CHAT_TURN_PREFLIGHT_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat turn preflight smoke ... SKIP (disabled)\n'
+  record_summary "OpenWebUI chat turn preflight smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/owui_chat_turn_preflight_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat turn preflight smoke ...\n'
+  owui_preflight_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/owui_chat_turn_preflight_smoke.py" >"$owui_preflight_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_preflight_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat turn preflight smoke OK\n'
+    record_summary "OpenWebUI chat turn preflight smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_preflight_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat turn preflight smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI chat turn preflight smoke" "FAIL"
+  fi
+  rm -f "$owui_preflight_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI chat turn preflight smoke ... SKIP (python3 or owui_chat_turn_preflight_smoke.py missing)\n'
+  record_summary "OpenWebUI chat turn preflight smoke" "SKIP"
+fi
+
+if [ "${SKIP_OWUI_VISIBLE_FALLBACK_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI visible fallback smoke ... SKIP (disabled)\n'
+  record_summary "OpenWebUI visible fallback smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/owui_chat_turn_visible_fallback_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI visible fallback smoke ...\n'
+  owui_visible_fallback_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/owui_chat_turn_visible_fallback_smoke.py" >"$owui_visible_fallback_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_visible_fallback_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI visible fallback smoke OK\n'
+    record_summary "OpenWebUI visible fallback smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_visible_fallback_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI visible fallback smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI visible fallback smoke" "FAIL"
+  fi
+  rm -f "$owui_visible_fallback_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI visible fallback smoke ... SKIP (python3 or owui_chat_turn_visible_fallback_smoke.py missing)\n'
+  record_summary "OpenWebUI visible fallback smoke" "SKIP"
+fi
 
 if [ "${SKIP_GATEWAY_SMOKE:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke ... SKIP (disabled)\n'
@@ -300,6 +568,35 @@ else
     record_summary "OpenWebUI explicit agent-loop smoke" "FAIL"
   fi
   rm -f "$explicit_prompt_file" "$explicit_smoke_log"
+fi
+
+if [ "${SKIP_OWUI_STATELESS_ROUTE_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI stateless natural route smoke ... SKIP (disabled)\n'
+  record_summary "OpenWebUI stateless natural route smoke" "SKIP"
+elif ! command -v python3 >/dev/null 2>&1 || [ ! -f "$SCRIPT_DIR/owui_chat_turn_codex_local_route_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI stateless natural route smoke ... SKIP (python3 or smoke helper missing)\n'
+  record_summary "OpenWebUI stateless natural route smoke" "SKIP"
+elif [ -z "${OWUI_API_KEY:-}" ] && [ ! -f "$OWUI_KEY_FILE" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI stateless natural route smoke ... SKIP (no API key)\n'
+  record_summary "OpenWebUI stateless natural route smoke" "SKIP"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI stateless natural route smoke ...\n'
+  stateless_route_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/owui_chat_turn_codex_local_route_smoke.py" \
+      --base-url "$OPENWEBUI_URL" \
+      --api-key-file "$OWUI_KEY_FILE" \
+      --model "$MODEL" \
+      --quiet >"$stateless_route_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$stateless_route_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI stateless natural route smoke OK\n'
+    record_summary "OpenWebUI stateless natural route smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$stateless_route_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI stateless natural route smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI stateless natural route smoke" "FAIL"
+  fi
+  rm -f "$stateless_route_log"
 fi
 
 if [ "${SKIP_OWUI_CHAT_SCENARIOS:-0}" = "1" ]; then

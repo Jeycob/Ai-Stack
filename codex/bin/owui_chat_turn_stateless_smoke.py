@@ -50,6 +50,7 @@ def main() -> int:
         no_follow_scheduled = True
         response_json_out = ""
         out = ""
+        skip_codex_preflight = True
 
     rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nOdpovez jednim slovem: ok")
     if rc != 0:
