@@ -1712,7 +1712,8 @@ def workspace_action_probe_command(workspace: str, action: str, timeout: int = 9
     return command
 
 
-def first_supported_workspace_action(workspace: str, actions: list[str], timeout: int = 900) -> tuple[str, str] | tuple[None, None]:
+def supported_workspace_actions(workspace: str, actions: list[str], timeout: int = 900, limit: int = 3) -> list[tuple[str, str]]:
+    supported: list[tuple[str, str]] = []
     for action in actions:
         probe = workspace_action_probe_command(workspace, action, timeout=timeout, dry_run=True)
         proc = subprocess.run(
@@ -1723,8 +1724,10 @@ def first_supported_workspace_action(workspace: str, actions: list[str], timeout
             stderr=subprocess.STDOUT,
         )
         if proc.returncode == 0:
-            return action, proc.stdout.strip()
-    return None, None
+            supported.append((action, proc.stdout.strip()))
+            if len(supported) >= limit:
+                break
+    return supported
 
 
 def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
@@ -1737,6 +1740,7 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     fallback_candidates = [action for action in ["install", "verify", "build", "test", "lint"] if action not in followup_candidates]
     followup_plan = followup_candidates + fallback_candidates
     preferred_followup = followup_plan[0] if followup_plan else None
+    followup_limit = max(1, min(getattr(args, "followup_steps", 2), 4))
 
     print(f"MENTOR_BOOTSTRAP_DISPATCH_WORKSPACE={args.workspace}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_TASK={args.task}")
@@ -1747,6 +1751,7 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_BOOTSTRAP_DISPATCH_SCAFFOLD_RECIPE={recipe}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_CANDIDATES={','.join(followup_candidates) or '(none)'}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_PLAN={','.join(followup_plan) or '(none)'}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_LIMIT={followup_limit}")
     for idx, (label, value) in enumerate(steps, start=1):
         print(f"BOOTSTRAP_STEP_{idx}_LABEL={label}")
         print(f"BOOTSTRAP_STEP_{idx}_VALUE={value}")
@@ -1764,6 +1769,7 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     runner = bootstrap_runner_command(repo_name, recipe, args.timeout)
     print(f"BOOTSTRAP_DISPATCH_RUNNER={shlex.join(runner)}")
     print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_ACTION={preferred_followup or 'none'}")
+    print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_SEQUENCE={','.join(followup_plan[:followup_limit]) or 'none'}")
     print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_SOURCE={'inferred' if preferred_followup else 'none'}")
     if preferred_followup:
         print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_RUNNER={shlex.join(workspace_action_probe_command(repo_name, preferred_followup, timeout=min(args.timeout, 900), dry_run=False))}")
@@ -1788,17 +1794,22 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     if proc.returncode != 0:
         return 0
 
-    selected_followup, followup_probe_output = first_supported_workspace_action(
+    selected_followups = supported_workspace_actions(
         repo_name,
         followup_plan,
         timeout=min(args.timeout, 900),
+        limit=followup_limit,
     )
-    if followup_probe_output:
-        print("BOOTSTRAP_DISPATCH_FOLLOWUP_PROBE_BEGIN")
-        print(followup_probe_output)
-        print("BOOTSTRAP_DISPATCH_FOLLOWUP_PROBE_END")
-    if selected_followup:
-        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_SELECTED={selected_followup}")
+    if selected_followups:
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_SELECTED={','.join(action for action, _ in selected_followups)}")
+    else:
+        print("BOOTSTRAP_DISPATCH_FOLLOWUP_SELECTED=none")
+
+    for idx, (selected_followup, followup_probe_output) in enumerate(selected_followups, start=1):
+        if followup_probe_output:
+            print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_PROBE_{idx}_BEGIN")
+            print(followup_probe_output)
+            print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_PROBE_{idx}_END")
         followup_runner = workspace_action_probe_command(repo_name, selected_followup, timeout=min(args.timeout, 900), dry_run=False)
         followup_proc = subprocess.run(
             followup_runner,
@@ -1807,13 +1818,14 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        print("BOOTSTRAP_DISPATCH_FOLLOWUP_EXECUTION_BEGIN")
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_EXECUTION_{idx}_BEGIN")
         if followup_proc.stdout:
             print(followup_proc.stdout.strip())
-        print("BOOTSTRAP_DISPATCH_FOLLOWUP_EXECUTION_END")
-        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_EXIT_CODE={followup_proc.returncode}")
-    else:
-        print("BOOTSTRAP_DISPATCH_FOLLOWUP_SELECTED=none")
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_EXECUTION_{idx}_END")
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_{idx}_ACTION={selected_followup}")
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_{idx}_EXIT_CODE={followup_proc.returncode}")
+        if followup_proc.returncode != 0:
+            break
     return 0
 
 
@@ -2680,6 +2692,7 @@ def parse_args() -> argparse.Namespace:
     bootstrap_dispatch.add_argument("workspace")
     bootstrap_dispatch.add_argument("task")
     bootstrap_dispatch.add_argument("--timeout", type=int, default=1800)
+    bootstrap_dispatch.add_argument("--followup-steps", type=int, default=2, help="Maximum number of post-bootstrap workspace capability steps to probe/execute")
     bootstrap_dispatch.add_argument("--execute", action="store_true", help="Actually run the selected scaffold command through run_check.py")
     bootstrap_dispatch.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; print the chosen bootstrap command without executing it")
 
@@ -2737,6 +2750,7 @@ def parse_args() -> argparse.Namespace:
     bootstrap_improve.add_argument("workspace", help="Controller workspace, typically ai-stack")
     bootstrap_improve.add_argument("task")
     bootstrap_improve.add_argument("--timeout", type=int, default=2400)
+    bootstrap_improve.add_argument("--followup-steps", type=int, default=2, help="Maximum number of post-bootstrap workspace capability steps to attempt before improve flow")
     bootstrap_improve.add_argument("--max-steps", type=int, default=2)
     bootstrap_improve.add_argument("--allow-actions", default="install,test,build,lint")
     bootstrap_improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")

@@ -240,12 +240,13 @@ spustit v nove vytvorenem workspace. `bootstrap-improve` ho pouziva automaticky
 mezi `create-repo` a `improve`, takze lokalni agent neskonci jen u zalozeni
 repozitare, ale zkusi i prvni starter/bootstrap command.
 
-Od ted ten helper navic umi z `scaffold_loop` odvodit i dalsi capability krok.
+Od ted ten helper navic umi z `scaffold_loop` odvodit i dalsi capability kroky.
 Nejdřív si pripravi follow-up kandidaty jako `install`, `verify`, `build`,
 `test` nebo `lint`, zohledni co uz recipe samo provedlo, a po uspesnem
-bootstrapu zkusi pres existujici `workspace_action.py --dry-run` najit prvni
-realne podporovanou workspace akci. Tohle je zamerne reuse stavajici capability
-vrstvy, ne dalsi paralelni executor.
+bootstrapu zkusi pres existujici `workspace_action.py --dry-run` najit kratkou
+realne podporovanou posloupnost workspace akci. Sekvence je zamerne kratka a
+guardrailed, a pri prvnim failu se zastavi. Tohle je porad reuse stavajici
+capability vrstvy, ne dalsi paralelni executor.
 
 Priklad explicitniho scaffold planu:
 
