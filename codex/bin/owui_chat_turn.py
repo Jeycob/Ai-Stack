@@ -5,7 +5,9 @@ Flow:
 1. Load an existing OpenWebUI chat.
 2. Append the user prompt to its visible history.
 3. Call OpenWebUI /api/chat/completions with the selected model.
-4. Append the assistant response to the same visible chat.
+4. If the admin/gateway layer schedules a background job, optionally poll its
+   status to completion while keeping the visible assistant message alive.
+5. Append the assistant response to the same visible chat.
 
 The goal is to avoid silent completions: every agent instruction and response is
 left in the configured audit chat.
@@ -55,6 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-delay", type=float, default=0.5)
     parser.add_argument("--max-delay", type=float, default=4.0)
     parser.add_argument("--total-timeout", type=float, default=240.0)
+    parser.add_argument("--job-poll-interval", type=float, default=6.0, help="Seconds between follow-up polls for scheduled admin jobs")
+    parser.add_argument("--no-follow-scheduled", action="store_true", help="Do not poll scheduled admin jobs to completion")
     parser.add_argument("--no-live-status", action="store_true", help="Do not maintain a visible running assistant message")
     parser.add_argument("--status-interval", type=float, default=8.0, help="Seconds between visible running-status updates")
     parser.add_argument("--quiet", action="store_true")
@@ -362,10 +366,111 @@ def is_expected_admin_detail(completion: dict | list | str) -> bool:
         "AI_STACK_CHECK_FAILED",
         "REPO_GUARD_RESULT",
         "WORKSPACE_SCAN_RESULT",
+        "WORKSPACE_RUN_SCHEDULED",
+        "WORKSPACE_RUN_STATUS_OK",
+        "WORKSPACE_RUN_STATUS_FAILED",
+        "STACK_DEPLOY_SCHEDULED",
+        "STACK_DEPLOY_STATUS",
         "repo_root:",
         "/:",
     )
     return detail.startswith(prefixes)
+
+
+def parse_key_value_lines(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        out[key] = value.strip()
+    return out
+
+
+def parse_scheduled_followup(text: str) -> tuple[str, str] | None:
+    if text.startswith("WORKSPACE_RUN_SCHEDULED"):
+        fields = parse_key_value_lines(text)
+        job_id = fields.get("job_id", "").strip()
+        if job_id:
+            return ("workspace", job_id)
+    if text.startswith("STACK_DEPLOY_SCHEDULED"):
+        return ("deploy", "deploy")
+    return None
+
+
+def compact_job_status_text(raw_text: str) -> str:
+    fields = parse_key_value_lines(raw_text)
+    lines = []
+    if raw_text.startswith("WORKSPACE_RUN_STATUS_OK") or raw_text.startswith("WORKSPACE_RUN_STATUS_FAILED"):
+        lines.append(raw_text.splitlines()[0])
+        for key in ("job_id", "workspace", "running", "exit_code", "runner_exit_code", "duration_ms"):
+            if key in fields:
+                lines.append(f"{key}={fields[key]}")
+        if "tail" in raw_text:
+            tail_idx = raw_text.find("tail")
+            preview = raw_text[tail_idx:tail_idx + 600].strip()
+            if preview:
+                lines.append("")
+                lines.append(preview)
+        return "\n".join(lines).strip()
+    if raw_text.startswith("STACK_DEPLOY_STATUS"):
+        lines.append(raw_text.splitlines()[0])
+        for key in ("running", "pid", "head", "log"):
+            if key in fields:
+                lines.append(f"{key}={fields[key]}")
+        return "\n".join(lines).strip()
+    return raw_text
+
+
+def follow_scheduled_admin_job(
+    args: argparse.Namespace,
+    follow_kind: str,
+    live_message_id: str | None,
+    started: float,
+    initial_text: str,
+) -> str:
+    deadline = time.monotonic() + max(1.0, args.total_timeout)
+    last_text = initial_text
+    while time.monotonic() < deadline:
+        time.sleep(max(1.0, args.job_poll_interval))
+        if follow_kind == "workspace":
+            fields = parse_key_value_lines(last_text)
+            job_id = fields.get("job_id", "").strip()
+            if not job_id:
+                return last_text
+            follow_prompt = f"repo: ai-stack\nGATEWAY_ADMIN_RUN_WORKSPACE_STATUS {job_id}"
+        else:
+            follow_prompt = "repo: ai-stack\nGATEWAY_ADMIN_DEPLOY_STATUS"
+
+        payload = {"model": args.model, "messages": [{"role": "user", "content": follow_prompt}], "stream": False}
+        status, completion = http_request(args, "POST", "/api/chat/completions", payload, allow_error=True)
+        polled_text = response_text(completion)
+        if status >= 400 and not is_expected_admin_detail(completion):
+            return f"OpenWebUI/model call failed with HTTP {status}:\n{polled_text}"
+        last_text = polled_text
+        compact = compact_job_status_text(polled_text)
+        if live_message_id is not None:
+            try:
+                state = "polling background job"
+                update_visible_assistant(
+                    args,
+                    live_message_id,
+                    running_text(args, started, state) + "\n\n" + compact,
+                    done=False,
+                )
+            except Exception as exc:
+                log(args, f"poll status update failed: {type(exc).__name__}: {exc}")
+        fields = parse_key_value_lines(polled_text)
+        if follow_kind == "workspace":
+            if fields.get("running", "").lower() == "false":
+                return polled_text
+        else:
+            if fields.get("running", "").lower() == "false":
+                return polled_text
+    return last_text
 
 
 def main() -> int:
@@ -428,6 +533,14 @@ def main() -> int:
     if live_thread is not None:
         live_thread.join(timeout=2.0)
     text = response_text(completion)
+    if not args.no_follow_scheduled:
+        follow = parse_scheduled_followup(text)
+        if follow:
+            try:
+                text = follow_scheduled_admin_job(args, follow[0], live_message_id, started, text)
+                completion_status = 200
+            except Exception as exc:
+                text = text.rstrip() + f"\n\nFOLLOW_JOB_FAILED {type(exc).__name__}: {exc}"
     if args.response_json_out:
         Path(args.response_json_out).write_text(json.dumps(completion, ensure_ascii=False, indent=2), encoding="utf-8")
 

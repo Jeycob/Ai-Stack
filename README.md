@@ -286,6 +286,8 @@ Při dlouhých operacích používej helper `codex/bin/owui_chat_turn.py`; ten z
 
 Helper teď navíc používá stabilní turn key odvozený z `chat_id + model + visible prompt + technical prompt`. Když tedy retryneš stejný běžící turn, pokusí se najít už existující nedokončenou assistant zprávu a znovu ji použít místo vytváření dalšího duplicitního user promptu a dalšího `running...` statusu. Výsledek: méně spamu v audit chatu a menší riziko zbytečných opakovaných volání.
 
+Další důležitá vrstva je follow nad background joby. Když odpověď z OpenWebUI/gateway vrátí `WORKSPACE_RUN_SCHEDULED` nebo `STACK_DEPLOY_SCHEDULED`, `owui_chat_turn.py` už neskončí jen u “scheduled”. Ve výchozím stavu si vezme `job_id` a přes skryté follow-up completion requesty průběžně polluje `GATEWAY_ADMIN_RUN_WORKSPACE_STATUS` nebo `GATEWAY_ADMIN_DEPLOY_STATUS`, zatímco ve viditelné assistant zprávě aktualizuje stručný průběžný stav. Tím se audit chat chová víc jako skutečný agentický turn, který se snaží počkat na výsledek background capability jobu, ne jen jako fronta scheduler requestů. Když tenhle follow nechceš, vypni ho přepínačem `--no-follow-scheduled`.
+
 Pro skutečný chat-level E2E smoke nad audit chatem je nad tím ještě `codex/bin/owui_chat_smoke.py`. Ten obalí `owui_chat_turn.py`, pošle jeden reálný turn do OpenWebUI, znovu načte chat a zkontroluje, že se ve viditelné historii opravdu objevil user prompt i dokončená assistant odpověď pro stejný `turn_key`. To je nejbližší opakovatelný smoke helper k use-casu “otestuj to jako user přes chat okno”:
 
     python3 codex/bin/owui_chat_smoke.py \
