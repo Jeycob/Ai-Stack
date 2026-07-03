@@ -844,14 +844,21 @@ class Filter:
 
     def _natural_create_repo_command(self, text: str) -> str | None:
         lower = text.lower()
-        has_create = any(word in lower for word in ["vytvor", "vytvoř", "zaloz", "založ", "create"])
-        has_repo = any(word in lower for word in ["repository", "repozitar", "repozitář", "repo "])
-        if not (has_create and has_repo):
+        create_words = ["vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav"]
+        repo_words = ["repository", "repozitar", "repozitář", "repo ", "projekt ", "workspace "]
+        setup_words = ["ssh key", "ssh klic", "ssh klíč", "github", "deploy key", "git remote", "origin"]
+        has_create = any(word in lower for word in create_words)
+        has_repo = any(word in lower for word in repo_words)
+        has_setup = any(word in lower for word in setup_words)
+        if not (has_create and (has_repo or has_setup)):
             return None
 
         patterns = [
-            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:nove|nové|new\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create|bootstrap|priprav|připrav)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:projekt|workspace)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+([A-Za-z0-9_.-]{1,80})\b\s+(?:repository|repo|repozitar|repozitář|projekt|workspace)\b",
             r"(?i)\b(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:projekt|workspace)\s+([A-Za-z0-9_.-]{1,80})\b",
         ]
         for pattern in patterns:
             match = re.search(pattern, text)

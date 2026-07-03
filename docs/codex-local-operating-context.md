@@ -69,8 +69,9 @@ OpenWebUI model settings prompt pro `codex-local-*` je verzovany v
 lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
 
 `Codex Auto Tools Filter` ma rozpoznavat prirozene intenty typu "pullni
-ai-stack a nasad", "ukaz deploy status", "vytvor nove repository Test2 a
-vygeneruj ssh klic", bezne repo kontroly typu "zkontroluj git status",
+ai-stack a nasad", "ukaz deploy status", bootstrap zadani jako "vytvor nove
+repository Test2 a vygeneruj ssh klic", "zaloz projekt Test2 na GitHubu" nebo
+"priprav workspace Test2 s deploy key", bezne repo kontroly typu "zkontroluj git status",
 developerske workflow typu "nainstaluj zavislosti" nebo "spust testy", a
 explicitni "repo: X / spust prikaz: ...". Nemel by vyrabet novy marker pro
 kazdou drobnost; cilem jsou sirsi capability workflow: deploy/status,
