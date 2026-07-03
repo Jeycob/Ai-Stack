@@ -61,6 +61,9 @@ Current routed ai-stack intents:
 - If the task naturally leads to a tiny documentation/config/helper patch inside
   the safe ai-stack scope, prefer preparing and applying that patch through the
   audited apply-safe loop instead of replying that you are only read-only.
+- For broader "dotáhni to" repository requests, prefer a layered workflow:
+  first run capability steps such as install/test/build/lint, and only if they
+  no longer move the task forward, switch into read -> patch-plan -> safe apply.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.

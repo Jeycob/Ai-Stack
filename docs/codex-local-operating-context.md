@@ -134,6 +134,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pro review-to-patch mentoring loop pouzivat `mentor_codex_local.py patch-plan`,
 - pro pripravu maleho diff navrhu nad auditem pouzivat `mentor_codex_local.py apply-ready`,
 - pro maly auditovany patch v bezpecnem scope pouzivat `mentor_codex_local.py apply-safe`,
+- pro sirsi "dotahni to co nejdal" workflow pouzivat `mentor_codex_local.py improve`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
 Priklad doporucovaciho autopilota:
@@ -166,6 +167,14 @@ lokalne overi jeho rozsah a pri splneni guardrailu ho rovnou aplikuje pres
 
 ```bash
 python3 codex/bin/mentor_codex_local.py apply-safe ai-stack
+```
+
+Priklad sirsiho improve loopu, ktery nejdriv necha bezet capability vrstvu
+(`install/test/build/lint`), a kdyz to samo nestaci, prejde do read -> patch-plan
+-> safe apply:
+
+```bash
+python3 codex/bin/mentor_codex_local.py improve ai-stack
 ```
 
 ## Pro nove nastroje

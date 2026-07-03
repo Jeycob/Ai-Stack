@@ -209,6 +209,51 @@ def validate_safe_diff(diff: str) -> tuple[list[str], str]:
     return cleaned, summary
 
 
+def follow_read_command(args: argparse.Namespace, workspace: str, read_command: str) -> int:
+    if not read_command:
+        return 0
+    read_visible = (
+        f"repo: {workspace}\n"
+        "Přečti nejrelevantnější soubor pro další bezpečný patch a vrať ho s čísly řádků. Nic needituj."
+    )
+    read_technical = f"{repo_prefix(args.repo)}\n{read_command}"
+    rc, _ = invoke_turn(args, read_visible, read_technical, send_history=True)
+    return rc
+
+
+def request_patch_plan(args: argparse.Namespace, workspace: str) -> tuple[int, str]:
+    plan_visible = (
+        f"repo: {workspace}\n"
+        "Navrhni minimální patch plan. Zůstaň u malého bezpečného zásahu a nic ještě needituj."
+    )
+    plan_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        "Na základě celé dosavadní historie navrhni minimální další patch plan. "
+        "Odpověz stručně a strukturovaně v těchto řádcích:\n"
+        "PATCH_TARGET: <path or none>\n"
+        "PATCH_SUMMARY: <one sentence>\n"
+        "PATCH_HINT: <one sentence>\n"
+        "NEXT_ADMIN_COMMAND: <GATEWAY_ADMIN_READ_NUMBERED ... or GATEWAY_ADMIN_APPLY_NOW or none>"
+    )
+    return invoke_turn(args, plan_visible, plan_technical, send_history=True, capture_output=True)
+
+
+def request_diff_only(args: argparse.Namespace, workspace: str, target: str, summary: str, hint: str) -> tuple[int, str]:
+    diff_visible = (
+        f"repo: {workspace}\n"
+        "Teď připrav přesně jeden malý unified diff pro tenhle zásah. Změň jen nutné soubory a nic zatím neaplikuj."
+    )
+    diff_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        f"Na základě celé dosavadní historie navrhni malý unified diff související s {target}. "
+        "Odpověz pouze jedním fenced ```diff blokem bez dalšího textu. "
+        "Nepřidávej vysvětlení mimo diff. "
+        f"Záměr změny: {summary or '(unspecified)'}. "
+        f"Hint: {hint or '(none)'}"
+    )
+    return invoke_turn(args, diff_visible, diff_technical, send_history=True, capture_output=True)
+
+
 def invoke_turn(
     args: argparse.Namespace,
     visible: str,
@@ -532,30 +577,11 @@ def run_apply_safe_sequence(args: argparse.Namespace) -> int:
         return rc
     meta = parse_key_values(first_output)
     read_command = meta.get("read_command", "").strip()
-    if read_command:
-        read_visible = (
-            f"repo: {args.workspace}\n"
-            "Přečti nejrelevantnější soubor pro další bezpečný patch a vrať ho s čísly řádků. Nic needituj."
-        )
-        read_technical = f"{repo_prefix(args.repo)}\n{read_command}"
-        rc, _ = invoke_turn(args, read_visible, read_technical, send_history=True)
-        if rc != 0:
-            return rc
+    rc = follow_read_command(args, args.workspace, read_command)
+    if rc != 0:
+        return rc
 
-    plan_visible = (
-        f"repo: {args.workspace}\n"
-        "Navrhni minimální patch plan. Zůstaň u malého bezpečného zásahu a nic ještě needituj."
-    )
-    plan_technical = (
-        f"{repo_prefix(args.workspace)}\n"
-        "Na základě celé dosavadní historie navrhni minimální další patch plan. "
-        "Odpověz stručně a strukturovaně v těchto řádcích:\n"
-        "PATCH_TARGET: <path or none>\n"
-        "PATCH_SUMMARY: <one sentence>\n"
-        "PATCH_HINT: <one sentence>\n"
-        "NEXT_ADMIN_COMMAND: <GATEWAY_ADMIN_READ_NUMBERED ... or GATEWAY_ADMIN_APPLY_NOW or none>"
-    )
-    rc, plan_output = invoke_turn(args, plan_visible, plan_technical, send_history=True, capture_output=True)
+    rc, plan_output = request_patch_plan(args, args.workspace)
     if rc != 0:
         return rc
     plan_meta = parse_key_values(plan_output)
@@ -568,19 +594,7 @@ def run_apply_safe_sequence(args: argparse.Namespace) -> int:
             print(plan_output.strip())
         return 0
 
-    diff_visible = (
-        f"repo: {args.workspace}\n"
-        "Teď připrav přesně jeden malý unified diff pro tenhle zásah. Změň jen nutné soubory a nic zatím neaplikuj."
-    )
-    diff_technical = (
-        f"{repo_prefix(args.workspace)}\n"
-        f"Na základě celé dosavadní historie navrhni malý unified diff související s {target}. "
-        "Odpověz pouze jedním fenced ```diff blokem bez dalšího textu. "
-        "Nepřidávej vysvětlení mimo diff. "
-        f"Záměr změny: {summary or '(unspecified)'}. "
-        f"Hint: {hint or '(none)'}"
-    )
-    rc, diff_output = invoke_turn(args, diff_visible, diff_technical, send_history=True, capture_output=True)
+    rc, diff_output = request_diff_only(args, args.workspace, target, summary, hint)
     if rc != 0:
         return rc
 
@@ -610,6 +624,102 @@ def run_apply_safe_sequence(args: argparse.Namespace) -> int:
     if plan_output.strip():
         final_parts.append(plan_output.strip())
     final_parts.append(f"APPLY_SAFE_READY\nfiles={safe_summary}")
+    if apply_output.strip():
+        final_parts.append(apply_output.strip())
+    print("\n\n".join(final_parts))
+    return 0
+
+
+def run_improve_sequence(args: argparse.Namespace) -> int:
+    visible = (
+        f"repo: {args.workspace}\n"
+        "Nejdřív projekt agenticky ověř a proveď, co bezpečně dává smysl. "
+        "Když capability kroky nestačí, přepni do malého bezpečného patch workflow a dotáhni to co nejdál."
+    )
+    technical = (
+        f"{repo_prefix(args.repo)}\n"
+        f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {args.workspace} --timeout {args.timeout} "
+        f"--max-steps {args.max_steps} --allow-actions {args.allow_actions}"
+    )
+
+    if args.dry_run:
+        print("VISIBLE_PROMPT")
+        print(visible)
+        print("\nTECHNICAL_PROMPT")
+        print(technical)
+        print()
+        print("FOLLOW_UP")
+        print("If autopilot returns read_command or patch guidance, the helper will continue into the apply-safe flow automatically.")
+        return 0
+
+    rc, autopilot_output = invoke_turn(args, visible, technical, send_history=False, capture_output=True)
+    if rc != 0:
+        return rc
+    meta = parse_key_values(autopilot_output)
+    read_command = meta.get("read_command", "").strip()
+    patch_target = meta.get("patch_target", "").strip().lower()
+    recommendation = meta.get("recommendation", "").strip()
+
+    if not read_command and (not patch_target or patch_target == "none"):
+        if autopilot_output.strip():
+            print(autopilot_output.strip())
+        return 0
+
+    rc = follow_read_command(args, args.workspace, read_command)
+    if rc != 0:
+        return rc
+
+    rc, plan_output = request_patch_plan(args, args.workspace)
+    if rc != 0:
+        return rc
+    plan_meta = parse_key_values(plan_output)
+    target = plan_meta.get("patch_target", "").strip()
+    summary = plan_meta.get("patch_summary", "").strip() or recommendation
+    hint = plan_meta.get("patch_hint", "").strip()
+    if not target or target.lower() == "none":
+        final_parts = []
+        if autopilot_output.strip():
+            final_parts.append(autopilot_output.strip())
+        if plan_output.strip():
+            final_parts.append(plan_output.strip())
+        print("\n\n".join(final_parts))
+        return 0
+
+    rc, diff_output = request_diff_only(args, args.workspace, target, summary, hint)
+    if rc != 0:
+        return rc
+
+    try:
+        diff = extract_diff_block(diff_output)
+        files, safe_summary = validate_safe_diff(diff)
+    except ValueError as exc:
+        final_parts = []
+        if autopilot_output.strip():
+            final_parts.append(autopilot_output.strip())
+        if plan_output.strip():
+            final_parts.append(plan_output.strip())
+        if diff_output.strip():
+            final_parts.append(diff_output.strip())
+        final_parts.append(f"IMPROVE_BLOCKED\nreason={exc}")
+        print("\n\n".join(final_parts))
+        return 0
+
+    apply_visible = (
+        f"repo: {args.workspace}\n"
+        f"Capability kroky doběhly a malý patch prošel guardraily ({len(files)} souborů). "
+        "Teď ho auditovaně aplikuj a vrať stručný výsledek."
+    )
+    apply_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_APPLY_NOW\n\n```diff\n{diff}```"
+    rc, apply_output = invoke_turn(args, apply_visible, apply_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+
+    final_parts = []
+    if autopilot_output.strip():
+        final_parts.append(autopilot_output.strip())
+    if plan_output.strip():
+        final_parts.append(plan_output.strip())
+    final_parts.append(f"IMPROVE_READY\nfiles={safe_summary}")
     if apply_output.strip():
         final_parts.append(apply_output.strip())
     print("\n\n".join(final_parts))
@@ -687,6 +797,13 @@ def parse_args() -> argparse.Namespace:
     apply_safe.add_argument("--timeout", type=int, default=2400)
     apply_safe.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
+    improve = sub.add_parser("improve", help="Run broader agentic workspace improvement: capability steps first, then safe patch workflow if needed")
+    improve.add_argument("workspace")
+    improve.add_argument("--timeout", type=int, default=2400)
+    improve.add_argument("--max-steps", type=int, default=2)
+    improve.add_argument("--allow-actions", default="install,test,build,lint")
+    improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
@@ -717,6 +834,8 @@ def main() -> int:
         return run_apply_ready_sequence(args)
     if args.mode == "apply-safe":
         return run_apply_safe_sequence(args)
+    if args.mode == "improve":
+        return run_improve_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)

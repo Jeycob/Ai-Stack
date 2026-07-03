@@ -284,6 +284,10 @@ Ještě praktičtější je mód `apply-safe`: ten po recommendation a read krok
 
     python3 codex/bin/mentor_codex_local.py apply-safe ai-stack
 
+Pro nejbližší chování typu “dělej to jako Codex a dotáhni co zvládneš” je tam nový mód `improve`: nejdřív nechá doběhnout capability vrstvu (`install/test/build/lint` podle projektu), a teprve když už další krok není čistě spustitelný, přepne se do recommendation -> read -> patch-plan -> safe apply workflow:
+
+    python3 codex/bin/mentor_codex_local.py improve ai-stack
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh
