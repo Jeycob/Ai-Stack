@@ -262,6 +262,8 @@ Ještě důležitější je, že planner už nemá vracet rovnou hotový workflo
 
 Od commitu `7cb415e` a navazujících změn je navíc `TaskSpec` plán považovaný za capability-locked. Prakticky to znamená, že když LLM planner zvolí například `workspace_git_publish`, `workspace_action:verify` nebo read-only `review`, následná normalizační vrstva už ten workflow nesmí znovu přepsat jen proto, že se v promptu objevují slova jako `repo`, `ssh`, `github`, `push`, `oprav` nebo `spusť`. Keyword heuristiky zůstávají jen jako bounded fallback pro situaci, kdy planner selže nebo capability úplně chybí.
 
+Stejný princip se teď propisuje i do `autopilot` capability. Dřív autopilot jen vzal první podporovanou akci z priority pořadí `install -> verify -> smoke -> test -> build -> lint`. Nově mezi auditovanými kandidáty zkouší bounded LLM next-step planner, který dostane `user_task`, `desired_end_state`, už provedené kroky, `verify_steps` a seznam povolených kandidátů. Smí vybrat jen akci z tohoto seznamu; když vrátí neplatnou akci nebo selže, gateway spadne zpět na deterministic fallback. Tím se zlepšuje praktičnost bez toho, aby se rozšířil runtime scope mimo existující capability hranice.
+
 Praktický dopad je hlavně u Git/GitHub úloh. Prompt typu:
 
     repo: TestCode

@@ -2243,6 +2243,8 @@ def admin_agent_loop(payload):
             "workspace": plan["workspace"],
             "allow_actions": allow_actions,
             "max_steps": 3,
+            "task": task,
+            "desired_end_state": plan.get("desired_end_state") or taskspec.get("desired_end_state") or "",
         })
         result["execution"] = execution
         result["ok"] = bool(execution.get("ok"))
@@ -2319,6 +2321,8 @@ def admin_agent_loop(payload):
                     "workspace": repo_name,
                     "allow_actions": plan["followup_actions"],
                     "max_steps": min(3, max(1, len(plan["followup_actions"]))),
+                    "task": task,
+                    "desired_end_state": plan.get("desired_end_state") or taskspec.get("desired_end_state") or "",
                 })
             result["followup"] = followup
             result["ok"] = bool(execution.get("ok")) and (followup is None or bool(followup.get("ok")))
@@ -3680,6 +3684,112 @@ def workspace_autopilot_order(allow_actions: list[str]) -> list[str]:
 
     return sorted(allow_actions, key=sort_key)
 
+
+def workspace_autopilot_candidate_messages(
+    workspace: str,
+    task: str,
+    desired_end_state: str,
+    allow_actions: list[str],
+    executed_actions: list[dict],
+    candidates: list[dict],
+    verify_steps: list[dict],
+    action_probes: dict,
+):
+    candidate_lines = []
+    for candidate in candidates:
+        action = str(candidate.get("action") or "").strip().lower()
+        reason = str(candidate.get("reason") or "").strip()
+        probe = action_probes.get(action) if isinstance(action_probes, dict) else {}
+        command = probe.get("command", []) if isinstance(probe, dict) else []
+        resolved_from = str(probe.get("resolved_from") or "").strip() if isinstance(probe, dict) else ""
+        candidate_lines.append(
+            json.dumps(
+                {
+                    "action": action,
+                    "reason": reason,
+                    "command": command,
+                    "resolved_from": resolved_from,
+                },
+                ensure_ascii=False,
+            )
+        )
+    executed_text = json.dumps(executed_actions or [], ensure_ascii=False)
+    verify_text = json.dumps(verify_steps or [], ensure_ascii=False)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the bounded next-step planner for a local Codex-like workspace autopilot. "
+                "Reply with one compact JSON object and nothing else.\n"
+                'Schema: {"action":"install|verify|smoke|test|build|lint","reason":"short reason"}\n'
+                "Choose only one action from the provided candidate list. "
+                "Optimize for the user's desired end state, avoid repeating already executed actions, "
+                "and prefer the smallest useful next step that increases confidence. "
+                "Do not invent actions outside the provided candidates."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"workspace={workspace}\n"
+                f"user_task={task or '(none provided)'}\n"
+                f"desired_end_state={desired_end_state or '(unspecified)'}\n"
+                f"allow_actions={','.join(allow_actions)}\n"
+                f"executed_actions={executed_text}\n"
+                f"verify_steps={verify_text}\n"
+                "candidates:\n"
+                + "\n".join(candidate_lines)
+            ),
+        },
+    ]
+
+
+def workspace_autopilot_choose_candidate(
+    workspace: str,
+    task: str,
+    desired_end_state: str,
+    allow_actions: list[str],
+    executed_actions: list[dict],
+    candidates: list[dict],
+    verify_steps: list[dict],
+    action_probes: dict,
+):
+    if not candidates:
+        return None, "none", "No candidate actions were available."
+    fallback = candidates[0]
+    allowed = {str(item.get("action") or "").strip().lower() for item in candidates}
+    try:
+        response = ollama_chat(
+            MODELS["codex-local-plan-qwen14b"]["model"],
+            workspace_autopilot_candidate_messages(
+                workspace,
+                task,
+                desired_end_state,
+                allow_actions,
+                executed_actions,
+                candidates,
+                verify_steps,
+                action_probes,
+            ),
+            timeout=180,
+        )
+        raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        parsed = extract_json_object(raw)
+        action = str(parsed.get("action") or "").strip().lower()
+        if action not in allowed:
+            return fallback, "fallback", f"Planner suggested unsupported action {action!r}; using priority fallback."
+        reason = str(parsed.get("reason") or "").strip()
+        for candidate in candidates:
+            if str(candidate.get("action") or "").strip().lower() == action:
+                chosen = dict(candidate)
+                if reason:
+                    chosen["reason"] = reason
+                return chosen, "llm", reason or str(candidate.get("reason") or "").strip()
+    except Exception as exc:
+        return fallback, "fallback", f"Planner failed ({type(exc).__name__}: {exc}); using priority fallback."
+    return fallback, "fallback", "Planner did not return a usable action; using priority fallback."
+
+
 def admin_workspace_autopilot(payload):
     workspace = str(payload.get("workspace") or "").strip()
     timeout = int(payload.get("timeout") or 1800)
@@ -3687,6 +3797,8 @@ def admin_workspace_autopilot(payload):
     recommend_only = bool(payload.get("recommend_only", False))
     allow_actions = payload.get("allow_actions") or ["install", "verify", "smoke", "test", "build", "lint"]
     max_steps = int(payload.get("max_steps") or 1)
+    task = str(payload.get("task") or "").strip()
+    desired_end_state = str(payload.get("desired_end_state") or "").strip()
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
@@ -3757,9 +3869,18 @@ def admin_workspace_autopilot(payload):
 
     verify, verify_steps, candidate_actions, action_probes = plan_candidates(set())
 
-    chosen = candidate_actions[0] if candidate_actions else None
+    chosen, planner_source, planner_reason = workspace_autopilot_choose_candidate(
+        workspace,
+        task,
+        desired_end_state,
+        allow_actions,
+        [],
+        candidate_actions,
+        verify_steps,
+        action_probes,
+    )
     chosen_action = chosen["action"] if chosen else None
-    chosen_reason = chosen["reason"] if chosen else ""
+    chosen_reason = planner_reason or (chosen["reason"] if chosen else "")
 
     if not chosen_action:
         recommendation = workspace_autopilot_recommendation(workspace)
@@ -3772,6 +3893,8 @@ def admin_workspace_autopilot(payload):
             "max_steps": max_steps,
             "chosen_action": "none",
             "reason": "No supported next action was found within the allowed action set.",
+            "planner_source": planner_source,
+            "planner_reason": planner_reason,
             "recommendation": recommendation.get("text", ""),
             "patch_target": recommendation.get("patch_target", ""),
             "patch_hint": recommendation.get("patch_hint", ""),
@@ -3798,6 +3921,8 @@ def admin_workspace_autopilot(payload):
             "max_steps": max_steps,
             "chosen_action": chosen_action,
             "reason": chosen_reason,
+            "planner_source": planner_source,
+            "planner_reason": planner_reason,
             "recommendation": "",
             "patch_target": "",
             "patch_hint": "",
@@ -3820,6 +3945,8 @@ def admin_workspace_autopilot(payload):
     current_verify_steps = verify_steps
     current_probes = action_probes
     stop_reason = "max_steps_reached"
+    step_planner_source = planner_source
+    step_planner_reason = planner_reason
     recommendation = {
         "text": "",
         "patch_target": "",
@@ -3840,7 +3967,21 @@ def admin_workspace_autopilot(payload):
             stop_reason = "no_more_supported_actions"
             recommendation = workspace_autopilot_recommendation(workspace)
             break
-        action_name = next_candidates[0]["action"]
+        next_choice, step_planner_source, step_planner_reason = workspace_autopilot_choose_candidate(
+            workspace,
+            task,
+            desired_end_state,
+            allow_actions,
+            executed_actions,
+            next_candidates,
+            current_verify_steps,
+            current_probes,
+        )
+        if not next_choice:
+            stop_reason = "no_more_supported_actions"
+            recommendation = workspace_autopilot_recommendation(workspace)
+            break
+        action_name = next_choice["action"]
         last_result = admin_workspace_action({
             "workspace": workspace,
             "action": action_name,
@@ -3858,6 +3999,8 @@ def admin_workspace_autopilot(payload):
             "command": last_result.get("command", []),
             "output": last_result.get("output", ""),
             "error": last_result.get("error"),
+            "planner_source": step_planner_source,
+            "planner_reason": step_planner_reason,
         })
         if not last_result.get("ok"):
             stop_reason = "step_failed"
@@ -3888,6 +4031,8 @@ def admin_workspace_autopilot(payload):
         "max_steps": max_steps,
         "chosen_action": chosen_action,
         "reason": chosen_reason,
+        "planner_source": step_planner_source,
+        "planner_reason": step_planner_reason,
         "recommendation": recommendation.get("text", ""),
         "patch_target": recommendation.get("patch_target", ""),
         "patch_hint": recommendation.get("patch_hint", ""),

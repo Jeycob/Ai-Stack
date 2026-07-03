@@ -293,6 +293,111 @@ def assert_workspace_action_capability_registry_mapping() -> None:
     print("WORKSPACE_ACTION_CAPABILITY_REGISTRY_OK")
 
 
+def assert_autopilot_llm_candidate_selection() -> None:
+    def fake_action(payload):
+        action = str(payload.get("action") or "")
+        dry_run = bool(payload.get("dry_run"))
+        if dry_run:
+            if action == "verify":
+                return {
+                    "ok": True,
+                    "action": "verify",
+                    "verify_steps": [
+                        {"action": "install", "supported": True, "command": ["npm", "install"], "resolved_from": "package.json:scripts"},
+                        {"action": "verify", "supported": True, "command": ["npm", "run", "verify"], "resolved_from": "package.json:scripts"},
+                    ],
+                    "duration_ms": 1,
+                }
+            if action == "install":
+                return {"ok": True, "action": "install", "planned_only": True, "command": ["npm", "install"], "resolved_from": "package.json:scripts", "output": ""}
+            return {"ok": False, "action": action, "output": ""}
+        return {
+            "ok": action == "verify",
+            "action": action,
+            "exit_code": 0 if action == "verify" else 1,
+            "runner_exit_code": 0 if action == "verify" else 1,
+            "duration_ms": 2,
+            "resolved_from": "package.json:scripts",
+            "command": ["npm", "run", action],
+            "output": f"ran {action}",
+            "error": "" if action == "verify" else "failed",
+        }
+
+    with patch.object(
+        gateway,
+        "ollama_chat",
+        return_value={"choices": [{"message": {"content": '{"action":"verify","reason":"Nejdřív chci levné ověření místo instalace."}'}}]},
+    ), patch.object(gateway, "admin_workspace_action", side_effect=fake_action):
+        result = gateway.admin_workspace_autopilot({
+            "workspace": "ai-stack",
+            "allow_actions": ["install", "verify"],
+            "max_steps": 1,
+            "task": "Ověř projekt a pokračuj nejbližším bezpečným krokem.",
+            "desired_end_state": "workspace_verified",
+        })
+
+    if result.get("ok") is not True:
+        raise SystemExit(f"expected autopilot to complete selected verify step, got {result!r}")
+    executed = result.get("executed_actions") or []
+    if not executed or executed[0].get("action") != "verify":
+        raise SystemExit(f"expected LLM planner to choose verify over install, got {result!r}")
+    if result.get("planner_source") != "llm":
+        raise SystemExit(f"expected planner_source='llm', got {result!r}")
+    print("AUTOPILOT_LLM_SELECTION_OK")
+
+
+def assert_autopilot_planner_fallback() -> None:
+    def fake_action(payload):
+        action = str(payload.get("action") or "")
+        dry_run = bool(payload.get("dry_run"))
+        if dry_run:
+            if action == "verify":
+                return {
+                    "ok": True,
+                    "action": "verify",
+                    "verify_steps": [
+                        {"action": "install", "supported": True, "command": ["npm", "install"], "resolved_from": "package.json:scripts"},
+                    ],
+                    "duration_ms": 1,
+                }
+            if action == "install":
+                return {"ok": True, "action": "install", "planned_only": True, "command": ["npm", "install"], "resolved_from": "package.json:scripts", "output": ""}
+            return {"ok": False, "action": action, "output": ""}
+        return {
+            "ok": action == "install",
+            "action": action,
+            "exit_code": 0 if action == "install" else 1,
+            "runner_exit_code": 0 if action == "install" else 1,
+            "duration_ms": 2,
+            "resolved_from": "package.json:scripts",
+            "command": ["npm", "run", action],
+            "output": f"ran {action}",
+            "error": "" if action == "install" else "failed",
+        }
+
+    with patch.object(
+        gateway,
+        "ollama_chat",
+        return_value={"choices": [{"message": {"content": '{"action":"destroy_everything","reason":"bad"}'}}]},
+    ), patch.object(gateway, "admin_workspace_action", side_effect=fake_action):
+        result = gateway.admin_workspace_autopilot({
+            "workspace": "ai-stack",
+            "allow_actions": ["install", "verify"],
+            "max_steps": 1,
+            "task": "Připrav prostředí a pokračuj.",
+            "desired_end_state": "workspace_ready",
+        })
+
+    if result.get("ok") is not True:
+        raise SystemExit(f"expected fallback autopilot to execute first safe action, got {result!r}")
+    executed = result.get("executed_actions") or []
+    if not executed or executed[0].get("action") != "install":
+        raise SystemExit(f"expected fallback autopilot to choose install, got {result!r}")
+    if result.get("planner_source") != "fallback":
+        raise SystemExit(f"expected planner_source='fallback', got {result!r}")
+    print("AUTOPILOT_PLANNER_FALLBACK_OK")
+
+
 def assert_unknown_capability_needs_attention() -> None:
     task = "Synchronizuj produkční databázi přes neexistující remote capability."
     taskspec = gateway.normalize_agent_taskspec(
@@ -793,6 +898,8 @@ def main() -> int:
     assert_workspace_git_publish_manual_recovery()
     assert_capability_locked_plan_stays_on_taskspec_workflow()
     assert_workspace_action_capability_registry_mapping()
+    assert_autopilot_llm_candidate_selection()
+    assert_autopilot_planner_fallback()
     assert_unknown_capability_needs_attention()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()
