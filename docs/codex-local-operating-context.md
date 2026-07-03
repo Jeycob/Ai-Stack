@@ -16,7 +16,7 @@ Zakladni pravidlo: autonomie se pridava pres sirsi, auditovatelne capability sco
 - OpenCode workspaces bezi jako izolovane kontejnery nad registrovanymi repozitari.
 - `ai-stack` je verzovany zdroj pravdy pro konfigurace, helpery, dokumentaci a OpenWebUI admin filter.
 - Runtime stav, secrets, logy a private key material jsou ignorovane a nepatri do Gitu.
-- Po cistem startu WSL nestaci jen Docker service; gateway a OpenCode workspaces zveda `codex/bin/start_codex_stack.sh`. Pro automaticky WSL boot je pripraveny wrapper `codex/bin/wsl_boot_ai_stack.sh --background`, ktery nejdriv nastartuje Docker, pocka na socket a potom spusti Codex stack.
+- Po cistem startu WSL nestaci jen Docker service; gateway a OpenCode workspaces zveda `codex/bin/start_codex_stack.sh`. Pro automaticky WSL boot je pripraveny wrapper `bash codex/bin/wsl_boot_ai_stack.sh --background`, ktery nejdriv nastartuje Docker, pocka na socket a potom spusti Codex stack.
 
 ## Viditelny audit chat
 

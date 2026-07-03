@@ -52,7 +52,7 @@ main() {
   mkdir -p "$(dirname "$LOG_FILE")"
 
   if [ "${1:-}" = "--background" ]; then
-    nohup "$0" --foreground >> "$LOG_FILE" 2>&1 &
+    nohup bash "$0" --foreground >> "$LOG_FILE" 2>&1 &
     exit 0
   fi
 
