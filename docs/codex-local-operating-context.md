@@ -63,9 +63,18 @@ OWUI_API_KEY=... python3 codex/bin/owui_chat_scenarios.py --scenario all --json
 
 Vychozi scenare dnes pokryvaji:
 - `git-status`
+- `verify-project`
 - `push-readiness`
 - `deploy-status`
 - `next-step`
+
+Pokud nechces volat scenarovy runner primo, stejny smoke jde spustit i pres
+hlavni mentor helper:
+
+```bash
+python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --list
+python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --dry-run --scenario verify-project --scenario next-step
+```
 
 `codex/bin/check_ai_stack.sh` umi tenhle audit-chat smoke pridat do bezneho
 stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po

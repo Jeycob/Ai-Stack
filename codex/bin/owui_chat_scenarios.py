@@ -43,6 +43,13 @@ SCENARIOS: dict[str, Scenario] = {
         prompt_template="repo: {workspace}\nZkontroluj git status a vrat strucny vysledek.",
         expected_substrings=("WORKSPACE_RUN_OK", "git status --short --branch"),
     ),
+    "verify-project": Scenario(
+        name="verify-project",
+        description="Natural project verification request routed through the broad workspace action capability.",
+        prompt_template="repo: {workspace}\nOver projekt a vrat strucny audit vysledku.",
+        expected_substrings=("WORKSPACE_ACTION_OK", "action=verify"),
+        total_timeout=360.0,
+    ),
     "push-readiness": Scenario(
         name="push-readiness",
         description="Natural readiness question that should route to audited git status / push guard output.",
@@ -78,7 +85,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         choices=sorted(SCENARIOS.keys()) + ["all"],
         default=[],
-        help="Scenario name; can be repeated. Default runs git-status, deploy-status, next-step.",
+        help="Scenario name; can be repeated. Default runs git-status, verify-project, deploy-status, next-step.",
     )
     parser.add_argument("--list", action="store_true", help="List available scenarios and exit")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable results")
@@ -98,7 +105,7 @@ def parse_args() -> argparse.Namespace:
 def selected_scenarios(args: argparse.Namespace) -> list[Scenario]:
     if args.list:
         return []
-    names = args.scenario or ["git-status", "deploy-status", "next-step"]
+    names = args.scenario or ["git-status", "verify-project", "deploy-status", "next-step"]
     if "all" in names:
         names = list(SCENARIOS.keys())
     deduped: list[Scenario] = []

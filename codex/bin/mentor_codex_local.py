@@ -2513,6 +2513,63 @@ def run_brief_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_chat_scenarios_sequence(args: argparse.Namespace) -> int:
+    script = Path(__file__).resolve().parent / "owui_chat_scenarios.py"
+    cmd = [
+        sys.executable,
+        str(script),
+        "--base-url",
+        getattr(args, "base_url", "http://192.168.0.48:9090"),
+        "--chat-id",
+        getattr(args, "chat_id", "57529037-84b9-42e1-8bae-9eab35b601bd"),
+        "--api-key-env",
+        getattr(args, "api_key_env", "OWUI_API_KEY"),
+        "--api-key-file",
+        getattr(args, "api_key_file", str(Path(__file__).resolve().parents[1] / "state/openwebui-api.key")),
+        "--model",
+        args.model,
+        "--title",
+        args.title,
+        "--workspace",
+        args.workspace,
+        "--attempts",
+        str(getattr(args, "attempts", 12)),
+        "--timeout",
+        str(getattr(args, "timeout", 30.0)),
+        "--initial-delay",
+        str(getattr(args, "initial_delay", 0.5)),
+        "--max-delay",
+        str(getattr(args, "max_delay", 4.0)),
+        "--total-timeout",
+        str(getattr(args, "total_timeout", 240.0)),
+        "--status-interval",
+        str(args.status_interval),
+    ]
+    if getattr(args, "list", False):
+        cmd.append("--list")
+    if getattr(args, "json", False):
+        cmd.append("--json")
+    if getattr(args, "dry_run", False):
+        cmd.append("--dry-run")
+    if getattr(args, "quiet", False):
+        cmd.append("--quiet")
+    if getattr(args, "send_history", False):
+        cmd.append("--send-history")
+    if getattr(args, "no_live_status", False):
+        cmd.append("--no-live-status")
+    for scenario in getattr(args, "scenarios", []) or []:
+        cmd.extend(["--scenario", scenario])
+    proc = subprocess.run(
+        cmd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if proc.stdout:
+        print(proc.stdout.rstrip())
+    return proc.returncode
+
+
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
     if args.mode == "audit":
         return run_audit_sequence(args)
@@ -2562,6 +2619,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_boundary_sequence(args)
     if args.mode == "brief":
         return run_brief_sequence(args)
+    if args.mode == "chat-scenarios":
+        return run_chat_scenarios_sequence(args)
     if args.mode == "top":
         return run_top_sequence(args)
     if args.mode == "backlog":
@@ -2728,6 +2787,23 @@ def parse_args() -> argparse.Namespace:
     brief.add_argument("workspace")
     brief.add_argument("task")
     brief.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; brief mode never calls OpenWebUI")
+
+    chat_scenarios = sub.add_parser("chat-scenarios", help="Run cheap user-like OpenWebUI audit chat scenarios against codex-local")
+    chat_scenarios.add_argument("workspace")
+    chat_scenarios.add_argument("--scenario", dest="scenarios", action="append", default=[], help="Scenario name; can be repeated")
+    chat_scenarios.add_argument("--list", action="store_true", help="List available scenarios and exit")
+    chat_scenarios.add_argument("--json", action="store_true", help="Emit JSON results")
+    chat_scenarios.add_argument("--dry-run", action="store_true", help="Print prompts and planned commands without calling OpenWebUI")
+    chat_scenarios.add_argument("--base-url", default="http://192.168.0.48:9090")
+    chat_scenarios.add_argument("--chat-id", default="57529037-84b9-42e1-8bae-9eab35b601bd")
+    chat_scenarios.add_argument("--api-key-env", default="OWUI_API_KEY")
+    chat_scenarios.add_argument("--api-key-file", default=str(Path(__file__).resolve().parents[1] / "state/openwebui-api.key"))
+    chat_scenarios.add_argument("--attempts", type=int, default=12)
+    chat_scenarios.add_argument("--timeout", type=float, default=30.0)
+    chat_scenarios.add_argument("--initial-delay", type=float, default=0.5)
+    chat_scenarios.add_argument("--max-delay", type=float, default=4.0)
+    chat_scenarios.add_argument("--total-timeout", type=float, default=240.0)
+    chat_scenarios.add_argument("--quiet", action="store_true")
 
     top = sub.add_parser("top", help="Return only the current top-priority task from a multi-task set, with reason and execution brief")
     top.add_argument("workspace")

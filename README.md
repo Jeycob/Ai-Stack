@@ -274,11 +274,17 @@ Nad tím je teď ještě lehký scénářový runner `codex/bin/owui_chat_scenar
 
 Výchozí scénáře dnes pokrývají:
 - `git-status`: přirozené “zkontroluj git status”
+- `verify-project`: přirozené “ověř projekt”
 - `push-readiness`: přirozené “je to ready na push?”
 - `deploy-status`: přirozené “ukaž deploy status”
 - `next-step`: přirozené “navrhni další krok”
 
 To je záměrně levnější než plný browser E2E. Neověřuje vzhled UI, ale přímo to, že běžná lidská formulace v audit chatu projde route -> filter -> gateway -> capability -> zpět do viditelné odpovědi.
+
+Stejnou věc jde teď spouštět i přes hlavní mentor helper, aby scénářový smoke nebyl další izolovaný nástroj bokem:
+
+    python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --list
+    python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --dry-run --scenario verify-project --scenario next-step
 
 `codex/bin/check_ai_stack.sh` to teď umí použít i automaticky. Když je dostupný OpenWebUI API key přes `OWUI_API_KEY` nebo ignorovaný `codex/state/openwebui-api.key`, healthcheck po gateway smoke přidá i audit-chat smoke. Pokud key chybí, krok se jen korektně přeskočí. Vypnout ho jde přes `SKIP_OWUI_CHAT_SMOKE=1`.
 
