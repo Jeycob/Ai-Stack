@@ -47,6 +47,26 @@ user prompt i dokoncena assistant odpoved pro stejny `turn_key`. Je to
 nejpraktičtejsi helper pro "otestuj to end to end jako user pres OpenWebUI
 chat", kdyz nechces kontrolovat historii rucne.
 
+Pro o uroven realistictejsi mentoring test je tam i
+`codex/bin/owui_chat_scenarios.py`. Ten pouziva stejnou audit chat cestu, ale
+posila normalni user-like prompty bez internich markeru. Overuje tak, ze
+funguje i prirozeny route pres `Codex Auto Tools Filter`, nejen samotny
+transport a append do historie.
+
+Priklady:
+
+```bash
+python3 codex/bin/owui_chat_scenarios.py --list
+python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario git-status --scenario next-step
+OWUI_API_KEY=... python3 codex/bin/owui_chat_scenarios.py --scenario all --json
+```
+
+Vychozi scenare dnes pokryvaji:
+- `git-status`
+- `push-readiness`
+- `deploy-status`
+- `next-step`
+
 `codex/bin/check_ai_stack.sh` umi tenhle audit-chat smoke pridat do bezneho
 stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po
 gateway smoke pusti i `owui_chat_smoke.py`. Bez key se tenhle krok jen preskoci

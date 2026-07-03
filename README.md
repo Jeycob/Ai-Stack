@@ -266,6 +266,20 @@ Pro skutečný chat-level E2E smoke nad audit chatem je nad tím ještě `codex/
       --prompt "repo: ai-stack\nOdpovez jednim slovem: smoke-ok" \
       --expected-substring smoke
 
+Nad tím je teď ještě lehký scénářový runner `codex/bin/owui_chat_scenarios.py`. Ten už neposílá interní marker nebo technický admin prompt, ale běžný user-like audit chat prompt, takže ověřuje i přirozený routing přes `Codex Auto Tools Filter`. Hodí se pro levné E2E ověření, že codex-local pořád zvládá základní agentické flow přes samotný OpenWebUI chat:
+
+    python3 codex/bin/owui_chat_scenarios.py --list
+    python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario git-status --scenario next-step
+    OWUI_API_KEY=... python3 codex/bin/owui_chat_scenarios.py --scenario all --json
+
+Výchozí scénáře dnes pokrývají:
+- `git-status`: přirozené “zkontroluj git status”
+- `push-readiness`: přirozené “je to ready na push?”
+- `deploy-status`: přirozené “ukaž deploy status”
+- `next-step`: přirozené “navrhni další krok”
+
+To je záměrně levnější než plný browser E2E. Neověřuje vzhled UI, ale přímo to, že běžná lidská formulace v audit chatu projde route -> filter -> gateway -> capability -> zpět do viditelné odpovědi.
+
 `codex/bin/check_ai_stack.sh` to teď umí použít i automaticky. Když je dostupný OpenWebUI API key přes `OWUI_API_KEY` nebo ignorovaný `codex/state/openwebui-api.key`, healthcheck po gateway smoke přidá i audit-chat smoke. Pokud key chybí, krok se jen korektně přeskočí. Vypnout ho jde přes `SKIP_OWUI_CHAT_SMOKE=1`.
 
 Pro admin nebo patch operace používej oddělený viditelný a technický prompt. Viditelný prompt je lidský popis práce pro audit chat; technický prompt může obsahovat interní gateway/admin marker a diff, ale do viditelné historie se nezapisuje:
