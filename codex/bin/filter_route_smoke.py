@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,10 +25,11 @@ FILTER_PATH = ROOT / "codex/bin/openwebui_codex_auto_tools_filter.py"
 @dataclass(frozen=True)
 class RouteScenario:
     name: str
-    prompt: str
     expected: tuple[str, ...]
+    prompt: str = ""
     unexpected: tuple[str, ...] = ()
     model: str = "codex-local-plan-qwen14b"
+    messages: tuple[dict[str, str], ...] = ()
 
 
 SCENARIOS: tuple[RouteScenario, ...] = (
@@ -72,6 +74,45 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         prompt="repozitar: ai-stack\nsoubor : docker-compose.yml\n\nprecti docker compose a vysvetli co dela radek po radku",
         expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "docker-compose.yml"),
         unexpected=("GATEWAY_ADMIN_EXPLAIN_FILE", "nemohl najít"),
+    ),
+    RouteScenario(
+        name="transcript-bootstrap-testcode",
+        prompt="vytvor mi nove repository TestCode",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "vytvor mi nove repository TestCode"),
+    ),
+    RouteScenario(
+        name="transcript-ssh-create-existing-workspace",
+        messages=(
+            {"role": "user", "content": "vytvor mi nove repository TestCode"},
+            {"role": "assistant", "content": "AGENT_LOOP_OK\nrequested_workspace=ai-stack\ncontroller_workspace=ai-stack\nexecution:\n{\"name\":\"TestCode\"}"},
+            {"role": "user", "content": "v repozitart TestCode vytvor ssh klic pro github"},
+        ),
+        expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "v repozitart TestCode vytvor ssh klic pro github"),
+        unexpected=("repo: ai-stack",),
+    ),
+    RouteScenario(
+        name="transcript-public-key-followup-from-history",
+        messages=(
+            {"role": "user", "content": "vytvor mi nove repository TestCode"},
+            {"role": "assistant", "content": "AGENT_LOOP_OK\nrequested_workspace=ai-stack\ncontroller_workspace=ai-stack"},
+            {"role": "user", "content": "v repozitart TestCode vytvor ssh klic pro github"},
+            {"role": "assistant", "content": "AGENT_LOOP_OK\nrequested_workspace=TestCode\ncontroller_workspace=TestCode\nworkflow=ssh_key_create"},
+            {"role": "user", "content": "vrat mi public key"},
+        ),
+        expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "vrat mi public key"),
+        unexpected=("repo: ai-stack",),
+    ),
+    RouteScenario(
+        name="transcript-public-key-first-token",
+        prompt="TestCode Vrat mi public key SSH klice",
+        expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "TestCode Vrat mi public key SSH klice"),
+        unexpected=("repo: ai-stack",),
+    ),
+    RouteScenario(
+        name="transcript-ssh-keygen-is-still-testcode",
+        prompt="TestCode:\npust ssh-keygen -t ed25519 -C \"your_email@example.com\"",
+        expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "ssh-keygen -t ed25519 -C"),
+        unexpected=("repo: ai-stack",),
     ),
 )
 
@@ -223,10 +264,33 @@ def load_filter_class():
     return module.Filter
 
 
+def build_test_workspaces_file() -> Path:
+    path = Path(tempfile.gettempdir()) / "codex-filter-route-smoke-workspaces.json"
+    path.write_text(
+        json.dumps(
+            {
+                "default": "smoke",
+                "workspaces": {
+                    "smoke": {"path": "/tmp/smoke", "port": 4096, "cpus": 8, "memory": "16g"},
+                    "ai-stack": {"path": "/tmp/ai-stack", "port": 4098, "cpus": 8, "memory": "16g"},
+                    "Test2": {"path": "/tmp/Test2", "port": 4100, "cpus": 8, "memory": "16g"},
+                    "Test3": {"path": "/tmp/Test3", "port": 4101, "cpus": 8, "memory": "16g"},
+                    "TestCode": {"path": "/tmp/TestCode", "port": 4102, "cpus": 8, "memory": "16g"},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def route_prompt(filter_obj: Any, scenario: RouteScenario) -> str:
     body = {
         "model": scenario.model,
-        "messages": [{"role": "user", "content": scenario.prompt}],
+        "messages": list(scenario.messages) if scenario.messages else [{"role": "user", "content": scenario.prompt}],
     }
     routed = filter_obj.inlet(body)
     return str(routed["messages"][-1]["content"])
@@ -269,6 +333,9 @@ def main() -> int:
         raise SystemExit("Unknown scenario(s): " + ", ".join(unknown))
 
     filter_obj = load_filter_class()()
+    test_workspaces_file = build_test_workspaces_file()
+    filter_obj._workspaces_file = lambda: test_workspaces_file
+    filter_obj._workspaces = lambda: json.loads(test_workspaces_file.read_text(encoding="utf-8"))["workspaces"]
     results = [run_scenario(filter_obj, by_name[name]) for name in names]
     payload = {
         "ok": all(item["ok"] for item in results),

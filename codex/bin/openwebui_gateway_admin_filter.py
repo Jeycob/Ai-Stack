@@ -36,6 +36,11 @@ except ModuleNotFoundError:  # pragma: no cover - used by lightweight local smok
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
 FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
 EMBEDDED_CAPABILITY_ROADMAP = None
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+from workspace_context import load_workspace_registry, resolve_workspace_context, strip_workspace_routing
 
 
 class Filter:
@@ -252,12 +257,26 @@ class Filter:
                 return content if isinstance(content, str) else str(content)
         return ""
 
-    def _workspace_from_text(self, text: str) -> str | None:
-        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*([A-Za-z0-9_.-]{{1,80}})\s*$", text)
-        if match:
-            return match.group(1)
-        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s+([A-Za-z0-9_.-]{{1,80}})\s*$", text)
-        return match.group(1) if match else None
+    def _workspaces_file(self) -> Path:
+        return self._repo_root() / "codex/workspaces.json"
+
+    def _workspaces(self) -> dict[str, dict]:
+        try:
+            return load_workspace_registry(self._workspaces_file())[1]
+        except Exception:
+            return {}
+
+    def _workspace_from_text(self, text: str, body: dict | None = None) -> str | None:
+        try:
+            resolved = resolve_workspace_context(
+                text,
+                (body or {}).get("messages") or [],
+                self._workspaces_file(),
+                fallback_workspace="ai-stack",
+            )
+        except Exception:
+            return None
+        return resolved.workspace
 
     def _line_value(self, text: str, label_pattern: str) -> str | None:
         match = re.search(rf"(?im)^\s*{label_pattern}\s*:\s*(.+?)\s*$", text)
@@ -268,11 +287,10 @@ class Filter:
 
     def _non_route_lines(self, text: str) -> list[str]:
         lines = []
-        for line in text.splitlines():
+        cleaned = strip_workspace_routing(text, self._workspaces())
+        for line in cleaned.splitlines():
             stripped = line.strip()
             if not stripped:
-                continue
-            if re.match(rf"(?i)^{WORKSPACE_LABEL_PATTERN}(?:\s*:\s*|\s+)[A-Za-z0-9_.-]{{1,80}}\s*$", stripped):
                 continue
             if re.match(rf"(?i)^{FILE_LABEL_PATTERN}\s*:\s*.+$", stripped):
                 continue

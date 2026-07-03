@@ -9,7 +9,9 @@ direct gateway capability calls, typically the agent loop.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -33,6 +35,25 @@ def assert_contains(sequence: list[str], needle: str, label: str) -> None:
 
 def main() -> int:
     filt = load_filter_class()()
+    workspaces_file = Path(tempfile.gettempdir()) / "codex-gateway-admin-run-workspace-smoke.json"
+    workspaces_file.write_text(
+        json.dumps(
+            {
+                "default": "smoke",
+                "workspaces": {
+                    "smoke": {"path": "/tmp/smoke", "port": 4096, "cpus": 8, "memory": "16g"},
+                    "ai-stack": {"path": "/tmp/ai-stack", "port": 4098, "cpus": 8, "memory": "16g"},
+                    "Test3": {"path": "/tmp/Test3", "port": 4101, "cpus": 8, "memory": "16g"},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    filt._workspaces_file = lambda: workspaces_file
+    filt._workspaces = lambda: json.loads(workspaces_file.read_text(encoding="utf-8"))["workspaces"]
 
     mentor = [
         "python3",

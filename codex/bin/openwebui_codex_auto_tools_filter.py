@@ -8,12 +8,18 @@ description: Dynamically attaches Codex toolsets and routes broader codex-local 
 import re
 import shlex
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
 FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
 EMBEDDED_CAPABILITY_ROADMAP = None
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+from workspace_context import load_workspace_registry, resolve_workspace_context, strip_workspace_routing
 
 try:
     from pydantic import BaseModel, Field
@@ -249,19 +255,17 @@ class Filter:
         task_text = self._agent_loop_task_text(text)
         if not task_text:
             return None
-        workspace = self._workspace_from_text(text) or "ai-stack"
+        workspace = self._workspace_from_text(text, body)
+        if not workspace:
+            workspace = "ai-stack"
         command = f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(workspace)} -- {shlex.quote(task_text[:3000])}"
         self._set_message_text(latest, f"repo: {workspace}\n" + command)
         body["stream"] = False
         return body
 
     def _agent_loop_task_text(self, text: str) -> str:
-        lines = []
-        for line in str(text or "").splitlines():
-            if re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:?\s*[A-Za-z0-9_.-]{{1,80}}\s*$", line):
-                continue
-            if line.strip():
-                lines.append(line.strip())
+        cleaned = strip_workspace_routing(text, self._workspaces())
+        lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
         return " ".join(lines).strip() or str(text or "").strip()
 
     def _non_repo_lines(self, text: str) -> list[str]:
@@ -1795,14 +1799,26 @@ class Filter:
             )
         return None
 
-    def _workspace_from_text(self, text: str) -> str | None:
-        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*([A-Za-z0-9_.-]{{1,80}})\s*$", text)
-        if match:
-            return match.group(1)
-        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s+([A-Za-z0-9_.-]{{1,80}})\s*$", text)
-        if match:
-            return match.group(1)
-        return None
+    def _workspaces_file(self) -> Path:
+        return MODULE_DIR.parent / "workspaces.json"
+
+    def _workspaces(self) -> dict[str, dict]:
+        try:
+            return load_workspace_registry(self._workspaces_file())[1]
+        except Exception:
+            return {}
+
+    def _workspace_from_text(self, text: str, body: dict | None = None) -> str | None:
+        try:
+            resolved = resolve_workspace_context(
+                text,
+                (body or {}).get("messages") or [],
+                self._workspaces_file(),
+                fallback_workspace="ai-stack",
+            )
+        except Exception:
+            return None
+        return resolved.workspace if resolved.workspace_exists or resolved.workspace == "ai-stack" else resolved.workspace
 
     def _default_tool_ids(self, model: str, text: str) -> list[str]:
         if model == "codex-lite-coding-agent":

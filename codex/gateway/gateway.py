@@ -14,6 +14,14 @@ BIN_DIR = Path(__file__).resolve().parents[1] / "bin"
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from workspace_context import (
+    WORKSPACE_LABEL_PATTERN,
+    canonical_workspace_name,
+    infer_repo_name_from_text,
+    load_workspace_registry,
+    resolve_workspace_context,
+    strip_workspace_routing,
+)
 from workspace_scan import collect, load_workspace
 
 WORKSPACES_FILE = os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json")
@@ -43,7 +51,7 @@ IMPORTANT = {
     "Cargo.toml", "go.mod", "pom.xml", "build.gradle", "settings.gradle",
     "CMakeLists.txt", "Makefile", "Dockerfile", "docker-compose.yml"
 }
-WORKSPACE_LABEL_RE = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
+WORKSPACE_LABEL_RE = WORKSPACE_LABEL_PATTERN
 SENSITIVE_FILE_PREFIXES = (
     ".git/",
     "codex/state/",
@@ -60,9 +68,7 @@ SENSITIVE_FILE_PREFIXES = (
 SENSITIVE_FILE_NAMES = {".env"}
 
 def load_registry():
-    with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("default", "smoke"), data.get("workspaces", {})
+    return load_workspace_registry(WORKSPACES_FILE)
 
 def load_capability_roadmap_payload():
     try:
@@ -85,14 +91,15 @@ def content_to_text(content):
 def select_workspace(messages):
     default, workspaces = load_registry()
     full = "\n".join(content_to_text(m.get("content", "")) for m in messages)
-    m = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:\s*([A-Za-z0-9_.-]+)\s*$", full)
-    name = m.group(1) if m else default
+    resolved = resolve_workspace_context(full, messages, WORKSPACES_FILE, fallback_workspace=default)
+    name = resolved.workspace
     if name not in workspaces:
         raise ValueError(f"Unknown workspace '{name}'. Allowed: {', '.join(sorted(workspaces))}")
     return name, workspaces[name]
 
 def strip_routing(text):
-    return re.sub(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:?\s*[A-Za-z0-9_.-]+\s*$", "", text).strip()
+    _, workspaces = load_registry()
+    return strip_workspace_routing(text, workspaces)
 
 def run_ro(args, cwd, timeout=8):
     try:
@@ -612,6 +619,8 @@ AGENT_LOOP_WORKFLOWS = {
     "run",
     "autopilot",
     "bootstrap",
+    "ssh_key_create",
+    "ssh_key_show_public",
     "web_answer",
     "web_fetch",
     "deploy",
@@ -675,18 +684,7 @@ def agent_read_only_requested(task):
 
 
 def agent_extract_repo_name(task):
-    text = str(task or "").strip()
-    patterns = (
-        r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:repo|repository|repozitar|repozitář|repositar|workspace|projekt|project)\s*:\s*([A-Za-z0-9_.-]{1,80})\b",
-        r"(?i)\b(?:repo|repository|repozitar|repozitář|repositar)\s+([A-Za-z0-9_.-]{1,80})\b",
-        r"(?i)\b(?:workspace|projekt|project)\s+([A-Za-z0-9_.-]{1,80})\b",
-        r"(?i)\b(?:vytvor|vytvoř|zaloz|založ)\s+(?:nove|nové|new)?\s*(?:repo|repository|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-    return ""
+    return infer_repo_name_from_text(task)
 
 
 def agent_controller_workspace(requested_workspace):
@@ -707,6 +705,8 @@ def agent_capability_catalog():
         "- run: execute one explicit short command inside codex-opencode-<workspace> and return output",
         "- autopilot: recovery/verify loop over install/verify/smoke/test/build/lint",
         "- bootstrap: create local repository/workspace, init git, generate SSH key, optionally continue with follow-up actions",
+        "- ssh_key_create: create or reuse the workspace SSH key idempotently and return the public key path",
+        "- ssh_key_show_public: return the workspace SSH public key; if missing, create it idempotently first",
         "- web_answer: answer a question from a public HTTP/HTTPS source",
         "- web_fetch: fetch text from a public HTTP/HTTPS source",
         "- deploy: ai-stack deploy/restart flow",
@@ -856,10 +856,54 @@ def agent_bootstrap_requested(task):
         "vytvoř workspace",
         "initni git",
         "init git",
-        "ssh klic",
-        "ssh klíč",
     )
     return any(cue in lower for cue in cues)
+
+
+def agent_ssh_key_show_public_requested(task):
+    lower = str(task or "").lower()
+    public_cues = (
+        "public key",
+        "public klic",
+        "public klíč",
+        "vrat mi public key",
+        "vrať mi public key",
+        "ukaz public key",
+        "ukaž public key",
+        "vrat public key",
+        "vrať public key",
+        "ssh-ed25519",
+        "ssh-rsa",
+    )
+    return any(cue in lower for cue in public_cues)
+
+
+def agent_ssh_key_create_requested(task):
+    lower = str(task or "").lower()
+    create_cues = (
+        "ssh klic",
+        "ssh klíč",
+        "ssh key",
+        "ssh-keygen",
+        "vygeneruj klic",
+        "vygeneruj klíč",
+        "vytvor ssh",
+        "vytvoř ssh",
+        "create ssh",
+        "generate ssh",
+    )
+    return any(cue in lower for cue in create_cues)
+
+
+def agent_workspace_ssh_comment(task, workspace):
+    text = str(task or "")
+    match = re.search(r'(?i)\b-C\s+["\']?([^"\']{1,160})["\']?', text)
+    if match:
+        return match.group(1).strip()
+    email = re.search(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", text, re.I)
+    if email:
+        return email.group(0)
+    return f"{workspace}@local"
 
 
 def agent_public_url_from_task(task):
@@ -1015,6 +1059,10 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         workflow = "review"
     elif agent_deploy_requested(task):
         workflow = "deploy"
+    elif workspace_exists and agent_ssh_key_show_public_requested(task):
+        workflow = "ssh_key_show_public"
+    elif workspace_exists and agent_ssh_key_create_requested(task):
+        workflow = "ssh_key_create"
     elif agent_bootstrap_requested(task):
         workflow = "bootstrap"
     elif url and agent_web_question_requested(task):
@@ -1043,6 +1091,9 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         "github": "github" in str(task or "").lower(),
         "url": url,
         "question": str(task or "").strip() if workflow == "web_answer" else "",
+        "ssh_comment": agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
+        if workflow in {"ssh_key_create", "ssh_key_show_public"}
+        else "",
         "confidence": "high",
     }
     return normalize_agent_plan(raw, requested_workspace, controller_workspace, workspace_exists, task), json.dumps(raw, ensure_ascii=False)
@@ -1196,7 +1247,7 @@ def agent_plan_messages(requested_workspace, controller_workspace, workspace_exi
                 "Return JSON only. Do not explain. Choose the single best next workflow, not every possible one.\n\n"
                 "Output schema:\n"
                 "{\n"
-                '  "workflow": "review|edit|action|run|autopilot|bootstrap|web_answer|web_fetch|deploy|clarify",\n'
+                '  "workflow": "review|edit|action|run|autopilot|bootstrap|ssh_key_create|ssh_key_show_public|web_answer|web_fetch|deploy|clarify",\n'
                 '  "reason": "short reason",\n'
                 '  "read_only": true,\n'
                 '  "workspace": "workspace-name",\n'
@@ -1221,6 +1272,8 @@ def agent_plan_messages(requested_workspace, controller_workspace, workspace_exi
                 "Put the new repository name in repo_name and any post-bootstrap runtime steps into followup_actions. "
                 "If the task says things like 'stáhni co je třeba', 'doinstaluj', 'rozběhni to', 'pusť to', "
                 "'otestuj' or similar, translate that into concrete followup_actions such as install, smoke, test, build, or verify.\n"
+                "- If the workspace already exists and the user asks to create an SSH key or runs ssh-keygen, choose ssh_key_create instead of bootstrap or raw run.\n"
+                "- If the user asks for the public key, choose ssh_key_show_public.\n"
                 "- If GitHub push/remote is mentioned during bootstrap, set github=true, but do not assume push is already confirmed.\n"
                 "- For public website questions, choose web_answer; for plain fetch, choose web_fetch.\n"
                 "- For ai-stack self-update/deploy/restart prompts, choose deploy.\n"
@@ -1281,14 +1334,27 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     inferred_action = agent_infer_action_from_task(task)
     inferred_followups = agent_infer_followup_actions(task)
     bootstrap_requested = agent_bootstrap_requested(task)
+    ssh_key_create_requested = agent_ssh_key_create_requested(task)
+    ssh_key_show_public_requested = agent_ssh_key_show_public_requested(task)
     run_requested = agent_run_requested(task)
     explicit_command_requested = agent_explicit_command_requested(task)
+    ssh_comment = str(plan.get("ssh_comment") or "").strip()
+    if not ssh_comment:
+        ssh_comment = agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
+    if workspace_exists and ssh_key_show_public_requested:
+        workflow = "ssh_key_show_public"
+    elif workspace_exists and ssh_key_create_requested:
+        workflow = "ssh_key_create"
     if workflow == "bootstrap" and not bootstrap_requested:
         if agent_edit_requested(task):
             workflow = "edit"
         elif inferred_action:
             workflow = "action"
             action = action or inferred_action
+        elif workspace_exists and ssh_key_show_public_requested:
+            workflow = "ssh_key_show_public"
+        elif workspace_exists and ssh_key_create_requested:
+            workflow = "ssh_key_create"
         elif run_requested:
             workflow = "run"
         else:
@@ -1314,6 +1380,12 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         workflow = "action"
         action = action or inferred_action
         command = []
+    if workflow == "run" and workspace_exists and ssh_key_create_requested:
+        workflow = "ssh_key_create"
+        command = []
+    if workflow == "run" and workspace_exists and ssh_key_show_public_requested:
+        workflow = "ssh_key_show_public"
+        command = []
     if workflow == "run" and not command:
         command = agent_infer_command_from_task(task)
     if workflow == "run" and not command:
@@ -1333,6 +1405,7 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         "github": bool(plan.get("github")),
         "url": str(plan.get("url") or "").strip(),
         "question": str(plan.get("question") or "").strip(),
+        "ssh_comment": ssh_comment,
         "confidence": confidence,
     }
 
@@ -1453,7 +1526,7 @@ def admin_agent_loop(payload):
         result["execution"] = deploy
         return result
 
-    if workflow in {"edit", "action", "autopilot"} and not workspace_exists:
+    if workflow in {"edit", "action", "autopilot", "ssh_key_create", "ssh_key_show_public"} and not workspace_exists:
         result["summary"] = f"Workspace '{requested_workspace}' zatím není registrovaný."
         result["recovery"] = {
             "text": "Nejdřív vytvoř nebo zaregistruj workspace, případně použij bootstrap workflow.",
@@ -1524,6 +1597,28 @@ def admin_agent_loop(payload):
                 "patch_summary": str(execution.get("patch_summary", "")).strip(),
                 "read_command": str(execution.get("read_command", "")).strip(),
             }
+        return result
+
+    if workflow == "ssh_key_create":
+        execution = admin_workspace_ssh_key({
+            "workspace": plan["workspace"],
+            "mode": "create",
+            "comment": plan.get("ssh_comment") or f"{plan['workspace']}@local",
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = str(execution.get("summary") or "Workspace SSH key completed.")
+        return result
+
+    if workflow == "ssh_key_show_public":
+        execution = admin_workspace_ssh_key({
+            "workspace": plan["workspace"],
+            "mode": "show_public",
+            "comment": plan.get("ssh_comment") or f"{plan['workspace']}@local",
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = str(execution.get("summary") or "Workspace SSH public key completed.")
         return result
 
     if workflow == "bootstrap":
@@ -2040,6 +2135,39 @@ def generate_repo_ssh_key(name, comment):
         "public_key": pub_path.read_text(encoding="utf-8").strip(),
     }
 
+
+def admin_workspace_ssh_key(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("Unsafe workspace name")
+    _, workspaces = load_registry()
+    if workspace not in workspaces:
+        raise ValueError(f"Unknown workspace '{workspace}'. Allowed: {', '.join(sorted(workspaces))}")
+    mode = str(payload.get("mode") or "create").strip().lower()
+    if mode not in {"create", "show_public"}:
+        raise ValueError("mode must be create or show_public")
+    comment = str(payload.get("comment") or f"{workspace}@local").strip() or f"{workspace}@local"
+    key = generate_repo_ssh_key(f"github-{workspace}", comment)
+    status = str(key.get("status") or "")
+    if mode == "show_public" and status == "SSH_KEY_READY":
+        summary = "Workspace SSH public key was missing and has been created now."
+    elif mode == "show_public":
+        summary = "Workspace SSH public key is ready."
+    elif status == "SSH_KEY_READY":
+        summary = "Workspace SSH key has been created."
+    else:
+        summary = "Workspace SSH key already exists."
+    return {
+        "ok": True,
+        "action": f"workspace_ssh_key_{mode}",
+        "workspace": workspace,
+        "comment": comment,
+        "summary": summary,
+        "created": status == "SSH_KEY_READY",
+        "ssh_key": key,
+        "public_key": key.get("public_key", ""),
+    }
+
 def github_token():
     token = os.getenv("GITHUB_TOKEN", "").strip()
     if token:
@@ -2552,7 +2680,7 @@ def workspace_autopilot_recommendation(workspace: str) -> dict:
         }
 
     try:
-        root = load_workspace(WORKSPACES_FILE, workspace)
+        root = load_workspace(Path(WORKSPACES_FILE), workspace)
         scan = collect(root, 60)
     except Exception as exc:
         return build_hint(
@@ -2633,7 +2761,7 @@ def workspace_action_failure_recommendation(workspace: str, action: str, action_
         }
 
     try:
-        root = load_workspace(WORKSPACES_FILE, workspace)
+        root = load_workspace(Path(WORKSPACES_FILE), workspace)
         scan = collect(root, 80)
     except Exception as exc:
         return build(
@@ -3089,17 +3217,9 @@ def runtime_fingerprint():
     return digest.hexdigest()[:24]
 
 
-def agent_requested_workspace_from_text(text):
-    default, workspaces = load_registry()
-    match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:?\s*([A-Za-z0-9_.-]{{1,80}})\s*$", str(text or ""))
-    if match:
-        return match.group(1)
-    inferred = agent_extract_repo_name(text)
-    if inferred:
-        return inferred
-    if "ai-stack" in workspaces:
-        return "ai-stack"
-    return default
+def agent_requested_workspace_from_text(text, messages=None):
+    resolved = resolve_workspace_context(text, messages or [], WORKSPACES_FILE, fallback_workspace="ai-stack")
+    return resolved.workspace
 
 
 def trim_response_text(text, limit=14000):
@@ -3161,6 +3281,22 @@ def agent_loop_human_answer(result):
         return (
             "Nasazení ai-stack se nepodařilo naplánovat. "
             + preview_text(execution.get("tail") or execution.get("error") or result.get("summary"))
+        ).strip()
+
+    if workflow in {"ssh_key_create", "ssh_key_show_public"}:
+        ssh_key = execution.get("ssh_key") if isinstance(execution.get("ssh_key"), dict) else {}
+        public_key = str(execution.get("public_key") or ssh_key.get("public_key") or "").strip()
+        public_key_path = str(ssh_key.get("public_key_path") or "").strip()
+        if result.get("ok"):
+            text = f"Ve workspace {workspace} je SSH key připravený."
+            if public_key_path:
+                text += f" Public key je v `{public_key_path}`."
+            if public_key:
+                text += f" Public key: {public_key}"
+            return text
+        return (
+            f"SSH key capability ve workspace {workspace} selhala. "
+            + preview_text(execution.get("error") or result.get("summary"))
         ).strip()
 
     if workflow == "run":
@@ -3329,8 +3465,9 @@ def codex_local_agent_loop_payload(payload):
     text = strip_routing(admin_text).strip() or str(admin_text or "").strip()
     if not text or "GATEWAY_ADMIN_" in text:
         return None
+    messages = payload.get("messages") or []
     return {
-        "workspace": agent_requested_workspace_from_text(admin_text),
+        "workspace": agent_requested_workspace_from_text(admin_text, messages),
         "task": text[:6000],
     }
 
@@ -3468,7 +3605,7 @@ def completion(payload):
         task = strip_routing(admin_text).strip() or admin_text.strip()
         try:
             result = admin_agent_loop({
-                "workspace": agent_requested_workspace_from_text(admin_text),
+                "workspace": agent_requested_workspace_from_text(admin_text, payload.get("messages") or []),
                 "task": task,
             })
             text = agent_loop_response_text(result)
