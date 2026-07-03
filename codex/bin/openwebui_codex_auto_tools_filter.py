@@ -112,6 +112,12 @@ class Filter:
         if not command:
             command = self._natural_workspace_next_helper_command(text)
         if not command:
+            command = self._natural_workspace_profile_command(text)
+        if not command:
+            command = self._natural_workspace_report_command(text)
+        if not command:
+            command = self._natural_workspace_plan_command(text)
+        if not command:
             command = self._natural_workspace_top_command(text)
         if not command:
             command = self._natural_workspace_backlog_command(text)
@@ -240,6 +246,27 @@ class Filter:
             return None
         return self._brief_helper_command(workspace, task)
 
+    def _extract_single_task(self, text: str, patterns: list[str], cue_needles: tuple[str, ...]) -> str | None:
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                candidate = match.group(1).strip().strip("\"'")
+                candidate = re.sub(r"(?i)^(?:task|ukol|úkol)\s*:\s*", "", candidate).strip()
+                candidate = candidate.rstrip("?. ")
+                if candidate:
+                    return candidate
+
+        lines = self._non_repo_lines(text)
+        filtered = []
+        for line in lines:
+            lower = line.lower()
+            if any(needle in lower for needle in cue_needles):
+                continue
+            filtered.append(line)
+        if filtered:
+            return " ".join(filtered)
+        return None
+
     def _boundary_helper_command(self, workspace: str, task: str) -> str:
         command = [
             "python3",
@@ -323,6 +350,131 @@ class Filter:
         if not task:
             return None
         return self._boundary_helper_command(workspace, task)
+
+    def _profile_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "profile",
+            workspace,
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _natural_workspace_profile_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        cue_needles = (
+            "jaky workflow",
+            "jaký workflow",
+            "jaky runtime profile",
+            "jaký runtime profile",
+            "jakou pravomoc",
+            "jakou šířku pravomocí",
+            "jaky scope",
+            "jaký scope",
+            "co bys zvolil za workflow",
+            "what workflow",
+            "what runtime profile",
+        )
+        if not any(needle in lower for needle in cue_needles):
+            return None
+        task = self._extract_single_task(
+            text,
+            [
+                r"(?is)\b(?:jaky|jaký)\s+workflow\b.*?\bpro\s+(.+?)\s*$",
+                r"(?is)\b(?:jaky|jaký)\s+runtime\s+profile\b.*?\bpro\s+(.+?)\s*$",
+                r"(?is)\b(?:jakou)\s+(?:pravomoc|šířku\s+pravomocí)\b.*?\bpro\s+(.+?)\s*$",
+                r"(?is)\b(?:what\s+workflow|what\s+runtime\s+profile)\b.*?\bfor\s+(.+?)\s*$",
+            ],
+            cue_needles,
+        )
+        if not task:
+            return None
+        return self._profile_helper_command(workspace, task)
+
+    def _report_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "report",
+            workspace,
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _natural_workspace_report_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        cue_needles = (
+            "mentor report",
+            "udelej report",
+            "udělej report",
+            "compact report",
+            "shrni workflow",
+            "shrn workflow",
+            "summarize workflow",
+        )
+        if not any(needle in lower for needle in cue_needles):
+            return None
+        task = self._extract_single_task(
+            text,
+            [
+                r"(?is)\b(?:mentor\s+report|compact\s+report)\b\s*(?:pro|for)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:udelej|udělej|priprav|připrav|shrni|shrn)\b.+?\b(?:report|workflow)\b.*?\bpro\s+(.+?)\s*$",
+                r"(?is)\b(?:summarize\s+workflow)\b.*?\bfor\s+(.+?)\s*$",
+            ],
+            cue_needles,
+        )
+        if not task:
+            return None
+        return self._report_helper_command(workspace, task)
+
+    def _plan_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "plan",
+            workspace,
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _natural_workspace_plan_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        cue_needles = (
+            "kratky plan",
+            "krátký plán",
+            "sequenced plan",
+            "udelej plan",
+            "udělej plán",
+            "priprav plan",
+            "připrav plán",
+            "jaky plan",
+            "jaký plán",
+        )
+        if not any(needle in lower for needle in cue_needles):
+            return None
+        task = self._extract_single_task(
+            text,
+            [
+                r"(?is)\b(?:kratky|krátký)\s+(?:plan|plán)\b\s*(?:pro|for)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:sequenced\s+plan)\b\s*(?:for)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:udelej|udělej|priprav|připrav)\b.+?\b(?:plan|plán)\b.*?\bpro\s+(.+?)\s*$",
+                r"(?is)\b(?:jaky|jaký)\s+(?:plan|plán)\b.*?\bpro\s+(.+?)\s*$",
+            ],
+            cue_needles,
+        )
+        if not task:
+            return None
+        return self._plan_helper_command(workspace, task)
 
     def _next_helper_command(self, workspace: str, task: str) -> str:
         command = [

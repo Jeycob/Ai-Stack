@@ -364,6 +364,12 @@ Podobně i pro single-task otázky typu `Jaký helper mám spustit dál pro ...?
 
 Stejně tak už jde přirozeně vyžádat i guardrail vysvětlení: formulace typu `Proč to nejde pro ...?`, `Jaké guardraily platí pro ...?`, `Jaká capability chybí pro ...?` nebo `Why can't it do this for ...?` filter přeloží na `mentor_codex_local.py boundary`.
 
+Podobně už jde přirozeně routovat i levná mentor analytika nad jedním taskem:
+
+- `Jaký workflow bys zvolil pro ...?` nebo `Jaký runtime profile bys zvolil pro ...?` -> `mentor_codex_local.py profile`
+- `Udělej mentor report pro ...` nebo `Shrň workflow pro ...` -> `mentor_codex_local.py report`
+- `Připrav krátký plán pro ...` nebo `Jaký plán bys zvolil pro ...?` -> `mentor_codex_local.py plan`
+
 Tohle je důležitý směr celé autonomie: méně jednorázových whitelist markerů a víc širších auditovaných capability scope. V praxi to znamená, že codex-local má být samostatnější hlavně u standardních workflow, která už máme pojmenovaná a ohraničená, ne přes neomezený shell.
 
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:

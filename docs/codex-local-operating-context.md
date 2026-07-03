@@ -294,6 +294,12 @@ Stejny princip plati i pro sirsi capability flow: helper nema zustavat zbytecne 
 
 `openwebui_codex_auto_tools_filter.py` umi tenhle use-case uz i prirozene routovat z chatu: kdyz uzivatel napise `repo: <workspace>` a pozadavek typu `Dej mi kratky mentor brief pro ...`, `Jaky brief ma dostat model pro ...` nebo `execution brief`, filter to prelozi na `mentor_codex_local.py brief` pres `GATEWAY_ADMIN_RUN_WORKSPACE`.
 
+Stejne tak uz umi prirozene routovat i dalsi levne mentor vrstvy:
+
+- `Jaky workflow bys zvolil pro ...?` nebo `Jaky runtime profile bys zvolil pro ...?` -> `mentor_codex_local.py profile`
+- `Udelej mentor report pro ...` nebo `Shrn workflow pro ...` -> `mentor_codex_local.py report`
+- `Priprav kratky plan pro ...` nebo `Jaky plan bys zvolil pro ...?` -> `mentor_codex_local.py plan`
+
 Plan navic vraci:
 
 - `PLAN_STEP_<N>_LABEL`: typ dalsiho kroku.
@@ -327,7 +333,7 @@ Top navic vraci:
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 
-`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi ze single-task nebo vice-task promptu vyrobit brief, next-helper, boundary, backlog, dispatch nebo top helper call, takze codex-local dostane i lehkou prioritizacni a mentor vrstvu bez rucniho skladani admin markeru.
+`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi ze single-task nebo vice-task promptu vyrobit `profile`, `report`, `plan`, `brief`, `next-helper`, `boundary`, `backlog`, `dispatch` nebo `top` helper call, takze codex-local dostane i lehkou prioritizacni a mentor vrstvu bez rucniho skladani admin markeru.
 
 Aktualni runtime profily:
 

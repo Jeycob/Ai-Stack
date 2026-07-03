@@ -41,8 +41,11 @@ UNSAFE_PATCH_SEGMENTS = (
 
 WORKFLOW_PRIORITY = {
     "improve": 95,
+    "deploy": 90,
     "autopilot": 85,
+    "create-repo": 80,
     "apply-safe": 75,
+    "action": 70,
     "run": 65,
     "audit": 45,
 }
