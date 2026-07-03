@@ -1558,6 +1558,8 @@ def workspace_action_failure_recommendation(workspace: str, action: str, action_
     registry = load_workspace_action_registry()
     spec = registry.get(action, {}) if isinstance(registry, dict) else {}
     generic_hint = str(spec.get("recovery_hint", "")).strip()
+    retry_runner = str(spec.get("runner", "container") or "container").strip() or "container"
+    retry_timeout = int(spec.get("timeout", 900) or 900)
 
     def build(text: str, patch_target: str, patch_hint: str, patch_summary: str) -> dict:
         read_command = f"GATEWAY_ADMIN_READ_NUMBERED {patch_target} 1 220" if patch_target else ""
@@ -1567,6 +1569,9 @@ def workspace_action_failure_recommendation(workspace: str, action: str, action_
             "patch_hint": patch_hint,
             "patch_summary": patch_summary,
             "read_command": read_command,
+            "retry_action": action,
+            "retry_runner": retry_runner,
+            "retry_timeout": retry_timeout,
         }
 
     try:
@@ -1758,6 +1763,9 @@ def admin_workspace_autopilot(payload):
             "patch_hint": recommendation.get("patch_hint", ""),
             "patch_summary": recommendation.get("patch_summary", ""),
             "read_command": recommendation.get("read_command", ""),
+            "retry_action": recommendation.get("retry_action", ""),
+            "retry_runner": recommendation.get("retry_runner", ""),
+            "retry_timeout": recommendation.get("retry_timeout", ""),
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "action_probes": action_probes,
@@ -1781,6 +1789,9 @@ def admin_workspace_autopilot(payload):
             "patch_hint": "",
             "patch_summary": "",
             "read_command": "",
+            "retry_action": "",
+            "retry_runner": "",
+            "retry_timeout": "",
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "action_probes": action_probes,
@@ -1795,7 +1806,16 @@ def admin_workspace_autopilot(payload):
     current_verify_steps = verify_steps
     current_probes = action_probes
     stop_reason = "max_steps_reached"
-    recommendation = {"text": "", "patch_target": "", "patch_hint": "", "patch_summary": "", "read_command": ""}
+    recommendation = {
+        "text": "",
+        "patch_target": "",
+        "patch_hint": "",
+        "patch_summary": "",
+        "read_command": "",
+        "retry_action": "",
+        "retry_runner": "",
+        "retry_timeout": "",
+    }
     for idx in range(max_steps):
         remaining_names = {step["action"] for step in executed_actions if step.get("action")}
         if idx == 0:
@@ -1859,6 +1879,9 @@ def admin_workspace_autopilot(payload):
         "patch_hint": recommendation.get("patch_hint", ""),
         "patch_summary": recommendation.get("patch_summary", ""),
         "read_command": recommendation.get("read_command", ""),
+        "retry_action": recommendation.get("retry_action", ""),
+        "retry_runner": recommendation.get("retry_runner", ""),
+        "retry_timeout": recommendation.get("retry_timeout", ""),
         "duration_ms": int((time.time() - total_started) * 1000),
         "verify_steps": current_verify_steps,
         "action_probes": current_probes,

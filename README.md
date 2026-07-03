@@ -334,6 +334,10 @@ Ten nevolá živé OpenWebUI, ale importuje `owui_chat_turn.py` a ověří, že 
 
 Podobně je tu i `codex/bin/gateway_recovery_smoke.py`. Ten bez živého Dockeru nebo OpenWebUI ověří, že `workspace_action_failure_recommendation()` umí z dat v `docs/codex-local-capability-roadmap.json` odvodit konkrétnější patch guidance pro časté fail signatury jako `missing script: test`, `vite: not found`, `missing script: dev` nebo neplatnou Python dependency při install kroku. Je to malý guard proti návratu k příliš obecnému “zkontroluj manifest” recovery textu.
 
+Stejná recovery metadata už dnes nenesou jen patch guidance, ale i retry záměr: gateway k failnutému kroku vrací `retry_action`, `retry_runner` a `retry_timeout`. Díky tomu `mentor_codex_local.py improve` po úspěšném safe patchi neudělá jen obecné `verify`, ale zkusí znovu právě ten capability krok, který předtím selhal, typicky `test`, `smoke`, `build` nebo `install`.
+
+Na to je navázaný i malý offline guard `codex/bin/mentor_recovery_followup_smoke.py`. Ten ověří, že mentor helper po patchi opravdu skládá `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <retry_action> ...` a jen při chybějícím retry hintu spadne zpět na generický jednokrokový autopilot verify.
+
 Ještě jedna levná pojistka je `codex/bin/gateway_admin_run_workspace_smoke.py`. Ten neklepe na živou gateway, ale importuje `openwebui_gateway_admin_filter.py` a ověří, že starší nebo ručně vložené nested helper commandy dostanou před spuštěním bezpečný stateless tvar. Prakticky hlídá dvě věci:
 - `python3 codex/bin/mentor_codex_local.py delegate ...` dostane automaticky `--stateless-turns`,
 - `python3 codex/bin/owui_chat_turn.py ...` dostane automaticky `--stateless`.
@@ -354,6 +358,7 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 - helper-only `bootstrap-probe` pro ověření bootstrap/create-repo reasoning bez mutací,
 - `filter_route_smoke.py` pro offline ověření, že přirozené OpenWebUI prompty routeují na správné admin/capability workflow,
 - `owui_chat_turn_stateless_smoke.py` pro regression guard nad nested OpenWebUI helper flow,
+- `mentor_recovery_followup_smoke.py` pro regression guard nad retry-after-patch loopem v `improve`,
 - `gateway_admin_run_workspace_smoke.py` pro regression guard nad automatickou stateless normalizací starších helper commandů,
 - `chat-scenarios` pro user-like OpenWebUI audit chat flow, včetně širší autonomy/profile vrstvy,
 - `check_ai_stack.sh` pro stack summary.
@@ -424,7 +429,7 @@ Ještě praktičtější je mód `apply-safe`: ten po recommendation a read krok
 
     python3 codex/bin/mentor_codex_local.py apply-safe ai-stack
 
-Pro nejbližší chování typu “dělej to jako Codex a dotáhni co zvládneš” je tam nový mód `improve`: nejdřív nechá doběhnout capability vrstvu (`install/test/build/lint` podle projektu), a teprve když už další krok není čistě spustitelný, přepne se do recommendation -> read -> patch-plan -> safe apply workflow:
+Pro nejbližší chování typu “dělej to jako Codex a dotáhni co zvládneš” je tam nový mód `improve`: nejdřív nechá doběhnout capability vrstvu (`install/test/build/lint` podle projektu), a teprve když už další krok není čistě spustitelný, přepne se do recommendation -> read -> patch-plan -> safe apply workflow. Když patch projde, helper se teď nepokouší jen o generické verify, ale přednostně znovu spustí právě ten původně selhaný capability krok podle gateway recovery metadata:
 
     python3 codex/bin/mentor_codex_local.py improve ai-stack
 

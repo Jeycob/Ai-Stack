@@ -38,10 +38,16 @@ def assert_case(action: str, output: str, manifests: list[str], expected_target:
 
     target = str(result.get("patch_target", ""))
     text = str(result.get("text", ""))
+    retry_action = str(result.get("retry_action", ""))
+    retry_runner = str(result.get("retry_runner", ""))
     if target != expected_target:
         raise SystemExit(f"expected patch_target={expected_target!r}, got {target!r} for action={action}")
     if expected_fragment not in text:
         raise SystemExit(f"expected fragment {expected_fragment!r} in text {text!r} for action={action}")
+    if retry_action != action:
+        raise SystemExit(f"expected retry_action={action!r}, got {retry_action!r}")
+    if retry_runner != "container":
+        raise SystemExit(f"expected retry_runner='container', got {retry_runner!r}")
     print(f"RECOVERY_RULE_OK action={action} target={target}")
 
 

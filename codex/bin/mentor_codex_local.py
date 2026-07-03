@@ -529,7 +529,33 @@ def request_diff_only(args: argparse.Namespace, workspace: str, target: str, sum
     return invoke_turn(args, diff_visible, diff_technical, send_history=True, capture_output=True)
 
 
-def request_followup_verify(args: argparse.Namespace, workspace: str, allow_actions_value: str) -> tuple[int, str]:
+def request_followup_verify(
+    args: argparse.Namespace,
+    workspace: str,
+    allow_actions_value: str,
+    retry_action: str = "",
+    retry_runner: str = "",
+    retry_timeout: str = "",
+) -> tuple[int, str]:
+    retry_action = retry_action.strip().lower()
+    retry_runner = retry_runner.strip().lower() or "container"
+    retry_timeout_int = 0
+    if retry_timeout.strip().isdigit():
+        retry_timeout_int = int(retry_timeout.strip())
+    if retry_action in {"install", "verify", "smoke", "test", "build", "lint"}:
+        retry_timeout_int = max(1, min(retry_timeout_int or args.timeout, 3600))
+        verify_visible = (
+            f"repo: {workspace}\n"
+            f"Patch je aplikovaný. Teď znovu proveď konkrétně capability krok `{retry_action}` jako ověření, "
+            "jestli oprava opravdu odblokovala původní problém, a vrať stručný výsledek."
+        )
+        verify_technical = (
+            f"{repo_prefix(args.repo)}\n"
+            f"GATEWAY_ADMIN_WORKSPACE_ACTION {workspace} {retry_action} "
+            f"--runner {retry_runner} --timeout {retry_timeout_int}"
+        )
+        return invoke_turn(args, verify_visible, verify_technical, send_history=True, capture_output=True)
+
     verify_visible = (
         f"repo: {workspace}\n"
         "Patch je aplikovaný. Teď proveď právě jeden další bezpečný capability krok jako ověření, "
@@ -555,6 +581,9 @@ def run_patch_recovery_once(
     meta = parse_key_values(seed_output)
     read_command = meta.get("read_command", "").strip()
     patch_target = meta.get("patch_target", "").strip().lower()
+    retry_action = meta.get("retry_action", "").strip()
+    retry_runner = meta.get("retry_runner", "").strip()
+    retry_timeout = meta.get("retry_timeout", "").strip()
 
     if not read_command and (not patch_target or patch_target == "none"):
         return 0, {
@@ -621,7 +650,14 @@ def run_patch_recovery_once(
     if rc != 0:
         return rc, {}
 
-    rc, verify_output = request_followup_verify(args, workspace, allow_actions_value)
+    rc, verify_output = request_followup_verify(
+        args,
+        workspace,
+        allow_actions_value,
+        retry_action=retry_action,
+        retry_runner=retry_runner,
+        retry_timeout=retry_timeout,
+    )
     if rc != 0:
         return rc, {}
 
@@ -3385,6 +3421,15 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         [
             sys.executable,
             str(gateway_recovery_smoke),
+        ],
+        {},
+    ))
+    mentor_recovery_followup_smoke = Path(__file__).resolve().parent / "mentor_recovery_followup_smoke.py"
+    checks.append((
+        "mentor-recovery-followup-smoke",
+        [
+            sys.executable,
+            str(mentor_recovery_followup_smoke),
         ],
         {},
     ))
