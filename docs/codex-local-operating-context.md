@@ -75,7 +75,7 @@ Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 - OpenWebUI nesmi mit pripojeny Docker socket bez jasneho duvodu.
 - Runtime cesty `codex/state/`, `codex/audit/`, `logs/`, `.env`, `__pycache__`, `.bak-*` necommitovat.
 - Pokud je potreba nova schopnost, nejdriv zvaz rozsirenou capability s jasnym profilem, misto dalsiho jednorazoveho markeru. Musi byt pojmenovana, testovana, auditovana a zdokumentovana.
-- Bezny chat je read-only. Pozadavky na shell, instalace, generovani klicu, GitHub repo, push nebo realne editace musi bud vratit vysvetleni, nebo jit pres explicitni whitelisted admin/tool workflow.
+- Bezny chat je read-only. Pozadavky na shell, instalace, generovani klicu, GitHub repo, push nebo realne editace musi bud vratit vysvetleni, nebo jit pres auditovany capability workflow pro konkretni workspace. Pokud schopnost chybi, agent si ma rict o rozsireni workspace profilu.
 
 ## Admin prikazy
 

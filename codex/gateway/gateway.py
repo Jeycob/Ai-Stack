@@ -757,7 +757,8 @@ def fallback_response_text(payload):
             "Tuhle akci jsem sam nevykonal, protoze bezny codex-local chat je read-only. "
             "Umim analyzovat snapshot repozitare a navrhnout plan nebo patch, ale shell, instalace balicku, "
             "generovani klicu, vytvareni GitHub repozitaru, push a realne editace souboru musi jit pres "
-            "explicitni whitelisted admin/tool workflow."
+            "auditovany capability workflow pro dany workspace. Pokud takova schopnost chybi, ma si agent "
+            "rici o rozsireni workspace profilu misto toho, aby akci predstiral."
         )
     return (
         "Model vratil prazdnou odpoved. Zkus prosim dotaz zopakovat nebo ho zuzit; "
