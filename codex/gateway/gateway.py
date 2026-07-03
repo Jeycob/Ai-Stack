@@ -1103,6 +1103,10 @@ def agent_read_only_requested(task):
         "jen vysvětli",
         "jen rekni",
         "jen řekni",
+        "odpovez pouze",
+        "odpověz pouze",
+        "answer only",
+        "respond only",
         "read only",
         "readonly",
         "do not edit",
@@ -2091,7 +2095,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     bootstrap_repo = bootstrap_repo_name_from_text(task)
     inferred_repo = agent_extract_repo_name(task)
     remote_url = str(spec.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
-    read_only = _boolish(spec.get("read_only"), default=agent_read_only_requested(task))
+    requested_read_only = agent_read_only_requested(task)
+    read_only = True if requested_read_only else _boolish(spec.get("read_only"), default=False)
     current_workspace = str(spec.get("current_workspace") or "").strip() or fallback_workspace
     user_goal = str(spec.get("user_goal") or "").strip() or str(task or "").strip()
     target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo or inferred_repo
@@ -2165,6 +2170,18 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         required_capabilities.insert(0, "workspace_ssh_key_show_public")
     elif agent_ssh_key_create_requested(task) and "workspace_ssh_key_create" not in required_capabilities:
         required_capabilities.insert(0, "workspace_ssh_key_create")
+    url = str(spec.get("url") or "").strip() or agent_public_url_from_task(task)
+    if (
+        read_only
+        and not is_new_workspace_request
+        and not remote_url
+        and not url
+        and not agent_ssh_key_show_public_requested(task)
+        and not agent_ssh_key_create_requested(task)
+        and not agent_deploy_requested(task)
+        and not agent_explicit_command_requested(task)
+    ):
+        required_capabilities = ["read_only_review"]
     missing_inputs = _string_list(spec.get("missing_inputs"))
     if (
         not missing_inputs
@@ -2213,7 +2230,6 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         ]
     if is_new_workspace_request and not followup_actions:
         followup_actions = agent_infer_followup_actions(task)
-    url = str(spec.get("url") or "").strip() or agent_public_url_from_task(task)
     question = str(spec.get("question") or "").strip() or (str(task or "").strip() if agent_web_question_requested(task) else "")
     ssh_comment = str(spec.get("ssh_comment") or "").strip() or agent_workspace_ssh_comment(task, target_repo_name or fallback_workspace)
     confidence = str(spec.get("confidence") or "medium").strip().lower()
@@ -2228,6 +2244,11 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         command = []
     if not command:
         command = agent_infer_command_from_task(task)
+    if read_only and required_capabilities == ["read_only_review"]:
+        action = ""
+        run_after = ""
+        followup_actions = []
+        command = []
     return {
         "current_workspace": current_workspace,
         "user_goal": user_goal,

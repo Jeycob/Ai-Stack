@@ -293,6 +293,44 @@ def assert_workspace_action_capability_registry_mapping() -> None:
     print("WORKSPACE_ACTION_CAPABILITY_REGISTRY_OK")
 
 
+def assert_read_only_instruction_overrides_action_words() -> None:
+    task = "repo: ai-stack\nNic needituj. Odpovez jednou vetou: live smoke ok."
+    taskspec = gateway.normalize_agent_taskspec(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "Perform a live smoke test.",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "live smoke ok",
+            "required_capabilities": ["action"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "Return NEEDS_ATTENTION if unsupported.",
+            "read_only": False,
+            "action": "smoke",
+            "command": ["smoke"],
+        },
+        "ai-stack",
+        "ai-stack",
+        True,
+        task,
+    )
+    plan = gateway.agent_taskspec_to_plan(taskspec, "ai-stack", "ai-stack", True, task)
+    if taskspec.get("read_only") is not True:
+        raise SystemExit(f"read-only instruction should override planner read_only=false, got {taskspec!r}")
+    if taskspec.get("required_capabilities") != ["read_only_review"]:
+        raise SystemExit(f"read-only answer should not keep action capability, got {taskspec!r}")
+    if taskspec.get("missing_capabilities"):
+        raise SystemExit(f"read-only answer should not report missing action capability, got {taskspec!r}")
+    if taskspec.get("action") or taskspec.get("command"):
+        raise SystemExit(f"read-only answer should clear action/command, got {taskspec!r}")
+    if plan.get("workflow") != "review" or plan.get("read_only") is not True:
+        raise SystemExit(f"read-only answer should resolve to review workflow, got {plan!r}")
+    print("READ_ONLY_ACTION_WORD_OVERRIDE_OK")
+
+
 def assert_taskspec_capability_selector_repairs_existing_workspace_publish() -> None:
     task = "repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git"
     selector_response = {
@@ -930,6 +968,7 @@ def main() -> int:
     assert_workspace_git_publish_manual_recovery()
     assert_capability_locked_plan_stays_on_taskspec_workflow()
     assert_workspace_action_capability_registry_mapping()
+    assert_read_only_instruction_overrides_action_words()
     assert_taskspec_capability_selector_repairs_existing_workspace_publish()
     assert_taskspec_capability_selector_falls_back_to_heuristics()
     assert_autopilot_llm_candidate_selection()
