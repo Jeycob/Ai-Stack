@@ -115,6 +115,75 @@ class Filter:
             return
         msg["content"] = text
 
+    def _mentor_helper_command(
+        self,
+        workspace: str,
+        mode: str,
+        *args: str,
+        timeout: int = 120,
+        stateless: bool = True,
+    ) -> str:
+        command = ["python3", "codex/bin/mentor_codex_local.py", mode]
+        if stateless:
+            command.append("--stateless-turns")
+        command.append(workspace)
+        command.extend(args)
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout {timeout} -- {shlex.join(command)}"
+
+    def _looks_like_read_only_repo_analysis(self, text: str) -> bool:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return False
+        lower = text.lower()
+        read_only_cues = (
+            "nic needituj",
+            "bez editace",
+            "jen analyzuj",
+            "jen analysis",
+            "jen popis",
+            "jen vysvetli",
+            "jen vysvětli",
+            "jen rekni",
+            "jen řekni",
+            "jen navrhni",
+            "jen navrh",
+        )
+        analysis_cues = (
+            "architekt",
+            "blocker",
+            "blokery",
+            "rizika",
+            "vrstvy",
+            "jak je zapojena",
+            "jak je zapojená",
+            "jak je postaven",
+            "jak je postaveny",
+            "jak je postavený",
+            "popis strukturu",
+            "prohledni strukturu",
+            "prohlédni strukturu",
+            "navrhni dalsi bezpecny krok",
+            "navrhni další bezpečný krok",
+            "safe next step",
+            "autonomie",
+        )
+        explicit_helper_cues = (
+            "mentor brief",
+            "execution brief",
+            "review",
+            "report",
+            "plan",
+            "workflow",
+            "runtime profile",
+            "next helper",
+            "backlog",
+            "dispatch",
+            "top task",
+        )
+        if any(cue in lower for cue in explicit_helper_cues):
+            return False
+        return any(cue in lower for cue in read_only_cues) and any(cue in lower for cue in analysis_cues)
+
     def _route_codex_local_admin_intent(self, body: dict) -> dict | None:
         latest = self._last_user_message(body)
         text = self._message_text(latest)
@@ -124,6 +193,8 @@ class Filter:
             return None
 
         command = self._natural_file_context_command(text)
+        if not command and self._looks_like_read_only_repo_analysis(text):
+            return None
         if not command:
             command = self._natural_workspace_brief_command(text)
         if not command:
@@ -256,14 +327,7 @@ class Filter:
         return None
 
     def _brief_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "brief",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "brief", task, timeout=120)
 
     def _line_value(self, text: str, label_pattern: str) -> str | None:
         match = re.search(rf"(?im)^\s*{label_pattern}\s*:\s*(.+?)\s*$", text)
@@ -356,13 +420,7 @@ class Filter:
         return self._brief_helper_command(workspace, task)
 
     def _review_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "review",
-            workspace,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "review", timeout=120)
 
     def _natural_workspace_review_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -410,14 +468,7 @@ class Filter:
         return None
 
     def _boundary_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "boundary",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "boundary", task, timeout=120)
 
     def _extract_boundary_task(self, text: str) -> str | None:
         patterns = [
@@ -494,14 +545,7 @@ class Filter:
         return self._boundary_helper_command(workspace, task)
 
     def _profile_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "profile",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "profile", task, timeout=120)
 
     def _natural_workspace_profile_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -538,14 +582,7 @@ class Filter:
         return self._profile_helper_command(workspace, task)
 
     def _report_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "report",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "report", task, timeout=120)
 
     def _natural_workspace_report_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -577,14 +614,7 @@ class Filter:
         return self._report_helper_command(workspace, task)
 
     def _plan_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "plan",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "plan", task, timeout=120)
 
     def _natural_workspace_plan_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -619,28 +649,13 @@ class Filter:
         return self._plan_helper_command(workspace, task)
 
     def _scaffold_plan_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "scaffold-plan",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "scaffold-plan", task, timeout=120)
 
     def _bootstrap_dispatch_helper_command(self, workspace: str, task: str, execute: bool = True) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "bootstrap-dispatch",
-            workspace,
-            task,
-            "--timeout",
-            "1800",
-        ]
+        built = ["python3", "codex/bin/mentor_codex_local.py", "bootstrap-dispatch", "--stateless-turns", workspace, task, "--timeout", "1800"]
         if execute:
-            command.append("--execute")
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 1800 -- {shlex.join(command)}"
+            built.append("--execute")
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 1800 -- {shlex.join(built)}"
 
     def _natural_workspace_bootstrap_dispatch_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -744,14 +759,7 @@ class Filter:
         return self._plan_helper_command(workspace, task)
 
     def _next_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "next-helper",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "next-helper", task, timeout=120)
 
     def _extract_next_helper_task(self, text: str) -> str | None:
         patterns = [
@@ -857,6 +865,7 @@ class Filter:
             "python3",
             "codex/bin/mentor_codex_local.py",
             mode,
+            "--stateless-turns",
             workspace,
         ]
         if recommend_only:
@@ -1120,13 +1129,7 @@ class Filter:
             )
         ):
             return None
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "release-prep",
-            workspace,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 240 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "release-prep", timeout=240)
 
     def _natural_workspace_publish_plan_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -1170,13 +1173,7 @@ class Filter:
             )
         ):
             return None
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "publish-plan",
-            workspace,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 300 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "publish-plan", timeout=300)
 
     def _extract_public_url(self, text: str) -> str | None:
         match = re.search(r"https?://[^\s<>'\")]+", text)
@@ -1363,15 +1360,7 @@ class Filter:
         return shlex.quote("Update ai-stack via codex-local")
 
     def _bootstrap_improve_helper_command(self, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "bootstrap-improve",
-            "--stateless-turns",
-            "ai-stack",
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE ai-stack --timeout 240 -- {shlex.join(command)}"
+        return self._mentor_helper_command("ai-stack", "bootstrap-improve", task, timeout=240)
 
     def _natural_workspace_ssh_key_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -1638,15 +1627,7 @@ class Filter:
         return None
 
     def _delegate_helper_command(self, workspace: str, task: str) -> str:
-        command = [
-            "python3",
-            "codex/bin/mentor_codex_local.py",
-            "delegate",
-            "--stateless-turns",
-            workspace,
-            task,
-        ]
-        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 180 -- {shlex.join(command)}"
+        return self._mentor_helper_command(workspace, "delegate", task, timeout=180)
 
     def _natural_workspace_delegate_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)

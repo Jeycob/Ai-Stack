@@ -1451,15 +1451,26 @@ class Filter:
         return None
 
     def _parse_mentor_helper_command(self, command: list[str]) -> dict[str, str] | None:
-        if len(command) < 5:
+        if len(command) < 4:
             return None
         if command[0] != "python3" or command[1] != "codex/bin/mentor_codex_local.py":
             return None
-        mode = command[2]
+        idx = 2
+        while idx < len(command) and command[idx].startswith("--"):
+            idx += 1
+        if idx >= len(command):
+            return None
+        mode = command[idx]
         if mode not in {"delegate", "profile", "report", "plan", "next-helper", "bootstrap-improve"}:
             return None
-        workspace = command[3]
-        task = command[4]
+        idx += 1
+        while idx < len(command) and command[idx].startswith("--"):
+            idx += 1
+        if idx >= len(command):
+            return None
+        workspace = command[idx]
+        idx += 1
+        task = command[idx] if idx < len(command) else ""
         return {"mode": mode, "workspace": workspace, "task": task}
 
     def _workspace_edit_admin(self, text: str) -> str:

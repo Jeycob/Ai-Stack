@@ -40,13 +40,13 @@ SCENARIOS: tuple[RouteScenario, ...] = (
     RouteScenario(
         name="follow-through-delegate",
         prompt="repo: ai-stack\nNavrhni dalsi krok a dotahni co pujde.",
-        expected=("GATEWAY_ADMIN_RUN_WORKSPACE ai-stack", "mentor_codex_local.py delegate ai-stack"),
+        expected=("GATEWAY_ADMIN_RUN_WORKSPACE ai-stack", "mentor_codex_local.py delegate --stateless-turns ai-stack"),
         unexpected=("GATEWAY_ADMIN_WORKSPACE_AUTOPILOT ai-stack --recommend-only",),
     ),
     RouteScenario(
         name="autonomous-delegate",
         prompt="repo: ai-stack\nFixni to a udelej maximum, co pujde.",
-        expected=("GATEWAY_ADMIN_RUN_WORKSPACE ai-stack", "mentor_codex_local.py delegate ai-stack"),
+        expected=("GATEWAY_ADMIN_RUN_WORKSPACE ai-stack", "mentor_codex_local.py delegate --stateless-turns ai-stack"),
         unexpected=("GATEWAY_ADMIN_WORKSPACE_AUTOPILOT ai-stack",),
     ),
     RouteScenario(
@@ -82,8 +82,14 @@ SCENARIOS: tuple[RouteScenario, ...] = (
     RouteScenario(
         name="bootstrap-improve",
         prompt="Vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus to rozbehnout.",
-        expected=("mentor_codex_local.py bootstrap-improve ai-stack", "React appku"),
+        expected=("mentor_codex_local.py bootstrap-improve --stateless-turns ai-stack", "React appku"),
         unexpected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart",),
+    ),
+    RouteScenario(
+        name="read-only-architecture-analysis-stays-direct",
+        prompt="repo: ai-stack\nProhlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni 3 největší blockery autonomie a navrhni další bezpečný krok.",
+        expected=("Prohlédni architekturu gateway/filter/helper vrstvy.", "Nic needituj."),
+        unexpected=("GATEWAY_ADMIN_RUN_WORKSPACE", "mentor_codex_local.py", "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT", "GATEWAY_ADMIN_EXPLAIN_FILE"),
     ),
     RouteScenario(
         name="deploy-stack",
