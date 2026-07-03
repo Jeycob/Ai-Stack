@@ -217,6 +217,16 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
         technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_DEPLOY_STATUS"
         return visible, technical
 
+    if args.mode == "web-answer":
+        visible = args.question.strip()
+        technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WEB_ANSWER {args.url} -- {shlex.quote(args.question.strip())}"
+        return visible, technical
+
+    if args.mode == "web-fetch":
+        visible = f"Podívej se na veřejný web {args.url} a vrať stručný textový výsledek."
+        technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WEB_FETCH {args.url} --max-bytes {args.max_bytes}"
+        return visible, technical
+
     if args.mode == "release-prep":
         visible = (
             f"repo: {args.workspace}\n"
@@ -811,6 +821,15 @@ def wants_github_repo(task: str) -> bool:
 def wants_repo_followthrough(task: str) -> bool:
     lower = task.lower()
     cues = (
+        "git init",
+        "init git",
+        "initni git",
+        "inicializuj git",
+        "github remote",
+        "origin",
+        "pushni",
+        "pushnout",
+        "commitni",
         "doinstaluj",
         "nainstaluj",
         "install",
@@ -872,6 +891,87 @@ def wants_repo_followthrough(task: str) -> bool:
         "electron",
     )
     return any(cue in lower for cue in cues)
+
+
+def extract_public_url(task: str) -> str:
+    match = re.search(r"https?://[^\s<>'\")]+", task)
+    if match:
+        return match.group(0).rstrip(".,;:!?)]}")
+
+    lower = task.lower()
+    known_domains = {
+        "seznam.cz": "https://www.seznam.cz/",
+        "novinky.cz": "https://www.novinky.cz/",
+        "idnes.cz": "https://www.idnes.cz/",
+        "github.com": "https://github.com/",
+        "example.com": "https://example.com/",
+    }
+    for domain, url in known_domains.items():
+        if domain in lower:
+            return url
+
+    domain_match = re.search(r"\b([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(/[^\s<>'\")]+)?", task)
+    if domain_match:
+        domain = domain_match.group(1).lower()
+        if domain in {"localhost", "host.docker.internal"} or domain.endswith((".local", ".localhost", ".internal")):
+            return ""
+        suffix = domain_match.group(2) or "/"
+        return "https://" + domain + suffix.rstrip(".,;:!?)]}")
+    return ""
+
+
+def looks_like_web_intent(task: str) -> bool:
+    lower = task.lower()
+    cues = (
+        "http://",
+        "https://",
+        "stahni",
+        "stáhni",
+        "nacti",
+        "načti",
+        "fetch",
+        "download",
+        "precti",
+        "přečti",
+        "podivej se",
+        "podívej se",
+        "z webu",
+        "z internetu",
+        "na webu",
+        "internet",
+        "url",
+        "seznam.cz",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def looks_like_web_question(task: str) -> bool:
+    lower = task.lower()
+    question_cues = (
+        "?",
+        "kdo ",
+        "co ",
+        "jaky ",
+        "jaký ",
+        "jaka ",
+        "jaká ",
+        "jake ",
+        "jaké ",
+        "kdy ",
+        "kde ",
+        "proc ",
+        "proč ",
+        "who ",
+        "what ",
+        "when ",
+        "where ",
+        "why ",
+        "dneska",
+        "dnes ",
+        "svatek",
+        "svátek",
+    )
+    return any(cue in lower for cue in question_cues)
 
 
 def wants_agentic_followthrough(task: str) -> bool:
@@ -1196,6 +1296,18 @@ def classify_task(task: str) -> dict[str, str]:
             scaffold_files=scaffold_files,
             scaffold_loop=scaffold_loop,
         )
+    if looks_like_web_intent(task):
+        url = extract_public_url(task)
+        if url:
+            return result(
+                "capability",
+                "web-answer" if looks_like_web_question(task) else "web-fetch",
+                "The task asks for information from a public website, which fits the audited public web capability instead of a read-only refusal.",
+                "high",
+                "Public web fetch and answer are already bounded to public HTTP/HTTPS sources, so we should use that named capability instead of claiming no internet access.",
+                "public_web_access",
+                "If the task later needs login, cookies, private URLs, or internal services, add a narrower dedicated web capability instead of widening public web access.",
+            )
     if any(
         token in lower
         for token in (
@@ -2165,6 +2277,12 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
         return helper("bootstrap-dispatch", workspace, task, "--execute")
     if workflow == "deploy":
         return helper("deploy")
+    if workflow == "web-answer":
+        url = extract_public_url(task)
+        return helper("web-answer", url, task) if url else helper("audit", workspace)
+    if workflow == "web-fetch":
+        url = extract_public_url(task)
+        return helper("web-fetch", url) if url else helper("audit", workspace)
     if workflow == "publish-plan":
         return helper("publish-plan", workspace)
     if workflow == "release-prep":
@@ -2212,6 +2330,8 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
             return f"repo: ai-stack\nVytvoř repository {repo_name}{suffix}, připrav workspace a pokračuj s bootstrapem co nejdál."
     if workflow == "deploy":
         return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
+    if workflow in {"web-answer", "web-fetch"}:
+        return task
     if workflow == "publish-plan":
         return f"repo: {workspace}\nPřiprav krátký publish plán pro release/publikaci a navrhni další auditované kroky."
     if workflow == "release-prep":
@@ -2957,6 +3077,20 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
         steps.append(("deploy-status", helper("deploy-status")))
         return steps
 
+    if workflow == "web-answer":
+        url = extract_public_url(task)
+        if url:
+            steps.append(("web-answer", helper("web-answer", url, task)))
+        steps.append(("follow-up", "if the first public source is too broad, ask one more audited public-web question with a narrower URL or question"))
+        return steps
+
+    if workflow == "web-fetch":
+        url = extract_public_url(task)
+        if url:
+            steps.append(("web-fetch", helper("web-fetch", url)))
+        steps.append(("follow-up", "if the fetched text is too broad, follow with a second audited public-web question over the same public source"))
+        return steps
+
     if workflow == "publish-plan":
         steps.append(("publish-plan", helper("publish-plan", workspace)))
         steps.append(("if-publication-remains", "if the final step still needs remote mutation, review the GitHub/release capability boundary"))
@@ -3304,6 +3438,11 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
         f"- workflow: {decision['workflow']}\n"
         + (f"- starter profile: {decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
         + (f"- public stack: {decision.get('public_stack')}\n" if decision.get("public_stack") else "")
+        + (
+            "- if GitHub or push is blocked by missing external key confirmation, stop with a precise manual step: show the public key, ask for GitHub confirmation, and continue only after confirmation\n"
+            if decision.get("repo_github") == "yes" or "ssh" in args.task.lower() or "github" in args.task.lower() or "push" in args.task.lower()
+            else ""
+        )
         + "- bootstrap dispatch already ran; continue with the next audited workspace steps"
         + (
             f"\n- bootstrap follow-up status: {dispatch_summary.get('BOOTSTRAP_DISPATCH_FINAL_STATUS')}"
@@ -3324,6 +3463,11 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
     improve_args.mentor_technical_context = (
         "MENTOR_EXECUTION_BRIEF_COMPACT\n"
         + compact_execution_brief_block(decision, repo_name, args.task)
+        + (
+            "\ngithub_manual_checkpoint=if remote push needs public key confirmation, return MANUAL_STEP_REQUIRED with the public key and resume after confirmation"
+            if decision.get("repo_github") == "yes" or "ssh" in args.task.lower() or "github" in args.task.lower() or "push" in args.task.lower()
+            else ""
+        )
         + "\nbootstrap_dispatch=completed"
         + (
             f"\nbootstrap_followup_status={dispatch_summary.get('BOOTSTRAP_DISPATCH_FINAL_STATUS')}"
@@ -3844,6 +3988,18 @@ def parse_args() -> argparse.Namespace:
     deploy_status.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     deploy_status.set_defaults()
     add_stateless_turns_argument(deploy_status)
+
+    web_answer = sub.add_parser("web-answer", help="Ask codex-local to answer a question from a public web page through the audited web capability")
+    web_answer.add_argument("url")
+    web_answer.add_argument("question")
+    web_answer.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(web_answer)
+
+    web_fetch = sub.add_parser("web-fetch", help="Ask codex-local to fetch text from a public web page through the audited web capability")
+    web_fetch.add_argument("url")
+    web_fetch.add_argument("--max-bytes", type=int, default=300000)
+    web_fetch.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    add_stateless_turns_argument(web_fetch)
 
     publish_plan = sub.add_parser("publish-plan", help="Ask codex-local for a short audited publish plan built on release-prep evidence")
     publish_plan.add_argument("workspace")

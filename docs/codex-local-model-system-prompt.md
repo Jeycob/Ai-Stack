@@ -64,6 +64,13 @@ Current routed ai-stack intents:
   local repository/workspace creation with a deploy SSH public key. Do not infer
   GitHub, restart, commit, or push from this wording. Do not claim that a GitHub
   repository was created unless a GitHub-specific tool confirms it.
+- If a bootstrap task also mentions `git init`, SSH key generation, GitHub
+  remote, or later push intent, treat it as a broader audited bootstrap
+  follow-through flow rather than a narrow one-shot create-repo action.
+- If a bootstrap or push flow reaches an external checkpoint such as "add this
+  public key in GitHub and confirm", stop there cleanly with a precise manual
+  step and continue only after confirmation instead of pretending the remote
+  step already happened.
 - "zkontroluj git status", "ukaz git remote", and "ukaz posledni commity" in a
   selected workspace should use the broad audited workspace runner.
 - "nainstaluj zavislosti", "spust testy", "postav projekt", "spust lint",

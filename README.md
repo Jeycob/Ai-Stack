@@ -113,6 +113,10 @@ Auto-tools filter tento přirozený prompt přeloží na:
 
 Tento workflow vytvoří lokální repo pod `/mnt/c/Repositories`, inicializuje Git, přidá README, vygeneruje private key do ignorovaného `codex/state/ssh/`, vrátí public key a zaregistruje workspace. Nerestartuje stack a nic nepushuje, pokud o to uživatel výslovně nepožádá. Když je v promptu explicitně “restartni workspace/stack”, přidá se `--restart`; formulace jako “bez GitHubu” nebo “bez restartu” mají přednost před pouhou zmínkou těch slov. Když restart selže na Docker právech, odpověď má být `LOCAL_REPO_CREATE_PARTIAL`, protože repo, klíč a registrace workspace už jsou hotové a další krok je samostatný deploy/restart.
 
+Pokud zadání obsahuje i follow-through cíl typu `initni git`, `vygeneruj ssh klíč`, `připrav GitHub remote`, `doinstaluj co chybí`, `rozběhni to` nebo `pak pushni`, mentor už to nemá chápat jako úzký one-shot create-repo krok, ale jako širší `bootstrap-improve` workflow. Prakticky to znamená: založ repo a workspace, připrav klíč, pokračuj install/test/smoke kroky a zastav se až na prvním skutečně externím checkpointu.
+
+Typický externí checkpoint je přidání public key do GitHubu bez uloženého GitHub tokenu. V takovém případě má codex-local vrátit přesný `MANUAL_STEP_REQUIRED` styl handoff: kde je public key, co přesně přidat do GitHubu, jak potvrdit pokračování, a teprve po potvrzení zkusit další remote krok jako `push`.
+
 Pokud uživatel výslovně řekne GitHub, například “vytvoř GitHub repository Test2”, auto-tools filter přidá `--github`. Gateway pak použije `GITHUB_TOKEN`, `GITHUB_TOKEN_FILE`, nebo ignorovaný `codex/state/github-api.token`, vytvoří GitHub repo, přidá public key jako write deploy key a nastaví lokálnímu repozitáři `origin`. Bez tokenu vrátí jasný `GITHUB_TOKEN_MISSING`; nebude tvrdit, že GitHub repo vzniklo.
 
 GitHub token ulož lokálně bez vypsání do historie takto:

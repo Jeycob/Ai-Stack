@@ -25,6 +25,10 @@
       "scope": "stack_runtime",
       "summary": "Auditovany ai-stack deploy flow pro git pull, restart gateway/OpenWebUI a nasledne smoke checky bez potreby ad-hoc root prikazu v chatu."
     },
+    "public_web_access": {
+      "scope": "public_web",
+      "summary": "Auditovana capability pro cteni verejnych HTTP/HTTPS zdroju, stazeni textu a zodpovezeni dotazu pouze z nacteneho verejneho obsahu."
+    },
     "clarify_or_infer_capability": {
       "scope": "mentoring",
       "summary": "Nejužší mentoring krok pro nejednoznacne zadani: nejdriv audit, upresneni nebo inference dalsi capability, az pak rozsirovani scope."

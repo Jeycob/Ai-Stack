@@ -62,6 +62,13 @@ SCENARIOS: dict[str, Scenario] = {
         prompt_template="repo: ai-stack\nUkaz deploy status.",
         expected_substrings=("STACK_DEPLOY_STATUS", "running="),
     ),
+    "web-answer": Scenario(
+        name="web-answer",
+        description="Natural public web question routed through the audited web-answer capability instead of a read-only internet refusal.",
+        prompt_template="kdo ma dneska svatek? stahni mi to z seznam.cz",
+        expected_substrings=("WEB_ANSWER_OK", "url=https://www.seznam.cz/"),
+        total_timeout=360.0,
+    ),
     "next-step": Scenario(
         name="next-step",
         description="Natural recommendation request routed to workspace autopilot in recommend-only mode.",
@@ -141,7 +148,7 @@ def parse_args() -> argparse.Namespace:
 def selected_scenarios(args: argparse.Namespace) -> list[Scenario]:
     if args.list:
         return []
-    names = args.scenario or ["git-status", "verify-project", "deploy-status", "next-step"]
+    names = args.scenario or ["git-status", "verify-project", "deploy-status", "next-step", "web-answer"]
     if "all" in names:
         names = list(SCENARIOS.keys())
     deduped: list[Scenario] = []
