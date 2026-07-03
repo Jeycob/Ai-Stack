@@ -10,6 +10,7 @@ the agent loop, and block raw owui_chat_turn recursion explicitly.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -50,7 +51,7 @@ def assert_mentor_helper_rescues_to_agent_loop(gateway) -> None:
                 "runner": "container",
                 "timeout": 30,
                 "command": [
-                    "python3",
+                    sys.executable,
                     "codex/bin/mentor_codex_local.py",
                     "delegate",
                     "ai-stack",
@@ -83,7 +84,7 @@ def assert_raw_owui_helper_is_blocked(gateway) -> None:
             "runner": "container",
             "timeout": 30,
             "command": [
-                "python3",
+                sys.executable,
                 "codex/bin/owui_chat_turn.py",
                 "--model",
                 "codex-local-plan-qwen14b",

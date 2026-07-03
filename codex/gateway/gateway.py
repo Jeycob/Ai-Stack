@@ -1065,10 +1065,15 @@ def normalize_agent_command(value):
     return command
 
 
+def python_command_like(value):
+    name = os.path.basename(str(value or "")).strip().lower()
+    return name in {"python", "python3", "python.exe", "python3.exe"}
+
+
 def nested_helper_command_kind(command):
     if not isinstance(command, list) or len(command) < 2:
         return ""
-    if command[0] != "python3":
+    if not python_command_like(command[0]):
         return ""
     script = str(command[1] or "")
     if script == "codex/bin/mentor_codex_local.py":

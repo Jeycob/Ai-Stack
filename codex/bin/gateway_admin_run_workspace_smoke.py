@@ -9,6 +9,7 @@ direct gateway capability calls, typically the agent loop.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -46,6 +47,16 @@ def main() -> int:
     assert_contains(mentor_fixed, "--stateless-turns", "mentor")
     if mentor_fixed.index("--stateless-turns") <= mentor_fixed.index("delegate"):
         raise AssertionError(f"mentor: stateless flag should be inserted after mode: {mentor_fixed!r}")
+
+    mentor_sys = [
+        sys.executable,
+        "codex/bin/mentor_codex_local.py",
+        "delegate",
+        "ai-stack",
+        "repo: ai-stack\nNic needituj.",
+    ]
+    mentor_sys_fixed = filt._canonicalize_nested_helper_command(mentor_sys)
+    assert_contains(mentor_sys_fixed, "--stateless-turns", "mentor-sys-executable")
 
     owui = [
         "python3",
@@ -113,6 +124,18 @@ def main() -> int:
     )
     if rescued != expected_rescue:
         raise AssertionError(f"delegate-rescue: expected {expected_rescue!r}, got {rescued!r}")
+
+    delegate_sys = [
+        sys.executable,
+        "codex/bin/mentor_codex_local.py",
+        "delegate",
+        "--stateless-turns",
+        "ai-stack",
+        "Prohlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni 3 největší blockery autonomie a navrhni další bezpečný krok.",
+    ]
+    rescued_sys = filt._workspace_run_rescue_command("ai-stack", delegate_sys)
+    if rescued_sys != expected_rescue:
+        raise AssertionError(f"delegate-rescue-sys-executable: expected {expected_rescue!r}, got {rescued_sys!r}")
 
     review = [
         "python3",

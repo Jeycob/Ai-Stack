@@ -1488,9 +1488,13 @@ class Filter:
             return f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(helper_workspace)} -- {shlex.quote(agent_loop_task[:3000])}"
         return None
 
+    def _python_command_like(self, value: str) -> bool:
+        name = os.path.basename(str(value or "")).strip().lower()
+        return name in {"python", "python3", "python.exe", "python3.exe"}
+
     def _canonicalize_nested_helper_command(self, command: list[str]) -> list[str]:
         normalized = list(command)
-        if len(normalized) >= 2 and normalized[0] == "python3":
+        if len(normalized) >= 2 and self._python_command_like(normalized[0]):
             script = normalized[1]
             if script == "codex/bin/mentor_codex_local.py":
                 if "--stateless-turns" not in normalized:
@@ -1509,7 +1513,7 @@ class Filter:
     def _parse_mentor_helper_command(self, command: list[str]) -> dict[str, str] | None:
         if len(command) < 4:
             return None
-        if command[0] != "python3" or command[1] != "codex/bin/mentor_codex_local.py":
+        if not self._python_command_like(command[0]) or command[1] != "codex/bin/mentor_codex_local.py":
             return None
         idx = 2
         while idx < len(command) and command[idx].startswith("--"):
