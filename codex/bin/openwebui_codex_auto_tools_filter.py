@@ -300,10 +300,39 @@ class Filter:
                 "spusť první",
                 "udelej z toho plan a pokracuj",
                 "udělej z toho plán a pokračuj",
+                "co ma delat jako prvni",
+                "co má dělat jako první",
+                "ktery ukol je prvni",
+                "který úkol je první",
+                "jaky je top task",
+                "jaký je top task",
+                "co je top task",
+                "co je prvni ukol",
+                "co je první úkol",
             )
         ):
             return None
-        recommend_only = not any(
+        recommend_only = any(
+            needle in lower
+            for needle in (
+                "co ma delat jako prvni",
+                "co má dělat jako první",
+                "ktery ukol je prvni",
+                "který úkol je první",
+                "jaky je top task",
+                "jaký je top task",
+                "co je top task",
+                "co je prvni ukol",
+                "co je první úkol",
+                "jen doporuc",
+                "jen doporuč",
+                "bez spusteni",
+                "bez spuštění",
+                "why first",
+                "proc prvni",
+                "proč první",
+            )
+        ) or not any(
             needle in lower
             for needle in (
                 "spust",

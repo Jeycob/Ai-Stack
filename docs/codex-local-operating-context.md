@@ -232,6 +232,8 @@ python3 codex/bin/mentor_codex_local.py dispatch ai-stack \
   --recommend-only
 ```
 
+Prave tahle `recommend-only` varianta je vhodna i pro prirozene chat dotazy typu `Co ma delat jako prvni?`, `Ktery ukol je prvni?`, `Jaky je top task?` nebo `Jen doporuc prvni krok bez spusteni`.
+
 Profilove rozhodnuti vraci i:
 
 - `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
