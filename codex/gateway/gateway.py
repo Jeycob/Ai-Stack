@@ -424,6 +424,7 @@ def runtime_health():
         "codex_local_ready": codex_local_ready,
         "capability_mode": "agent-first",
         "natural_codex_local_route": "agent_loop",
+        "runtime_repo_root": str(REPO_ROOT),
         "runtime_commit": git_head,
         "runtime_fingerprint": runtime_fingerprint(),
         "gateway_admin": {

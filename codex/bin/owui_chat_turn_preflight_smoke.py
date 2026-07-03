@@ -180,6 +180,8 @@ def assert_runtime_split_brain_short_circuits(turn) -> None:
             "capability_mode": "agent-first",
             "natural_codex_local_route": "agent_loop",
             "runtime_fingerprint": "stale-runtime-fingerprint",
+            "runtime_repo_root": turn.local_repo_root(),
+            "runtime_commit": turn.local_repo_commit_short(),
             "gateway_admin": {"lan_admin_ready": True},
             "readiness_issues": [],
         }
@@ -201,6 +203,45 @@ def assert_runtime_split_brain_short_circuits(turn) -> None:
     print("OWUI_PREFLIGHT_RUNTIME_SPLIT_BRAIN_OK")
 
 
+def assert_foreign_clone_same_commit_reaches_completion(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        if path != "/api/chat/completions":
+            raise AssertionError(f"foreign clone path touched unexpected endpoint: {method} {path}")
+        return 200, {"choices": [{"message": {"content": "FOREIGN_CLONE_OK"}}]}
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = lambda _args: {
+        "ok": True,
+        "codex_local_ready": True,
+        "capability_mode": "agent-first",
+        "natural_codex_local_route": "agent_loop",
+        "runtime_fingerprint": "remote-fingerprint-different",
+        "runtime_repo_root": "/mnt/c/Repositories/ai-stack",
+        "runtime_commit": "same123",
+        "gateway_admin": {"lan_admin_ready": True},
+        "readiness_issues": [],
+    }
+    turn.run_codex_reconcile_check = lambda _args: {"ok": True}
+    turn.local_repo_root = lambda: "/mnt/c/newRepos/Ai-Stack"
+    turn.local_repo_commit_short = lambda: "same123"
+    turn.local_gateway_runtime_fingerprint = lambda: "local-fingerprint-different"
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
+    joined = "\n".join(text_chunks)
+    if rc != 0:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_FAILED\nreason=unexpected exit code {rc}")
+    if "FOREIGN_CLONE_OK" not in joined:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_FAILED\nreason=missing completion text in {joined!r}")
+    if calls != [("POST", "/api/chat/completions")]:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_OK")
+
+
 def main() -> int:
     _args = parse_args()
     turn = load_turn_module()
@@ -209,6 +250,8 @@ def main() -> int:
     assert_filter_stale_short_circuits(turn)
     turn = load_turn_module()
     assert_runtime_split_brain_short_circuits(turn)
+    turn = load_turn_module()
+    assert_foreign_clone_same_commit_reaches_completion(turn)
     turn = load_turn_module()
     assert_ready_reaches_completion(turn)
     print("OWUI_CHAT_TURN_PREFLIGHT_SMOKE_OK")

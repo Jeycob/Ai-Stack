@@ -205,6 +205,8 @@ Příklad celkového healthchecku z OpenWebUI admin filteru:
     repo: ai-stack
     GATEWAY_ADMIN_CHECK_STACK ai-stack codex-local-plan-qwen14b
 
+Gateway `/health` nově vrací i `runtime_repo_root`, `runtime_commit` a `runtime_fingerprint`. To je důležité hlavně pro helpery a CI: když check běží ze stejného checkoutu jako live runtime, vynucuje ostrý fingerprint match a odhalí skutečný stale proces. Když check běží z jiného klonu stejného commitu, nesmí spadnout falešným `CODEX_LOCAL_RUNTIME_SPLIT_BRAIN`; místo toho se porovnává commit a případný drift vrací samostatný marker `CODEX_LOCAL_RUNTIME_CLONE_DRIFT`.
+
 Příklad reálného spuštění příkazu v registrovaném workspace přes gateway admin endpoint:
 
     repo: ai-stack

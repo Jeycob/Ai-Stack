@@ -23,6 +23,8 @@ def assert_ready_payload() -> None:
         gateway, "run_ro", return_value="abc1234"
     ), patch.object(gateway, "WORKSPACES_FILE", str(ROOT / "codex/workspaces.json")), patch.object(
         gateway, "CAPABILITY_ROADMAP_FILE", ROOT / "docs/codex-local-capability-roadmap.json"
+    ), patch.object(
+        gateway, "REPO_ROOT", ROOT
     ), patch.object(gateway, "ADMIN_TOKEN", "token-present"), patch.object(gateway.Path, "is_file", return_value=True):
         payload = gateway.runtime_health()
 
@@ -32,6 +34,8 @@ def assert_ready_payload() -> None:
         raise SystemExit(f"expected capability_mode=agent-first, got {payload!r}")
     if payload.get("natural_codex_local_route") != "agent_loop":
         raise SystemExit(f"expected natural route agent_loop, got {payload!r}")
+    if str(payload.get("runtime_repo_root") or "").rstrip("/") != str(ROOT).rstrip("/"):
+        raise SystemExit(f"expected runtime_repo_root={ROOT}, got {payload!r}")
     if payload.get("runtime_commit") != "abc1234":
         raise SystemExit(f"expected runtime_commit=abc1234, got {payload!r}")
     if not payload.get("runtime_fingerprint"):
@@ -60,6 +64,8 @@ def assert_not_ready_payload() -> None:
         gateway, "run_ro", return_value="[FileNotFoundError: git]"
     ), patch.object(gateway, "WORKSPACES_FILE", str(ROOT / "codex/workspaces.json")), patch.object(
         gateway, "CAPABILITY_ROADMAP_FILE", ROOT / "docs/codex-local-capability-roadmap.json"
+    ), patch.object(
+        gateway, "REPO_ROOT", ROOT
     ), patch.object(gateway, "ADMIN_TOKEN", ""), patch.object(gateway.Path, "is_file", fake_is_file):
         payload = gateway.runtime_health()
 

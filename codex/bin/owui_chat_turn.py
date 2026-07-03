@@ -233,6 +233,56 @@ def local_gateway_runtime_fingerprint() -> str:
     return value
 
 
+def local_repo_root() -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        return str(ROOT)
+    value = (proc.stdout or "").strip()
+    return value or str(ROOT)
+
+
+def local_repo_commit_short() -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def runtime_checkout_identity(health: dict) -> dict[str, str | bool]:
+    local_root = local_repo_root()
+    local_commit = local_repo_commit_short()
+    remote_root = str(health.get("runtime_repo_root") or "").strip()
+    remote_commit = str(health.get("runtime_commit") or "").strip()
+    same_checkout = bool(remote_root) and Path(remote_root).resolve() == Path(local_root).resolve()
+    same_commit = bool(remote_commit) and bool(local_commit) and remote_commit == local_commit
+    return {
+        "local_repo_root": local_root,
+        "remote_repo_root": remote_root,
+        "local_repo_commit": local_commit,
+        "remote_repo_commit": remote_commit,
+        "same_checkout": same_checkout,
+        "same_commit": same_commit,
+    }
+
+
 def run_codex_reconcile_check(args: argparse.Namespace) -> dict:
     script = DEFAULT_RECONCILE_SCRIPT
     if not script.is_file():
@@ -326,13 +376,14 @@ def codex_preflight_guard(args: argparse.Namespace) -> str | None:
 
     remote_fingerprint = str(health.get("runtime_fingerprint") or "").strip()
     local_fingerprint = local_gateway_runtime_fingerprint()
+    checkout = runtime_checkout_identity(health)
     if not remote_fingerprint:
         return codex_preflight_failure_text(
             "CODEX_LOCAL_RUNTIME_FINGERPRINT_MISSING",
             "Nasad a restartuj aktuální ai-stack runtime; /health musí vracet runtime_fingerprint.",
-            details={"gateway_health": health, "local_runtime_fingerprint": local_fingerprint},
+            details={"gateway_health": health, "local_runtime_fingerprint": local_fingerprint, "checkout": checkout},
         )
-    if local_fingerprint and remote_fingerprint != local_fingerprint:
+    if bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint:
         return codex_preflight_failure_text(
             "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
             "Běží starý gateway/runtime proces nad novějším repem. Restartuj stack přes codex/bin/start_codex_stack.sh nebo codex/bin/deploy_ai_stack.sh.",
@@ -340,8 +391,21 @@ def codex_preflight_guard(args: argparse.Namespace) -> str | None:
                 "gateway_health": health,
                 "local_runtime_fingerprint": local_fingerprint,
                 "remote_runtime_fingerprint": remote_fingerprint,
+                "checkout": checkout,
             },
         )
+    if not bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint:
+        if not bool(checkout.get("same_commit")):
+            return codex_preflight_failure_text(
+                "CODEX_LOCAL_RUNTIME_CLONE_DRIFT",
+                "Lokální clone není na stejném commitu jako běžící runtime. Synchronizuj repo nebo helper spusť z live runtime checkoutu.",
+                details={
+                    "gateway_health": health,
+                    "local_runtime_fingerprint": local_fingerprint,
+                    "remote_runtime_fingerprint": remote_fingerprint,
+                    "checkout": checkout,
+                },
+            )
 
     reconcile = run_codex_reconcile_check(args)
     if not bool(reconcile.get("ok")):
