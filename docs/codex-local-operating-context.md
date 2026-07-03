@@ -400,6 +400,15 @@ audited smoke skript pro kontrolu pripravene kostry. Prakticky to drzi desktop
 baseline tenky a znovupouzitelny, takze codex-local umi i pro desktop zadani
 vratit skutecny bootstrap krok misto obecneho seznamu balicku.
 
+Bootstrap vrstva navic uz nepredava jen syrovy stdout. Pri `bootstrap-dispatch
+--execute` se do audit stopy zapisuje i kratky outcome summary:
+`BOOTSTRAP_DISPATCH_FINAL_STATUS`, `BOOTSTRAP_DISPATCH_EXECUTED_SEQUENCE`,
+`BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS`, `BOOTSTRAP_DISPATCH_FAILED_ACTIONS`,
+`BOOTSTRAP_DISPATCH_STOP_REASON` a `BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION`.
+`bootstrap-improve` si z toho umi vytahnout kompaktni handoff pro navazujici
+improve fazi, takze codex-local ma lepsi kontext o tom, co uz bootstrap udelal
+a kde se realne zastavil.
+
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
 Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen

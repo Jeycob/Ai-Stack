@@ -1861,6 +1861,58 @@ def supported_workspace_actions(workspace: str, actions: list[str], timeout: int
     return supported
 
 
+def bootstrap_followup_summary_lines(
+    repo_name: str,
+    selected_followups: list[tuple[str, str]],
+    execution_results: list[tuple[str, int]],
+    bootstrap_exit_code: int,
+) -> list[str]:
+    selected_names = [action for action, _ in selected_followups]
+    executed_names = [action for action, _ in execution_results]
+    successful_names = [action for action, rc in execution_results if rc == 0]
+    failed_names = [action for action, rc in execution_results if rc != 0]
+
+    if bootstrap_exit_code != 0:
+        final_status = "bootstrap_failed"
+        stop_reason = "scaffold command failed"
+        next_recommendation = f"inspect bootstrap output for {repo_name} and fix the starter before improve flow"
+    elif failed_names:
+        final_status = "followup_partial"
+        stop_reason = f"follow-up action failed: {failed_names[0]}"
+        next_recommendation = f"review the failed action output for {repo_name} and continue from the first blocked workspace capability"
+    elif executed_names:
+        final_status = "followup_completed"
+        stop_reason = "all selected follow-up actions finished"
+        next_recommendation = f"continue with improve flow in {repo_name}, using the successful bootstrap and follow-up results as context"
+    else:
+        final_status = "bootstrap_only"
+        stop_reason = "no supported follow-up action was available"
+        next_recommendation = f"continue with improve flow in {repo_name} and let codex-local choose the next audited workspace step"
+
+    lines = [
+        f"BOOTSTRAP_DISPATCH_FINAL_STATUS={final_status}",
+        f"BOOTSTRAP_DISPATCH_SELECTED_SEQUENCE={','.join(selected_names) or 'none'}",
+        f"BOOTSTRAP_DISPATCH_EXECUTED_SEQUENCE={','.join(executed_names) or 'none'}",
+        f"BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS={','.join(successful_names) or 'none'}",
+        f"BOOTSTRAP_DISPATCH_FAILED_ACTIONS={','.join(failed_names) or 'none'}",
+        f"BOOTSTRAP_DISPATCH_STOP_REASON={stop_reason}",
+        f"BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION={next_recommendation}",
+    ]
+    return lines
+
+
+def extract_bootstrap_dispatch_summary(text: str) -> dict[str, str]:
+    summary: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.startswith("BOOTSTRAP_DISPATCH_"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        summary[key.strip()] = value.strip()
+    return summary
+
+
 def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     repo_name = decision.get("repo_name", "").strip()
@@ -1930,6 +1982,8 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     print("BOOTSTRAP_DISPATCH_EXECUTION_END")
     print(f"BOOTSTRAP_DISPATCH_EXIT_CODE={proc.returncode}")
     if proc.returncode != 0:
+        for line in bootstrap_followup_summary_lines(repo_name, [], [], proc.returncode):
+            print(line)
         return 0
 
     selected_followups = supported_workspace_actions(
@@ -1943,6 +1997,7 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     else:
         print("BOOTSTRAP_DISPATCH_FOLLOWUP_SELECTED=none")
 
+    execution_results: list[tuple[str, int]] = []
     for idx, (selected_followup, followup_probe_output) in enumerate(selected_followups, start=1):
         if followup_probe_output:
             print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_PROBE_{idx}_BEGIN")
@@ -1962,8 +2017,11 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
         print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_EXECUTION_{idx}_END")
         print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_{idx}_ACTION={selected_followup}")
         print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_{idx}_EXIT_CODE={followup_proc.returncode}")
+        execution_results.append((selected_followup, followup_proc.returncode))
         if followup_proc.returncode != 0:
             break
+    for line in bootstrap_followup_summary_lines(repo_name, selected_followups, execution_results, proc.returncode):
+        print(line)
     return 0
 
 
@@ -2590,12 +2648,46 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
 
-    bootstrap_args = argparse.Namespace(**vars(args))
-    bootstrap_args.mode = "bootstrap-dispatch"
-    bootstrap_args.execute = True
-    rc = run_bootstrap_dispatch_sequence(bootstrap_args)
-    if rc != 0:
-        return rc
+    dispatch_command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "bootstrap-dispatch",
+        args.workspace,
+        args.task,
+        "--execute",
+        "--followup-steps",
+        str(getattr(args, "followup_steps", 2)),
+        "--model",
+        args.model,
+        "--title",
+        args.title,
+        "--status-interval",
+        str(args.status_interval),
+    ]
+    if getattr(args, "dry_run", False):
+        dispatch_command.append("--dry-run")
+    if getattr(args, "send_history", False):
+        dispatch_command.append("--send-history")
+    if getattr(args, "no_live_status", False):
+        dispatch_command.append("--no-live-status")
+    if getattr(args, "mentor_visible_context", ""):
+        dispatch_command.extend(["--mentor-visible-context", getattr(args, "mentor_visible_context")])
+    if getattr(args, "mentor_technical_context", ""):
+        dispatch_command.extend(["--mentor-technical-context", getattr(args, "mentor_technical_context")])
+
+    dispatch_proc = subprocess.run(
+        dispatch_command,
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    dispatch_output = dispatch_proc.stdout or ""
+    if dispatch_output.strip():
+        print(dispatch_output.strip())
+    if dispatch_proc.returncode != 0:
+        return dispatch_proc.returncode
+    dispatch_summary = extract_bootstrap_dispatch_summary(dispatch_output)
 
     improve_args = argparse.Namespace(**vars(args))
     improve_args.mode = "improve"
@@ -2607,11 +2699,46 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
         + (f"- starter profile: {decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
         + (f"- public stack: {decision.get('public_stack')}\n" if decision.get("public_stack") else "")
         + "- bootstrap dispatch already ran; continue with the next audited workspace steps"
+        + (
+            f"\n- bootstrap follow-up status: {dispatch_summary.get('BOOTSTRAP_DISPATCH_FINAL_STATUS')}"
+            if dispatch_summary.get("BOOTSTRAP_DISPATCH_FINAL_STATUS")
+            else ""
+        )
+        + (
+            f"\n- successful follow-up actions: {dispatch_summary.get('BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS')}"
+            if dispatch_summary.get("BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS")
+            else ""
+        )
+        + (
+            f"\n- bootstrap next recommendation: {dispatch_summary.get('BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION')}"
+            if dispatch_summary.get("BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION")
+            else ""
+        )
     )
     improve_args.mentor_technical_context = (
         "MENTOR_EXECUTION_BRIEF_COMPACT\n"
         + compact_execution_brief_block(decision, repo_name, args.task)
         + "\nbootstrap_dispatch=completed"
+        + (
+            f"\nbootstrap_followup_status={dispatch_summary.get('BOOTSTRAP_DISPATCH_FINAL_STATUS')}"
+            if dispatch_summary.get("BOOTSTRAP_DISPATCH_FINAL_STATUS")
+            else ""
+        )
+        + (
+            f"\nbootstrap_followup_success={dispatch_summary.get('BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS')}"
+            if dispatch_summary.get("BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS")
+            else ""
+        )
+        + (
+            f"\nbootstrap_followup_failed={dispatch_summary.get('BOOTSTRAP_DISPATCH_FAILED_ACTIONS')}"
+            if dispatch_summary.get("BOOTSTRAP_DISPATCH_FAILED_ACTIONS")
+            else ""
+        )
+        + (
+            f"\nbootstrap_followup_recommendation={dispatch_summary.get('BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION')}"
+            if dispatch_summary.get("BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION")
+            else ""
+        )
     )
     return run_improve_sequence(improve_args)
 
