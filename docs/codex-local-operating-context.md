@@ -135,6 +135,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pro pripravu maleho diff navrhu nad auditem pouzivat `mentor_codex_local.py apply-ready`,
 - pro maly auditovany patch v bezpecnem scope pouzivat `mentor_codex_local.py apply-safe`,
 - pro sirsi "dotahni to co nejdal" workflow pouzivat `mentor_codex_local.py improve`,
+- pro bezne mentor orchestracni volani bez rucni volby modu pouzivat `mentor_codex_local.py delegate`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
 Priklad doporucovaciho autopilota:
@@ -175,6 +176,12 @@ Priklad sirsiho improve loopu, ktery nejdriv necha bezet capability vrstvu
 
 ```bash
 python3 codex/bin/mentor_codex_local.py improve ai-stack
+```
+
+Priklad delegacniho loopu, ktery z textu ukolu sam zvoli nejvhodnejsi orchestraci:
+
+```bash
+python3 codex/bin/mentor_codex_local.py delegate ai-stack "Fixni to a dotahni co zvladnes."
 ```
 
 ## Pro nove nastroje

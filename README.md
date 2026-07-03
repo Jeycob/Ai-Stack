@@ -288,6 +288,10 @@ Pro nejbližší chování typu “dělej to jako Codex a dotáhni co zvládneš
 
     python3 codex/bin/mentor_codex_local.py improve ai-stack
 
+Když nechceš ručně přemýšlet, který mód zvolit, použij `delegate`: helper podle textu úkolu sám vybere vhodnou orchestrace vrstvu (`audit`, `autopilot`, `apply-safe`, `improve`, případně `run`) a tu pak spustí přes audit chat:
+
+    python3 codex/bin/mentor_codex_local.py delegate ai-stack "Fixni to a dotáhni co zvládneš."
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

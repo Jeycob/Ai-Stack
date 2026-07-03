@@ -227,7 +227,7 @@ def request_patch_plan(args: argparse.Namespace, workspace: str) -> tuple[int, s
         "Navrhni minimální patch plan. Zůstaň u malého bezpečného zásahu a nic ještě needituj."
     )
     plan_technical = (
-        f"{repo_prefix(args.workspace)}\n"
+        f"{repo_prefix(args.repo)}\n"
         "Na základě celé dosavadní historie navrhni minimální další patch plan. "
         "Odpověz stručně a strukturovaně v těchto řádcích:\n"
         "PATCH_TARGET: <path or none>\n"
@@ -244,7 +244,7 @@ def request_diff_only(args: argparse.Namespace, workspace: str, target: str, sum
         "Teď připrav přesně jeden malý unified diff pro tenhle zásah. Změň jen nutné soubory a nic zatím neaplikuj."
     )
     diff_technical = (
-        f"{repo_prefix(args.workspace)}\n"
+        f"{repo_prefix(args.repo)}\n"
         f"Na základě celé dosavadní historie navrhni malý unified diff související s {target}. "
         "Odpověz pouze jedním fenced ```diff blokem bez dalšího textu. "
         "Nepřidávej vysvětlení mimo diff. "
@@ -252,6 +252,37 @@ def request_diff_only(args: argparse.Namespace, workspace: str, target: str, sum
         f"Hint: {hint or '(none)'}"
     )
     return invoke_turn(args, diff_visible, diff_technical, send_history=True, capture_output=True)
+
+
+def choose_workflow(task: str) -> str:
+    lower = task.lower()
+    if any(token in lower for token in ("git status", "git remote", "git log", "spusť příkaz:", "spust prikaz:", "run command")):
+        return "run"
+    if any(token in lower for token in ("navrhni další krok", "navrhni dalsi krok", "co dál", "co dal", "audit", "analyzuj")):
+        return "audit"
+    if any(token in lower for token in ("apply patch", "aplikuj patch", "malý patch", "maly patch", "uprav readme", "uprav dokumentaci")):
+        return "apply-safe"
+    if any(token in lower for token in ("fixni to", "rozběhni to", "rozbehni to", "dotáhni to", "dotahni to", "dokonči to", "dokonci to")):
+        return "improve"
+    if any(token in lower for token in ("ověř projekt", "over projekt", "pokračuj sám", "pokracuj sam", "udělej co je potřeba", "udelej co je potreba")):
+        return "autopilot"
+    return "audit"
+
+
+def extract_run_command(task: str) -> str:
+    patterns = [
+        r"(?im)^\s*(?:spust|spusť|run)\s+(?:příkaz|prikaz|command)\s*:\s*(.+?)\s*$",
+        r"(?im)^\s*(?:spust|spusť|run command)\s*:\s*(.+?)\s*$",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, task)
+        if m:
+            return m.group(1).strip()
+    for line in task.splitlines():
+        lowered = line.lower()
+        if "příkaz:" in lowered or "prikaz:" in lowered or "command:" in lowered:
+            return line.split(":", 1)[1].strip()
+    return ""
 
 
 def invoke_turn(
@@ -726,6 +757,47 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_delegate_sequence(args: argparse.Namespace) -> int:
+    workflow = choose_workflow(args.task)
+    print(f"DELEGATE_WORKFLOW={workflow}")
+
+    if workflow == "run":
+        command_text = extract_run_command(args.task)
+        if not command_text:
+            print("DELEGATE_BLOCKED\nreason=run workflow was selected but no explicit command was found")
+            return 0
+        command = shlex.split(command_text)
+        run_args = argparse.Namespace(**vars(args))
+        run_args.mode = "run"
+        run_args.command = command
+        return build_and_invoke_mode(run_args)
+
+    routed = argparse.Namespace(**vars(args))
+    routed.mode = workflow
+    return build_and_invoke_mode(routed)
+
+
+def build_and_invoke_mode(args: argparse.Namespace) -> int:
+    if args.mode == "audit":
+        return run_audit_sequence(args)
+    if args.mode == "autopilot":
+        return run_autopilot_sequence(args)
+    if args.mode == "patch-plan":
+        return run_patch_plan_sequence(args)
+    if args.mode == "apply-ready":
+        return run_apply_ready_sequence(args)
+    if args.mode == "apply-safe":
+        return run_apply_safe_sequence(args)
+    if args.mode == "improve":
+        return run_improve_sequence(args)
+    if args.mode == "delegate":
+        return run_delegate_sequence(args)
+
+    visible, technical = build_prompts(args)
+    rc, _ = invoke_turn(args, visible, technical)
+    return rc
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Send structured mentor tasks to codex-local via the OpenWebUI audit chat.",
@@ -804,6 +876,14 @@ def parse_args() -> argparse.Namespace:
     improve.add_argument("--allow-actions", default="install,test,build,lint")
     improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
+    delegate = sub.add_parser("delegate", help="Choose the most suitable orchestration workflow for a workspace task and run it")
+    delegate.add_argument("workspace")
+    delegate.add_argument("task")
+    delegate.add_argument("--timeout", type=int, default=2400)
+    delegate.add_argument("--max-steps", type=int, default=2)
+    delegate.add_argument("--allow-actions", default="install,test,build,lint")
+    delegate.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
@@ -824,22 +904,7 @@ def main() -> int:
         if not args.command:
             raise SystemExit("run mode requires a command after --")
 
-    if args.mode == "audit":
-        return run_audit_sequence(args)
-    if args.mode == "autopilot":
-        return run_autopilot_sequence(args)
-    if args.mode == "patch-plan":
-        return run_patch_plan_sequence(args)
-    if args.mode == "apply-ready":
-        return run_apply_ready_sequence(args)
-    if args.mode == "apply-safe":
-        return run_apply_safe_sequence(args)
-    if args.mode == "improve":
-        return run_improve_sequence(args)
-
-    visible, technical = build_prompts(args)
-    rc, _ = invoke_turn(args, visible, technical)
-    return rc
+    return build_and_invoke_mode(args)
 
 
 if __name__ == "__main__":

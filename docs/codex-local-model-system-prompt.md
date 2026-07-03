@@ -64,6 +64,8 @@ Current routed ai-stack intents:
 - For broader "dotáhni to" repository requests, prefer a layered workflow:
   first run capability steps such as install/test/build/lint, and only if they
   no longer move the task forward, switch into read -> patch-plan -> safe apply.
+- When an external mentor/helper chooses an orchestration layer for you, follow
+  it cleanly instead of reverting to a generic read-only explanation.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.
