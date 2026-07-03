@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -19,7 +20,8 @@ from http.client import BadStatusLine, RemoteDisconnected
 from pathlib import Path
 
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
-DROP_FIELDS = {"user", "created_at", "updated_at"}
+PRIMARY_MUTABLE_FIELDS = ("id", "name", "type", "meta")
+ROADMAP_SENTINEL = "EMBEDDED_CAPABILITY_ROADMAP = None"
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,12 +98,62 @@ def target_global(args: argparse.Namespace) -> bool:
     return not args.no_global
 
 
-def sanitized_payload(args: argparse.Namespace, remote: dict, content: str) -> dict:
-    payload = {k: v for k, v in remote.items() if k not in DROP_FIELDS}
+def runtime_content(args: argparse.Namespace, content: str) -> tuple[str, bool]:
+    source = Path(args.source)
+    roadmap_path = source.parents[2] / "docs" / "codex-local-capability-roadmap.json"
+    if ROADMAP_SENTINEL not in content or not roadmap_path.is_file():
+        return content, False
+    payload = json.loads(roadmap_path.read_text(encoding="utf-8"))
+    replacement = "EMBEDDED_CAPABILITY_ROADMAP = " + json.dumps(payload, ensure_ascii=False, indent=2)
+    return content.replace(ROADMAP_SENTINEL, replacement, 1), True
+
+
+def update_payload_variant(args: argparse.Namespace, remote: dict, content: str, include_meta: bool) -> dict:
+    payload = {k: remote[k] for k in PRIMARY_MUTABLE_FIELDS if k in remote}
+    if not include_meta:
+        payload.pop("meta", None)
     payload["content"] = content
     payload["is_active"] = target_active(args)
     payload["is_global"] = target_global(args)
     return payload
+
+
+def update_function_with_fallbacks(args: argparse.Namespace, function_id: str, remote: dict, content: str) -> tuple[dict, str]:
+    attempts = [
+        ("full-minus-timestamps", {k: v for k, v in remote.items() if k not in {"created_at", "updated_at"}} | {"content": content, "is_active": target_active(args), "is_global": target_global(args)}),
+        ("id+name+type+meta+content", update_payload_variant(args, remote, content, include_meta=True)),
+        ("id+name+type+content", update_payload_variant(args, remote, content, include_meta=False)),
+    ]
+    errors: list[str] = []
+    for strategy, payload in attempts:
+        try:
+            updated = request_json(args, "POST", f"/api/v1/functions/id/{function_id}/update", payload)
+            return updated, strategy
+        except RuntimeError as exc:
+            errors.append(f"{strategy}: {exc}")
+    raise RuntimeError(
+        "update failed for every payload strategy:\n" + "\n".join(errors)
+    )
+
+
+def ensure_function_flags(args: argparse.Namespace, function_id: str, remote: dict) -> tuple[dict, list[str]]:
+    """Force active/global flags with OpenWebUI toggle endpoints.
+
+    OpenWebUI accepts is_active/is_global in create/update payloads on some
+    versions, but the runtime router exposes canonical toggle endpoints. Use
+    GET-before-toggle semantics so this stays idempotent and does not flap.
+    """
+    actions: list[str] = []
+    current = remote
+    if bool(current.get("is_active")) != target_active(args):
+        current = request_json(args, "POST", f"/api/v1/functions/id/{function_id}/toggle")
+        actions.append("toggle-active")
+    if bool(current.get("is_global")) != target_global(args):
+        current = request_json(args, "POST", f"/api/v1/functions/id/{function_id}/toggle/global")
+        actions.append("toggle-global")
+    if actions:
+        current = request_json(args, "GET", f"/api/v1/functions/id/{function_id}")
+    return current, actions
 
 
 def main() -> int:
@@ -110,6 +162,7 @@ def main() -> int:
     if not source.is_file():
         raise SystemExit(f"source file not found: {source}")
     content = source.read_text(encoding="utf-8")
+    content, embedded_roadmap = runtime_content(args, content)
     local_hash = sha256(content)
 
     remote = request_json(args, "GET", f"/api/v1/functions/id/{args.function_id}")
@@ -125,6 +178,7 @@ def main() -> int:
     print(f"remote_global={remote.get('is_global')}")
     print(f"target_active={target_active(args)}")
     print(f"target_global={target_global(args)}")
+    print(f"embedded_roadmap={str(embedded_roadmap).lower()}")
     print(f"local_sha256={local_hash}")
     print(f"remote_sha256={remote_hash}")
     print(f"active_changed={str(active_changed).lower()}")
@@ -135,7 +189,8 @@ def main() -> int:
         print("action=dry-run" if args.dry_run else "action=no-op")
         return 0
 
-    updated = request_json(args, "POST", f"/api/v1/functions/id/{args.function_id}/update", sanitized_payload(args, remote, content))
+    updated, strategy = update_function_with_fallbacks(args, args.function_id, remote, content)
+    updated, flag_actions = ensure_function_flags(args, args.function_id, updated)
     updated_hash = sha256(updated.get("content") or "")
     if updated_hash != local_hash:
         raise RuntimeError("update verification failed: remote content hash does not match local source")
@@ -144,6 +199,9 @@ def main() -> int:
     if bool(updated.get("is_global")) != target_global(args):
         raise RuntimeError("update verification failed: global state does not match target")
     print("action=updated")
+    print(f"update_strategy={strategy}")
+    if flag_actions:
+        print(f"flag_actions={','.join(flag_actions)}")
     print(f"updated_active={updated.get('is_active')}")
     print(f"updated_global={updated.get('is_global')}")
     return 0

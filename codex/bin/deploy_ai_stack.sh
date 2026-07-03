@@ -74,7 +74,7 @@ full_stack_healthcheck() {
   fi
 }
 
-sync_openwebui_function() {
+reconcile_openwebui_functions() {
   local key_file="$REPO_ROOT/codex/state/openwebui-api.key"
   if [ -z "${OWUI_API_KEY:-}" ] && [ -f "$key_file" ]; then
     OWUI_API_KEY="$(tr -d '\r\n' < "$key_file")"
@@ -82,29 +82,18 @@ sync_openwebui_function() {
   fi
 
   if [ -z "${OWUI_API_KEY:-}" ]; then
-    echo "OPENWEBUI_FUNCTION_SYNC_SKIPPED"
+    echo "OPENWEBUI_FUNCTION_RECONCILE_SKIPPED"
     echo "No OWUI_API_KEY env var or codex/state/openwebui-api.key file was found."
     return 0
   fi
 
-  section "Syncing OpenWebUI admin filter function"
-  python3 "$REPO_ROOT/codex/bin/sync_openwebui_function.py" \
-    --function-id codex_gateway_admin_filter \
-    --source codex/bin/openwebui_gateway_admin_filter.py
-
-  if [ -f "$REPO_ROOT/codex/bin/openwebui_codex_auto_tools_filter.py" ]; then
-    section "Syncing OpenWebUI auto tools filter function"
-    if ! python3 "$REPO_ROOT/codex/bin/sync_openwebui_function.py" \
-      --function-id codex_auto_tools_filter \
-      --source codex/bin/openwebui_codex_auto_tools_filter.py; then
-      echo "OPENWEBUI_AUTO_FILTER_SYNC_FAILED_NONFATAL"
-      echo "Natural critical routes are also handled by codex_gateway_admin_filter."
-    fi
-  fi
+  section "Reconciling OpenWebUI codex-local functions"
+  python3 "$REPO_ROOT/codex/bin/reconcile_openwebui_functions.py"
 }
 
 if [ "${1:-}" = "--restart-only" ]; then
   restart_only
+  reconcile_openwebui_functions
   exit 0
 fi
 
@@ -150,7 +139,9 @@ python3 -m py_compile \
   codex/bin/workspace_scan.py \
   codex/bin/workspace_action.py \
   codex/bin/mentor_codex_local.py \
-  codex/bin/sync_openwebui_function.py
+  codex/bin/sync_openwebui_function.py \
+  codex/bin/reconcile_openwebui_functions.py \
+  codex/bin/reconcile_openwebui_functions_test.py
 
 section "Validating shell helpers"
 bash -n \
@@ -192,7 +183,7 @@ else
   fi
 fi
 
-sync_openwebui_function
+reconcile_openwebui_functions
 
 full_stack_healthcheck
 

@@ -32,7 +32,52 @@ class RouteScenario:
 
 SCENARIOS: tuple[RouteScenario, ...] = (
     RouteScenario(
-        name="next-step-recommend-only",
+        name="agent-review-read-only",
+        prompt="repo: ai-stack\nProhlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni 3 největší blockery autonomie.",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "Nic needituj"),
+        unexpected=("mentor_codex_local.py", "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT"),
+    ),
+    RouteScenario(
+        name="agent-action-verify",
+        prompt="repo: ai-stack\nOvěř projekt a vrať stručný audit výsledku.",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "Ověř projekt"),
+        unexpected=("GATEWAY_ADMIN_WORKSPACE_ACTION", "mentor_codex_local.py"),
+    ),
+    RouteScenario(
+        name="agent-safe-edit-run-after",
+        prompt="repo: ai-stack\nPřidej do README krátký příklad a pak ověř projekt.",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "README", "ověř projekt"),
+        unexpected=("GATEWAY_ADMIN_WORKSPACE_EDIT", "GATEWAY_ADMIN_WORKSPACE_ACTION"),
+    ),
+    RouteScenario(
+        name="agent-bootstrap-workspace",
+        prompt="repo Test3\nvytvor workspace a initni git a vygeneruj ssh klic",
+        expected=("repo: Test3", "GATEWAY_ADMIN_AGENT_LOOP Test3 --", "vytvor workspace"),
+        unexpected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO", "GATEWAY_ADMIN_SSH_KEYGEN"),
+    ),
+    RouteScenario(
+        name="agent-natural-create-repo-colon",
+        prompt="vytvor repozitar: svatektest",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "vytvor repozitar: svatektest"),
+        unexpected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO", "mkdir", "git init"),
+    ),
+    RouteScenario(
+        name="agent-web-answer",
+        prompt="kdo ma dneska svatek? stahni mi to z seznam.cz",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "seznam.cz"),
+        unexpected=("GATEWAY_ADMIN_WEB_ANSWER", "nemám přístup"),
+    ),
+    RouteScenario(
+        name="agent-file-explain",
+        prompt="repozitar: ai-stack\nsoubor : docker-compose.yml\n\nprecti docker compose a vysvetli co dela radek po radku",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "docker-compose.yml"),
+        unexpected=("GATEWAY_ADMIN_EXPLAIN_FILE", "nemohl najít"),
+    ),
+)
+
+LEGACY_SCENARIOS: tuple[RouteScenario, ...] = (
+    RouteScenario(
+        name="legacy-next-step-recommend-only",
         prompt="repo: ai-stack\nNavrhni dalsi krok.",
         expected=("GATEWAY_ADMIN_WORKSPACE_AUTOPILOT ai-stack", "--recommend-only"),
         unexpected=("mentor_codex_local.py delegate",),

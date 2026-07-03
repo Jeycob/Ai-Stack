@@ -37,79 +37,43 @@ class Scenario:
 
 
 SCENARIOS: dict[str, Scenario] = {
-    "git-status": Scenario(
-        name="git-status",
-        description="Natural user prompt for workspace git status routed through the broad workspace runner.",
-        prompt_template="repo: {workspace}\nZkontroluj git status a vrat strucny vysledek.",
-        expected_substrings=("WORKSPACE_RUN_OK", "git status --short --branch"),
+    "agent-review": Scenario(
+        name="agent-review",
+        description="Read-only engineering review routed through the intent-first agent loop.",
+        prompt_template="repo: {workspace}\nProhlédni architekturu gateway/filter/helper vrstvy. Nic needituj. Řekni 3 největší blockery autonomie a navrhni další bezpečný krok.",
+        expected_substrings=("AGENT_LOOP_OK", "workflow=review", "read_only=True"),
+    ),
+    "explicit-agent-loop": Scenario(
+        name="explicit-agent-loop",
+        description="Explicit GATEWAY_ADMIN_AGENT_LOOP marker is intercepted by the admin/capability layer, not answered by a plain model.",
+        prompt_template="repo: {workspace}\nGATEWAY_ADMIN_AGENT_LOOP {workspace} -- Prohlédni workspace. Nic needituj. Odpověz stručně.",
+        expected_substrings=("AGENT_LOOP", "workflow=review"),
     ),
     "verify-project": Scenario(
         name="verify-project",
-        description="Natural project verification request routed through the broad workspace action capability.",
+        description="Natural project verification request routed through the intent-first agent loop into audited verify action.",
         prompt_template="repo: {workspace}\nOver projekt a vrat strucny audit vysledku.",
-        expected_substrings=("WORKSPACE_ACTION_OK", "action=verify"),
+        expected_substrings=("workflow=action", "\"action\": \"verify\""),
         total_timeout=360.0,
-    ),
-    "push-readiness": Scenario(
-        name="push-readiness",
-        description="Natural readiness question that should route to audited git status / push guard output.",
-        prompt_template="repo: {workspace}\nJe to ready na push?",
-        expected_substrings=("GIT_STATUS", "allowed_for_auto_commit"),
     ),
     "deploy-status": Scenario(
         name="deploy-status",
-        description="Natural ai-stack deploy status query routed to the stack deploy status helper.",
+        description="Natural ai-stack deploy status query routed through the intent-first agent loop.",
         prompt_template="repo: ai-stack\nUkaz deploy status.",
-        expected_substrings=("STACK_DEPLOY_STATUS", "running="),
+        expected_substrings=("workflow=deploy", "AGENT_LOOP"),
     ),
     "web-answer": Scenario(
         name="web-answer",
-        description="Natural public web question routed through the audited web-answer capability instead of a read-only internet refusal.",
+        description="Natural public web question routed through the intent-first agent loop into audited web-answer capability.",
         prompt_template="kdo ma dneska svatek? stahni mi to z seznam.cz",
-        expected_substrings=("WEB_ANSWER_OK", "url=https://www.seznam.cz/"),
+        expected_substrings=("workflow=web_answer", "AGENT_LOOP"),
         total_timeout=360.0,
     ),
     "next-step": Scenario(
         name="next-step",
-        description="Natural recommendation request routed to workspace autopilot in recommend-only mode.",
+        description="Natural recommendation request routed to the intent-first agent loop.",
         prompt_template="repo: {workspace}\nNavrhni dalsi krok.",
-        expected_substrings=("WORKSPACE_AUTOPILOT_OK", "recommend_only=True"),
-    ),
-    "workflow-profile-improve": Scenario(
-        name="workflow-profile-improve",
-        description="Natural routing question that should classify a broad autonomy request into the improve/runtime profile instead of a narrow read-only answer.",
-        prompt_template="repo: {workspace}\nJaky workflow bys zvolil pro: Fixni to a udelej maximum, co pujde.",
-        expected_substrings=("WORKFLOW=improve", "RUNTIME_PROFILE=runtime"),
-    ),
-    "mentor-brief-bootstrap": Scenario(
-        name="mentor-brief-bootstrap",
-        description="Natural mentor-brief request that should classify bootstrap follow-through into bootstrap-improve without mutating anything.",
-        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2, priprav starter, napis zaklad appky a pokracuj sam.",
-        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "bootstrap-improve"),
-    ),
-    "mentor-brief-react-scaffold": Scenario(
-        name="mentor-brief-react-scaffold",
-        description="Natural mentor-brief request that should expose the React scaffold token in the routed bootstrap brief.",
-        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako React appku, priprav starter a pokracuj sam.",
-        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_react_app"),
-    ),
-    "mentor-brief-threejs-scaffold": Scenario(
-        name="mentor-brief-threejs-scaffold",
-        description="Natural mentor-brief request that should expose the Three.js scaffold token in the routed bootstrap brief.",
-        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako 3D web appku v Three.js, priprav starter a pokracuj sam.",
-        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_threejs_app"),
-    ),
-    "mentor-brief-electron-scaffold": Scenario(
-        name="mentor-brief-electron-scaffold",
-        description="Natural mentor-brief request that should expose the Electron scaffold token in the routed bootstrap brief.",
-        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako desktop appku v Electronu, priprav starter a pokracuj sam.",
-        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_electron_app"),
-    ),
-    "mentor-brief-fastapi-scaffold": Scenario(
-        name="mentor-brief-fastapi-scaffold",
-        description="Natural mentor-brief request that should expose the FastAPI scaffold token in the routed bootstrap brief.",
-        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako FastAPI service, priprav starter a pokracuj sam.",
-        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_fastapi_service"),
+        expected_substrings=("AGENT_LOOP", "workflow=autopilot"),
     ),
 }
 
@@ -128,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         choices=sorted(SCENARIOS.keys()) + ["all"],
         default=[],
-        help="Scenario name; can be repeated. Default runs git-status, verify-project, deploy-status, next-step.",
+        help="Scenario name; can be repeated. Default runs agent-review and verify-project.",
     )
     parser.add_argument("--list", action="store_true", help="List available scenarios and exit")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable results")
@@ -148,7 +112,7 @@ def parse_args() -> argparse.Namespace:
 def selected_scenarios(args: argparse.Namespace) -> list[Scenario]:
     if args.list:
         return []
-    names = args.scenario or ["git-status", "verify-project", "deploy-status", "next-step", "web-answer"]
+    names = args.scenario or ["agent-review", "verify-project"]
     if "all" in names:
         names = list(SCENARIOS.keys())
     deduped: list[Scenario] = []

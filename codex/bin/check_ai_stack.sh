@@ -10,7 +10,7 @@ TIMEOUT="${TIMEOUT:-10}"
 OWUI_CHAT_SMOKE_EXPECTED="${OWUI_CHAT_SMOKE_EXPECTED:-smoke}"
 OWUI_CHAT_SMOKE_VISIBLE="${OWUI_CHAT_SMOKE_VISIBLE:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
 OWUI_CHAT_SMOKE_PROMPT="${OWUI_CHAT_SMOKE_PROMPT:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
-OWUI_CHAT_SCENARIOS="${OWUI_CHAT_SCENARIOS:-git-status,next-step}"
+OWUI_CHAT_SCENARIOS="${OWUI_CHAT_SCENARIOS:-agent-review,verify-project}"
 SUMMARY_ONLY="${CHECK_AI_STACK_SUMMARY_ONLY:-0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -164,6 +164,42 @@ if [ "${SKIP_OPENWEBUI:-0}" = "1" ]; then
 else
   check_url 'OpenWebUI config endpoint' "$OPENWEBUI_URL/api/config"
 fi
+
+if [ "${SKIP_OWUI_FUNCTION_RECONCILE_CHECK:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI codex functions reconcile ... SKIP (disabled)\n'
+  record_summary "OpenWebUI codex functions reconcile" "SKIP"
+elif ! command -v python3 >/dev/null 2>&1 || [ ! -f "$SCRIPT_DIR/reconcile_openwebui_functions.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI codex functions reconcile ... FAIL (python3 or reconciler missing)\n'
+  failures=$((failures + 1))
+  record_summary "OpenWebUI codex functions reconcile" "FAIL"
+elif [ -z "${OWUI_API_KEY:-}" ] && [ ! -f "$OWUI_KEY_FILE" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && {
+    printf '[check] OpenWebUI codex functions reconcile ... FAIL\n'
+    printf 'OPENWEBUI_API_KEY_MISSING\n'
+    printf 'Recovery: store the key in %s or set OWUI_API_KEY.\n' "$OWUI_KEY_FILE"
+  }
+  failures=$((failures + 1))
+  record_summary "OpenWebUI codex functions reconcile" "FAIL"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI codex functions reconcile ...\n'
+  function_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/reconcile_openwebui_functions.py" \
+      --base-url "$OPENWEBUI_URL" \
+      --api-key-file "$OWUI_KEY_FILE" \
+      --check-only \
+      --json >"$function_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$function_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI codex functions reconcile OK\n'
+    record_summary "OpenWebUI codex functions reconcile" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$function_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI codex functions reconcile FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI codex functions reconcile" "FAIL"
+  fi
+  rm -f "$function_log"
+fi
+
 check_url 'Ollama version endpoint' "$OLLAMA_URL/api/version"
 check_json_contains 'Codex gateway health' "$CODEX_GATEWAY_URL/health" '"ok": true'
 check_json_contains 'Codex gateway model alias' "$CODEX_GATEWAY_URL/v1/models" "$MODEL"
@@ -226,6 +262,41 @@ else
     record_summary "OpenWebUI audit chat smoke" "FAIL"
   fi
   rm -f "$visible_file" "$prompt_file" "$chat_smoke_log"
+fi
+
+if [ "${SKIP_OWUI_AGENT_LOOP_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke ... SKIP (disabled)\n'
+  record_summary "OpenWebUI explicit agent-loop smoke" "SKIP"
+elif ! command -v python3 >/dev/null 2>&1 || [ ! -f "$SCRIPT_DIR/owui_chat_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke ... SKIP (python3 or owui_chat_smoke.py missing)\n'
+  record_summary "OpenWebUI explicit agent-loop smoke" "SKIP"
+elif [ -z "${OWUI_API_KEY:-}" ] && [ ! -f "$OWUI_KEY_FILE" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke ... SKIP (no API key)\n'
+  record_summary "OpenWebUI explicit agent-loop smoke" "SKIP"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke ...\n'
+  explicit_prompt_file="$(mktemp)"
+  explicit_smoke_log="$(mktemp)"
+  printf 'repo: %s\nGATEWAY_ADMIN_AGENT_LOOP %s -- Prohlédni workspace. Nic needituj. Odpověz stručně.\n' "$WORKSPACE" "$WORKSPACE" > "$explicit_prompt_file"
+  if python3 "$SCRIPT_DIR/owui_chat_smoke.py" \
+      --base-url "$OPENWEBUI_URL" \
+      --chat-id "${OWUI_AUDIT_CHAT_ID:-57529037-84b9-42e1-8bae-9eab35b601bd}" \
+      --model "$MODEL" \
+      --visible-prompt-file "$explicit_prompt_file" \
+      --prompt-file "$explicit_prompt_file" \
+      --expected-substring "AGENT_LOOP" \
+      --status-interval 2 \
+      --quiet >"$explicit_smoke_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$explicit_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke OK\n'
+    record_summary "OpenWebUI explicit agent-loop smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$explicit_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI explicit agent-loop smoke" "FAIL"
+  fi
+  rm -f "$explicit_prompt_file" "$explicit_smoke_log"
 fi
 
 if [ "${SKIP_OWUI_CHAT_SCENARIOS:-0}" = "1" ]; then

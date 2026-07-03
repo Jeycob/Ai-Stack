@@ -59,17 +59,15 @@ Priklady:
 
 ```bash
 python3 codex/bin/owui_chat_scenarios.py --list
-python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario git-status --scenario next-step
-python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario workflow-profile-improve --scenario mentor-brief-bootstrap
+python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario agent-review --scenario verify-project
+python3 codex/bin/owui_chat_scenarios.py --dry-run --scenario explicit-agent-loop
 OWUI_API_KEY=... python3 codex/bin/owui_chat_scenarios.py --scenario all --json
 ```
 
 Vychozi scenare dnes pokryvaji:
-- `git-status`
+- `agent-review`
 - `verify-project`
-- `push-readiness`
-- `deploy-status`
-- `next-step`
+- `explicit-agent-loop`
 - `workflow-profile-improve`
 - `mentor-brief-bootstrap`
 
@@ -135,10 +133,10 @@ Pro levne endpoint-only kontroly bez modeloveho smoke pouzij
 `SKIP_GATEWAY_SMOKE=1 SKIP_OWUI_CHAT_SMOKE=1 SKIP_OWUI_CHAT_SCENARIOS=1`.
 
 Healthcheck umi volitelne pridat i levne user-like scenare pres
-`owui_chat_scenarios.py`. Vychozi sada je zamerne kratka (`git-status,next-step`),
+`owui_chat_scenarios.py`. Vychozi sada je zamerne kratka (`agent-review,verify-project`),
 aby se overil prirozeny route -> filter -> gateway -> capability -> visible
 reply bez zbytecneho cekani. Ovlada se to pres:
-- `OWUI_CHAT_SCENARIOS=git-status,deploy-status,next-step`
+- `OWUI_CHAT_SCENARIOS=agent-review,explicit-agent-loop,verify-project`
 - `SKIP_OWUI_CHAT_SCENARIOS=1`
 
 Pro opakovane mentor workflow nad auditem pouzivej helper

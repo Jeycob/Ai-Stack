@@ -35,6 +35,7 @@ except ModuleNotFoundError:  # pragma: no cover - used by lightweight local smok
 
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
 FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
+EMBEDDED_CAPABILITY_ROADMAP = None
 
 
 class Filter:
@@ -138,6 +139,8 @@ class Filter:
             return self._direct_response(body, self._web_answer_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WEB_FETCH"):
             return self._direct_response(body, self._web_fetch_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_AGENT_LOOP"):
+            return self._direct_response(body, self._agent_loop_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_ACTION"):
             return self._direct_response(body, self._workspace_action_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT"):
@@ -227,6 +230,8 @@ class Filter:
             return self._web_answer_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_FETCH"):
             return self._web_fetch_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_AGENT_LOOP"):
+            return self._agent_loop_admin(command)
         raise ValueError(f"Unsupported natural admin command: {command.splitlines()[0]}")
 
     def outlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
@@ -399,9 +404,11 @@ class Filter:
         return Path.cwd() / "docs" / "codex-local-capability-roadmap.json"
 
     def _load_capability_roadmap_payload(self) -> dict:
+        if isinstance(EMBEDDED_CAPABILITY_ROADMAP, dict):
+            return EMBEDDED_CAPABILITY_ROADMAP
         try:
             payload = json.loads(self._roadmap_path().read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):
             return {}
         return payload if isinstance(payload, dict) else {}
 
@@ -499,51 +506,23 @@ class Filter:
         model = str(body.get("model") or "")
         if not model.startswith("codex-local-") or not text or "GATEWAY_ADMIN_" in text:
             return None
+        return self._agent_loop_command_for_text(text)
 
-        workspace = self._workspace_from_text(text)
-        lower = text.lower()
-        task_text = " ".join(self._non_route_lines(text)).strip() or text.strip()
-        if workspace and self._looks_like_file_read_or_explain(text):
-            rel = self._file_from_text(text)
-            if rel:
-                question = task_text or "Přečti a vysvětli soubor."
-                return (
-                    f"GATEWAY_ADMIN_EXPLAIN_FILE {shlex.quote(workspace)} {shlex.quote(rel)} "
-                    f"1 400 -- {shlex.quote(question[:1200])}"
-                )
-
-        if workspace and self._looks_like_read_only_repo_analysis(text):
+    def _agent_loop_command_for_text(self, text: str) -> str | None:
+        task_text = self._agent_loop_task_text(text)
+        if not task_text:
             return None
+        workspace = self._workspace_from_text(text) or "ai-stack"
+        return f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(workspace)} -- {shlex.quote(task_text[:3000])}"
 
-        if workspace:
-            if any(cue in lower for cue in ("status jobu", "stav jobu", "background status", "status background", "jak bezi job", "jak běží job", "status runu", "stav runu")):
-                return f"GATEWAY_ADMIN_RUN_WORKSPACE_STATUS {shlex.quote(workspace)}"
-            if self._looks_like_create_workspace_request(task_text) and workspace.lower() not in {"ai-stack", "smoke"}:
-                return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {shlex.quote(workspace)}"
-            if any(cue in lower for cue in ("ssh", "klic", "klíč", "key", "github")) and any(
-                cue in lower for cue in ("vygeneruj", "vytvor", "vytvoř", "generate", "create")
-            ):
-                key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{workspace}")[:64].strip("-") or "github-workspace"
-                return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
-            if self._looks_like_edit_request(task_text):
-                action = self._looks_like_workspace_action(task_text)
-                run_after = f" --run-after {action}" if action else ""
-                return f"GATEWAY_ADMIN_WORKSPACE_EDIT {shlex.quote(workspace)} --timeout 900{run_after} -- {shlex.quote(task_text[:1800])}"
-            action = self._looks_like_workspace_action(task_text)
-            if action:
-                spec = self._workspace_action_spec(action)
-                timeout = int(spec.get("timeout", 900))
-                runner = str(spec.get("runner", "container"))
-                return (
-                    f"GATEWAY_ADMIN_WORKSPACE_ACTION {shlex.quote(workspace)} {action} "
-                    f"--runner {runner} --timeout {timeout}"
-                )
-
-        url = self._natural_web_url(text)
-        if url and any(cue in lower for cue in ("stahni", "stáhni", "nacti", "načti", "precti", "přečti", "podivej", "podívej", "svatek", "svátek", "?")):
-            question = self._extract_web_question(text)
-            return f"GATEWAY_ADMIN_WEB_ANSWER {shlex.quote(url)} -- {shlex.quote(question[:1200])}"
-        return None
+    def _agent_loop_task_text(self, text: str) -> str:
+        lines = []
+        for line in str(text or "").splitlines():
+            if re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:?\s*[A-Za-z0-9_.-]{{1,80}}\s*$", line):
+                continue
+            if line.strip():
+                lines.append(line.strip())
+        return " ".join(lines).strip() or str(text or "").strip()
 
     def _assistant_text(self, body: dict) -> str:
         if isinstance(body.get("choices"), list) and body["choices"]:
@@ -2134,6 +2113,51 @@ class Filter:
             f"{str(result.get('answer', '')).strip()}"
             + self._details("source_preview", self._trim(str(result.get("text", "")), 8000))
         ).rstrip()
+
+    def _agent_loop_admin(self, text: str) -> str:
+        match = re.search(r"(?im)^\s*GATEWAY_ADMIN_AGENT_LOOP\s+(.+?)\s*$", text)
+        if not match:
+            raise ValueError("Usage: GATEWAY_ADMIN_AGENT_LOOP <workspace> -- <task>")
+        parts = shlex.split(match.group(1))
+        if not parts:
+            raise ValueError("Usage: GATEWAY_ADMIN_AGENT_LOOP <workspace> -- <task>")
+        workspace = parts.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace name")
+        if not parts or parts[0] != "--":
+            raise ValueError("GATEWAY_ADMIN_AGENT_LOOP requires -- before the task")
+        task = " ".join(parts[1:]).strip()
+        if not task:
+            raise ValueError("GATEWAY_ADMIN_AGENT_LOOP task is empty")
+        result = self._gateway_admin_request("/v1/admin/agent/loop", {"workspace": workspace, "task": task}, timeout=600)
+        plan = result.get("plan") or {}
+        execution = result.get("execution") or {}
+        followup = result.get("followup") or {}
+        recovery = result.get("recovery") or {}
+        answer = str(result.get("answer", "")).strip()
+        summary = str(result.get("summary", "")).strip()
+        status = "AGENT_LOOP_OK" if result.get("ok") else "AGENT_LOOP_NEEDS_ATTENTION"
+        lines = [
+            status,
+            f"requested_workspace={result.get('requested_workspace', workspace)}",
+            f"controller_workspace={result.get('controller_workspace', workspace)}",
+            f"workspace_exists={result.get('workspace_exists')}",
+            f"workflow={result.get('workflow', plan.get('workflow', ''))}",
+            f"read_only={result.get('read_only', plan.get('read_only', False))}",
+            f"confidence={plan.get('confidence', '')}",
+            f"reason={plan.get('reason', '')}",
+            f"summary={summary}",
+        ]
+        if answer:
+            lines.extend(["answer:", answer])
+        if execution:
+            lines.append(self._details("execution", json.dumps(execution, ensure_ascii=False, indent=2)))
+        if followup:
+            lines.append(self._details("followup", json.dumps(followup, ensure_ascii=False, indent=2)))
+        if recovery:
+            lines.append(self._details("recovery", json.dumps(recovery, ensure_ascii=False, indent=2)))
+        lines.append(self._details("plan", json.dumps(plan, ensure_ascii=False, indent=2)))
+        return "\n".join(line for line in lines if line).rstrip()
 
     def _gateway_admin_request(self, path: str, payload: dict, timeout: int = 90) -> dict:
         base_url = os.getenv("CODEX_GATEWAY_PUBLIC_URL", self.valves.gateway_url).rstrip("/")

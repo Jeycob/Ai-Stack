@@ -13,6 +13,7 @@ from typing import Optional
 
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
 FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
+EMBEDDED_CAPABILITY_ROADMAP = None
 
 try:
     from pydantic import BaseModel, Field
@@ -191,70 +192,23 @@ class Filter:
             return None
         if "GATEWAY_ADMIN_" in text:
             return None
-
-        command = self._natural_file_context_command(text)
-        if not command and self._looks_like_read_only_repo_analysis(text):
+        task_text = self._agent_loop_task_text(text)
+        if not task_text:
             return None
-        if not command:
-            command = self._natural_workspace_brief_command(text)
-        if not command:
-            command = self._natural_workspace_review_command(text)
-        if not command:
-            command = self._natural_workspace_boundary_command(text)
-        if not command:
-            command = self._natural_workspace_next_helper_command(text)
-        if not command:
-            command = self._natural_workspace_profile_command(text)
-        if not command:
-            command = self._natural_workspace_report_command(text)
-        if not command:
-            command = self._natural_workspace_bootstrap_dispatch_command(text)
-        if not command:
-            command = self._natural_workspace_scaffold_plan_command(text)
-        if not command:
-            command = self._natural_workspace_plan_command(text)
-        if not command:
-            command = self._natural_workspace_fix_plan_command(text)
-        if not command:
-            command = self._natural_workspace_top_command(text)
-        if not command:
-            command = self._natural_workspace_backlog_command(text)
-        if not command:
-            command = self._natural_workspace_dispatch_command(text)
-        if not command:
-            command = self._natural_workspace_publish_plan_command(text)
-        if not command:
-            command = self._natural_workspace_release_prep_command(text)
-        if not command:
-            command = self._natural_workspace_release_boundary_command(text)
-        if not command:
-            command = self._natural_workspace_ssh_key_command(text)
-        if not command:
-            command = self._natural_create_repo_command(text)
-        if not command:
-            command = self._natural_capability_roadmap_command(text)
-        if not command:
-            command = self._natural_web_command(text)
-        if not command:
-            command = self._natural_workspace_run_command(text)
-        if not command:
-            command = self._natural_workspace_common_command(text)
-        if not command:
-            command = self._natural_workspace_edit_command(text)
-        if not command:
-            command = self._natural_workspace_delegate_command(text)
-        if not command:
-            command = self._natural_workspace_autopilot_command(text)
-        if not command:
-            command = self._natural_workspace_action_command(text)
-        if not command and self._mentions_ai_stack(text):
-            command = self._natural_ai_stack_command(text)
-        if not command:
-            return None
-
-        self._set_message_text(latest, "repo: ai-stack\n" + command)
+        workspace = self._workspace_from_text(text) or "ai-stack"
+        command = f"GATEWAY_ADMIN_AGENT_LOOP {shlex.quote(workspace)} -- {shlex.quote(task_text[:3000])}"
+        self._set_message_text(latest, f"repo: {workspace}\n" + command)
         body["stream"] = False
         return body
+
+    def _agent_loop_task_text(self, text: str) -> str:
+        lines = []
+        for line in str(text or "").splitlines():
+            if re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:?\s*[A-Za-z0-9_.-]{{1,80}}\s*$", line):
+                continue
+            if line.strip():
+                lines.append(line.strip())
+        return " ".join(lines).strip() or str(text or "").strip()
 
     def _non_repo_lines(self, text: str) -> list[str]:
         lines = []
@@ -1020,9 +974,11 @@ class Filter:
         return Path.cwd() / "docs" / "codex-local-capability-roadmap.json"
 
     def _load_capability_roadmap_payload(self) -> dict:
+        if isinstance(EMBEDDED_CAPABILITY_ROADMAP, dict):
+            return EMBEDDED_CAPABILITY_ROADMAP
         try:
             payload = json.loads(self._roadmap_path().read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):
             return {}
         return payload if isinstance(payload, dict) else {}
 
