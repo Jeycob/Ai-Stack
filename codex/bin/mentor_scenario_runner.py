@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,7 +66,37 @@ def summarize_output(text: str, max_lines: int = 10) -> str:
     return "\n".join(head)
 
 
-def scenario_steps(workspace: str, task: str, followup_steps: int) -> list[tuple[str, list[str]]]:
+def read_task_file(path: str) -> list[str]:
+    return [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def read_stdin_tasks() -> list[str]:
+    if sys.stdin.isatty():
+        return []
+    return [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+
+
+def collect_tasks(args: argparse.Namespace) -> list[str]:
+    tasks: list[str] = []
+    if args.primary_task:
+        tasks.append(args.primary_task.strip())
+    for task in args.tasks:
+        if task and task.strip():
+            tasks.append(task.strip())
+    for path in args.task_files:
+        tasks.extend(read_task_file(path))
+    tasks.extend(read_stdin_tasks())
+    return tasks
+
+
+def task_args(tasks: Iterable[str], flag: str = "--task") -> list[str]:
+    result: list[str] = []
+    for task in tasks:
+        result.extend([flag, task])
+    return result
+
+
+def single_task_steps(workspace: str, task: str, followup_steps: int) -> list[tuple[str, list[str]]]:
     steps: list[tuple[str, list[str]]] = [
         ("profile", [*MENTOR, "profile", workspace, task]),
         ("brief", [*MENTOR, "brief", workspace, task]),
@@ -100,42 +131,74 @@ def workflow_specific_steps(workspace: str, task: str, workflow: str, followup_s
     return []
 
 
+def multi_task_steps(workspace: str, tasks: list[str]) -> list[tuple[str, list[str]]]:
+    backlog_args = task_args(tasks, "--task")
+    shared = task_args(tasks, "--tasks")
+    return [
+        ("backlog", [*MENTOR, "backlog", workspace, *backlog_args]),
+        ("top", [*MENTOR, "top", workspace, *shared]),
+        ("dispatch", [*MENTOR, "dispatch", workspace, *shared, "--recommend-only"]),
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a cheap local end-to-end mentor scenario across codex-local helper flows.")
     parser.add_argument("workspace")
-    parser.add_argument("task")
+    parser.add_argument("primary_task", nargs="?")
+    parser.add_argument("--task", dest="tasks", action="append", default=[])
+    parser.add_argument("--task-file", dest="task_files", action="append", default=[])
     parser.add_argument("--followup-steps", type=int, default=2)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--show-full-output", action="store_true")
     args = parser.parse_args()
 
-    results: list[StepResult] = []
-    for name, command in scenario_steps(args.workspace, args.task, args.followup_steps):
-        result = run_step(name, command)
-        results.append(result)
-        if result.exit_code != 0:
-            break
+    tasks = collect_tasks(args)
+    if not tasks:
+        raise SystemExit("mentor_scenario_runner requires at least one task via positional task, --task, --task-file, or stdin")
 
-    profile_result = next((item for item in results if item.name == "profile"), None)
+    results: list[StepResult] = []
     workflow = ""
     profile_meta: dict[str, str] = {}
-    if profile_result:
-        profile_meta = parse_key_values(profile_result.output)
-        workflow = profile_meta.get("workflow", "")
+    scenario_kind = "multi-task" if len(tasks) > 1 else "single-task"
 
-    if results and results[-1].exit_code == 0 and workflow:
-        for name, command in workflow_specific_steps(args.workspace, args.task, workflow, args.followup_steps):
+    if len(tasks) == 1:
+        task = tasks[0]
+        for name, command in single_task_steps(args.workspace, task, args.followup_steps):
             result = run_step(name, command)
             results.append(result)
             if result.exit_code != 0:
                 break
+        profile_result = next((item for item in results if item.name == "profile"), None)
+        if profile_result:
+            profile_meta = parse_key_values(profile_result.output)
+            workflow = profile_meta.get("workflow", "")
+
+        if results and results[-1].exit_code == 0 and workflow:
+            for name, command in workflow_specific_steps(args.workspace, task, workflow, args.followup_steps):
+                result = run_step(name, command)
+                results.append(result)
+                if result.exit_code != 0:
+                    break
+    else:
+        for name, command in multi_task_steps(args.workspace, tasks):
+            result = run_step(name, command)
+            results.append(result)
+            if result.exit_code != 0:
+                break
+        top_result = next((item for item in results if item.name == "top"), None)
+        if top_result:
+            profile_meta = parse_key_values(top_result.output)
+            workflow = profile_meta.get("mentor_top_workflow", "")
 
     payload = {
         "workspace": args.workspace,
-        "task": args.task,
+        "task": tasks[0],
+        "tasks": tasks,
+        "task_count": len(tasks),
+        "scenario_kind": scenario_kind,
         "workflow": workflow or "(unknown)",
-        "runtime_profile": profile_meta.get("runtime_profile", ""),
-        "confidence": profile_meta.get("confidence", ""),
+        "runtime_profile": profile_meta.get("runtime_profile", profile_meta.get("mentor_top_runtime_profile", "")),
+        "confidence": profile_meta.get("confidence", profile_meta.get("mentor_top_confidence", "")),
         "step_count": len(results),
         "ok": all(item.exit_code == 0 for item in results),
         "steps": [
@@ -157,6 +220,8 @@ def main() -> int:
     print("MENTOR_SCENARIO")
     print(f"workspace={payload['workspace']}")
     print(f"task={payload['task']}")
+    print(f"task_count={payload['task_count']}")
+    print(f"scenario_kind={payload['scenario_kind']}")
     print(f"workflow={payload['workflow']}")
     print(f"runtime_profile={payload['runtime_profile']}")
     print(f"confidence={payload['confidence']}")

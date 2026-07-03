@@ -255,12 +255,28 @@ minimum kontextu nutne pro pokracovani v dalsim capability kroku a neposila
 znovu cely reasoning blok.
 
 Pro levne lokalni E2E overeni mentor vrstvy bez volani ziveho OpenWebUI chatu
-je vhodny `codex/bin/mentor_scenario_runner.py`. Ten bere jeden lidsky task a
-retezí nad nim helpery `profile`, `brief`, `next-helper`, `plan` a podle
-workflow doplni jeste `bootstrap-dispatch` nebo `delegate --dry-run`. Vysledek
-je kompaktní scenarovy report nad helper orchestration vrstvou. Je to dobre pro
-opakovatelnou validaci klasifikace a handoff logiky, ale neni to nahrada za
-zivy audit chat nebo gateway smoke test.
+je vhodny `codex/bin/mentor_scenario_runner.py`. Ten umi dva rezimy:
+
+- single-task: bere jeden lidsky task a retezi nad nim helpery `profile`,
+  `brief`, `next-helper`, `plan` a podle workflow doplni jeste
+  `bootstrap-dispatch` nebo `delegate --dry-run`
+- multi-task: kdyz dostane vice tasku pres opakovane `--task`, `--task-file`
+  nebo stdin, otestuje lehkou prioritizacni vrstvu `backlog -> top -> dispatch
+  --recommend-only`
+
+Vysledek je kompaktní scenarovy report nad helper orchestration vrstvou. Je to
+dobre pro opakovatelnou validaci klasifikace, handoff logiky i toho, ze si
+agent umi sam zvolit dalsi task bez rucniho skladani helperu, ale neni to
+nahrada za zivy audit chat nebo gateway smoke test.
+
+Priklad multi-task scenare:
+
+```bash
+python3 codex/bin/mentor_scenario_runner.py ai-stack \
+  --task "Fixni to a dotahni co zvladnes." \
+  --task "Uprav README a aplikuj maly patch" \
+  --task "Vytvor release a pushni to na GitHub"
+```
 
 Priklad explicitniho scaffold planu:
 

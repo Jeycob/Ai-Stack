@@ -354,6 +354,13 @@ Pro levné lokální “as-if user” ověření celé mentoring vrstvy je tam i
 
     python3 codex/bin/mentor_scenario_runner.py ai-stack "Vytvoř nové repository Test2 jako React appku, doinstaluj co chybí a zkus to rozběhnout."
 
+Stejný runner teď umí i multi-task autonomii. Když dostane víc úkolů přes opakované `--task`, `--task-file` nebo stdin, nehraje si už jen na single-step mentora, ale ověří i lehký scheduler flow `backlog -> top -> dispatch --recommend-only`:
+
+    python3 codex/bin/mentor_scenario_runner.py ai-stack \
+      --task "Fixni to a dotáhni co zvládneš." \
+      --task "Uprav README a aplikuj malý patch" \
+      --task "Vytvoř release a pushni to na GitHub"
+
 Je to levná E2E vrstva pro lokální validaci mentora. Živý důkaz proti skutečnému běžícímu codex-local stacku pořád zůstává `owui_chat_turn.py`, gateway smoke a OpenWebUI audit chat.
 
 Když naopak potřebuješ vysvětlit, proč helper nezvolil širší akci a co ho brzdí, použij `boundary`: vrátí guardrail summary, capability scope, missing capability hint a další doporučený helper krok.
