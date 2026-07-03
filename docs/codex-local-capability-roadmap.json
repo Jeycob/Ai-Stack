@@ -37,6 +37,31 @@
       "autopilot_priority": 10,
       "summary": "Pripravi workspace runtime a zavislosti uvnitr izolovaneho kontejneru.",
       "recovery_hint": "Zkontroluj hlavni manifest a lockfile projektu, oprav package manager skripty nebo chybejici dependency deklarace a pak install zopakuj.",
+      "recovery_rules": [
+        {
+          "contains_any": [
+            "npm ci can only install",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock"
+          ],
+          "patch_target": "package.json",
+          "patch_hint": "Zkontroluj package manager volbu a lockfile strategii. Když projekt používá npm, doplň nebo znovu vygeneruj odpovídající lockfile; když používá jiný manager, expose to přes standardní manifest/scripts.",
+          "patch_summary": "Oprav package.json a lockfile workflow tak, aby install capability používala konzistentní package manager a lockfile.",
+          "text": "Install blocker vypadá jako nekonzistentní Node lockfile nebo package manager workflow; nejdřív oprav package.json a lockfile strategii."
+        },
+        {
+          "contains_any": [
+            "could not find a version that satisfies the requirement",
+            "no matching distribution found for",
+            "no module named pip"
+          ],
+          "patch_target": "requirements.txt",
+          "patch_hint": "Zkontroluj Python dependency deklarace a oprav neexistující nebo nekompatibilní balíček v requirements.txt nebo pyproject.toml.",
+          "patch_summary": "Uprav Python dependency deklarace tak, aby install capability mohla projekt korektně nainstalovat.",
+          "text": "Install blocker ukazuje na neplatnou nebo nekompatibilní Python dependency; oprav deklarace balíčků před dalším install krokem."
+        }
+      ],
       "cues": [
         "nainstaluj zavislosti",
         "nainstaluj závislosti",
@@ -56,6 +81,28 @@
       "autopilot_priority": 40,
       "summary": "Spusti projektove testy nebo nejblizsi auditovany test runner.",
       "recovery_hint": "Najdi hlavni test entrypoint nebo manifest skript, oprav chybejici test konfiguraci a vrat se k test kroku.",
+      "recovery_rules": [
+        {
+          "contains_any": [
+            "missing script: test",
+            "npm error missing script: test"
+          ],
+          "patch_target": "package.json",
+          "patch_hint": "Doplň package.json:scripts.test na standardní test entrypoint projektu.",
+          "patch_summary": "Přidej test script do package.json:scripts.",
+          "text": "Test capability selhala, protože Node projekt nemá standardní test script; doplň ho do package.json."
+        },
+        {
+          "contains_any": [
+            "pytest: not found",
+            "no module named pytest"
+          ],
+          "patch_target": "pyproject.toml",
+          "patch_hint": "Doplň pytest dependency a případně minimální test konfiguraci do pyproject.toml nebo requirements.txt.",
+          "patch_summary": "Přidej pytest-compatible test setup a dependency deklaraci.",
+          "text": "Test blocker vypadá jako chybějící pytest setup; oprav Python test dependencies a konfiguraci."
+        }
+      ],
       "cues": [
         "spust testy",
         "spusť testy",
@@ -70,6 +117,29 @@
       "autopilot_priority": 50,
       "summary": "Sestavi projekt nebo artefakty bez sirokeho host shell pristupu.",
       "recovery_hint": "Zkontroluj build skript nebo hlavni manifest, oprav chybejici build konfiguraci a ověř, že projekt vystaví standardní build entrypoint.",
+      "recovery_rules": [
+        {
+          "contains_any": [
+            "missing script: build",
+            "npm error missing script: build"
+          ],
+          "patch_target": "package.json",
+          "patch_hint": "Doplň package.json:scripts.build na standardní build entrypoint projektu.",
+          "patch_summary": "Přidej build script do package.json:scripts.",
+          "text": "Build capability selhala, protože projekt nemá standardní build script; doplň ho do package.json."
+        },
+        {
+          "contains_any": [
+            "vite: not found",
+            "tsc: not found",
+            "next: not found"
+          ],
+          "patch_target": "package.json",
+          "patch_hint": "Zkontroluj devDependencies a build script. Doplň chybějící build tool nebo oprav script na nástroj, který je opravdu deklarovaný v package.json.",
+          "patch_summary": "Oprav package.json build tooling a dependency deklarace tak, aby build entrypoint existoval i v kontejneru.",
+          "text": "Build blocker ukazuje na chybějící front-end build tool; oprav build script nebo devDependencies v package.json."
+        }
+      ],
       "cues": [
         "postav projekt",
         "build project",
@@ -86,6 +156,29 @@
       "autopilot_priority": 60,
       "summary": "Spusti lint nebo obdobnou statickou kontrolu.",
       "recovery_hint": "Zkontroluj lint skript nebo tool konfiguraci a oprav chybějící lint entrypoint v hlavním manifestu.",
+      "recovery_rules": [
+        {
+          "contains_any": [
+            "missing script: lint",
+            "npm error missing script: lint"
+          ],
+          "patch_target": "package.json",
+          "patch_hint": "Doplň package.json:scripts.lint na standardní lint entrypoint projektu.",
+          "patch_summary": "Přidej lint script do package.json:scripts.",
+          "text": "Lint capability selhala, protože projekt nemá standardní lint script; doplň ho do package.json."
+        },
+        {
+          "contains_any": [
+            "eslint: not found",
+            "ruff: not found",
+            "flake8: not found"
+          ],
+          "patch_target": "package.json",
+          "patch_hint": "Oprav lint tooling konfiguraci a dependency deklarace; pokud jde o Python, zvaž pyproject.toml nebo requirements.txt jako zdroj lint dependency.",
+          "patch_summary": "Doplň nebo oprav lint tooling tak, aby lint entrypoint měl dostupný nástroj.",
+          "text": "Lint blocker ukazuje na chybějící lint nástroj; oprav tooling deklarace nebo lint script."
+        }
+      ],
       "cues": [
         "spust lint",
         "spusť lint",
@@ -117,6 +210,31 @@
       "autopilot_priority": 30,
       "summary": "Zkusi projekt rozbehnout nebo udelat startup smoke bez plneho nasazeni.",
       "recovery_hint": "Zkontroluj startup skript, dev server command nebo hlavni runtime konfiguraci a oprav nejmensi blocker pro lokalni start.",
+      "recovery_rules": [
+        {
+          "contains_any": [
+            "missing script: start",
+            "missing script: dev",
+            "npm error missing script: start",
+            "npm error missing script: dev"
+          ],
+          "patch_target": "package.json",
+          "patch_hint": "Doplň package.json:scripts.start nebo scripts.dev na standardní startup entrypoint projektu.",
+          "patch_summary": "Přidej startup script do package.json:scripts.",
+          "text": "Smoke capability selhala, protože projekt nemá standardní start/dev script; doplň ho do package.json."
+        },
+        {
+          "contains_any": [
+            "uvicorn: not found",
+            "flask: not found",
+            "django-admin: not found"
+          ],
+          "patch_target": "pyproject.toml",
+          "patch_hint": "Zkontroluj Python runtime dependency deklarace a startup command; doplň chybějící server dependency nebo oprav startup entrypoint.",
+          "patch_summary": "Oprav Python startup dependency/config tak, aby smoke běh našel runtime server nástroj.",
+          "text": "Smoke blocker ukazuje na chybějící Python runtime server tooling; oprav startup dependency a entrypoint."
+        }
+      ],
       "cues": [
         "zkus to rozbehnout",
         "zkus to rozběhnout",

@@ -3325,6 +3325,7 @@ def stack_check_unreachable(output: str) -> bool:
 def run_self_check_sequence(args: argparse.Namespace) -> int:
     scenario_runner = Path(__file__).resolve().parent / "mentor_scenario_runner.py"
     filter_route_smoke = Path(__file__).resolve().parent / "filter_route_smoke.py"
+    gateway_recovery_smoke = Path(__file__).resolve().parent / "gateway_recovery_smoke.py"
     gateway_admin = Path(__file__).resolve().parent / "gateway_admin.py"
     chat_scenarios = Path(__file__).resolve().parent / "owui_chat_scenarios.py"
     stateless_chat_smoke = Path(__file__).resolve().parent / "owui_chat_turn_stateless_smoke.py"
@@ -3376,6 +3377,14 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         [
             sys.executable,
             str(stateless_chat_smoke),
+        ],
+        {},
+    ))
+    checks.append((
+        "gateway-recovery-smoke",
+        [
+            sys.executable,
+            str(gateway_recovery_smoke),
         ],
         {},
     ))

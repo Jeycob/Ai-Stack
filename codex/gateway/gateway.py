@@ -1582,19 +1582,59 @@ def workspace_action_failure_recommendation(workspace: str, action: str, action_
 
     manifests = scan.get("manifests") or []
     manifest_names = {Path(rel).name for rel in manifests}
-    if "package.json" in manifest_names:
-        patch_target = "package.json"
-    elif "pyproject.toml" in manifest_names:
-        patch_target = "pyproject.toml"
-    elif manifests:
-        patch_target = manifests[0]
-    else:
-        patch_target = ""
-
     output = str((action_result or {}).get("output", "")).strip()
+    output_lower = output.lower()
+
+    def default_patch_target() -> str:
+        if "package.json" in manifest_names:
+            return "package.json"
+        if "pyproject.toml" in manifest_names:
+            return "pyproject.toml"
+        if manifests:
+            return manifests[0]
+        return ""
+
+    def pick_patch_target(preferred: str) -> str:
+        preferred = str(preferred or "").strip()
+        if preferred:
+            if preferred in manifests or Path(preferred).name in manifest_names:
+                return preferred
+            if preferred == "package.json" and "package.json" in manifest_names:
+                return "package.json"
+            if preferred == "pyproject.toml" and "pyproject.toml" in manifest_names:
+                return "pyproject.toml"
+            if preferred == "requirements.txt" and "requirements.txt" in manifest_names:
+                return "requirements.txt"
+        return default_patch_target()
+
+    def from_recovery_rules() -> dict | None:
+        rules = spec.get("recovery_rules") or []
+        if not isinstance(rules, list):
+            return None
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            needles = [str(item).lower() for item in (rule.get("contains_any") or []) if str(item).strip()]
+            if needles and not any(needle in output_lower for needle in needles):
+                continue
+            patch_target = pick_patch_target(str(rule.get("patch_target", "")).strip())
+            patch_hint = str(rule.get("patch_hint", "")).strip() or generic_hint
+            patch_summary = str(rule.get("patch_summary", "")).strip() or f"Prepare the smallest patch that unblocks {action}."
+            text = str(rule.get("text", "")).strip() or f"Action {action} failed; inspect {patch_target or 'the main manifest'} and apply the smallest fix before retrying."
+            return build(text, patch_target, patch_hint, patch_summary)
+        return None
+
+    patch_target = default_patch_target()
+
     first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
     reason = first_line or str((action_result or {}).get("error", "") or "").strip()
     reason_suffix = f" Failure summary: {reason}" if reason else ""
+
+    matched = from_recovery_rules()
+    if matched:
+        if reason_suffix and matched.get("text"):
+            matched["text"] = str(matched["text"]).rstrip(".") + "." + reason_suffix
+        return matched
 
     if not patch_target:
         return build(

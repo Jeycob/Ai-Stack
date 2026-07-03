@@ -332,6 +332,8 @@ Pro nested helper flow je navíc k dispozici čistě offline regression smoke:
 
 Ten nevolá živé OpenWebUI, ale importuje `owui_chat_turn.py` a ověří, že `--stateless` režim sahá pouze na `/api/chat/completions` a vůbec nečte ani nepřepisuje `/api/v1/chats/...`. Je to pojistka proti návratu re-entrant deadlocku, kdy helper spuštěný přes OpenWebUI zkoušel znovu mutovat stejný audit chat uvnitř jednoho requestu.
 
+Podobně je tu i `codex/bin/gateway_recovery_smoke.py`. Ten bez živého Dockeru nebo OpenWebUI ověří, že `workspace_action_failure_recommendation()` umí z dat v `docs/codex-local-capability-roadmap.json` odvodit konkrétnější patch guidance pro časté fail signatury jako `missing script: test`, `vite: not found`, `missing script: dev` nebo neplatnou Python dependency při install kroku. Je to malý guard proti návratu k příliš obecnému “zkontroluj manifest” recovery textu.
+
 Stejnou věc jde teď spouštět i přes hlavní mentor helper, aby scénářový smoke nebyl další izolovaný nástroj bokem:
 
     python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --list
