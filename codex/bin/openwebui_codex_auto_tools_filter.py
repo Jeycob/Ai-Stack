@@ -1065,11 +1065,43 @@ class Filter:
                     return shlex.quote(candidate[:200])
         return shlex.quote("Update ai-stack via codex-local")
 
+    def _bootstrap_improve_helper_command(self, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "bootstrap-improve",
+            "ai-stack",
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE ai-stack --timeout 240 -- {shlex.join(command)}"
+
     def _natural_create_repo_command(self, text: str) -> str | None:
         lower = text.lower()
         create_words = ["vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav"]
         repo_words = ["repository", "repozitar", "repozitář", "repo ", "projekt ", "workspace "]
         setup_words = ["ssh key", "ssh klic", "ssh klíč", "github", "deploy key", "git remote", "origin"]
+        followthrough_words = [
+            "doinstaluj",
+            "nainstaluj",
+            "install",
+            "zavislost",
+            "závislost",
+            "napis kod",
+            "napiš kód",
+            "implementuj",
+            "udelej appku",
+            "udělej appku",
+            "rozbehni",
+            "rozběhni",
+            "spust to",
+            "spusť to",
+            "build",
+            "testy",
+            "dotahni",
+            "dotáhni",
+            "co je treba",
+            "co je třeba",
+        ]
         has_create = any(word in lower for word in create_words)
         has_repo = any(word in lower for word in repo_words)
         has_setup = any(word in lower for word in setup_words)
@@ -1090,6 +1122,9 @@ class Filter:
             name = match.group(1)
             if name.lower() in {"ai-stack", "smoke"}:
                 return None
+            if any(word in lower for word in followthrough_words):
+                task = " ".join(self._non_repo_lines(text)).strip() or text.strip()
+                return self._bootstrap_improve_helper_command(task)
             github = " --github" if "github" in lower else ""
             return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {name}{github} --restart"
         return None

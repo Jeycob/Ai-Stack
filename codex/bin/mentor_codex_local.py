@@ -46,6 +46,7 @@ WORKFLOW_PRIORITY = {
     "release-prep": 89,
     "push-check": 89,
     "push": 88,
+    "bootstrap-improve": 86,
     "autopilot": 85,
     "create-repo": 80,
     "apply-safe": 75,
@@ -388,6 +389,42 @@ def wants_github_repo(task: str) -> bool:
     return "github" in lower or "git@github.com" in lower
 
 
+def wants_repo_followthrough(task: str) -> bool:
+    lower = task.lower()
+    cues = (
+        "doinstaluj",
+        "nainstaluj",
+        "install",
+        "zavislost",
+        "závislost",
+        "napis kod",
+        "napiš kód",
+        "implementuj",
+        "vytvor aplikaci",
+        "vytvoř aplikaci",
+        "udelej appku",
+        "udělej appku",
+        "udelej projekt",
+        "udělej projekt",
+        "rozbehni",
+        "rozběhni",
+        "spust to",
+        "spusť to",
+        "pust to",
+        "postav to",
+        "build",
+        "otestuj",
+        "testy",
+        "run it",
+        "shipni",
+        "dotahni",
+        "dotáhni",
+        "co je treba",
+        "co je třeba",
+    )
+    return any(cue in lower for cue in cues)
+
+
 def infer_workspace_action(task: str) -> str:
     lower = task.lower()
     action_map = [
@@ -436,6 +473,18 @@ def classify_task(task: str) -> dict[str, str]:
         }
 
     repo_name = extract_create_repo_name(task)
+    if repo_name and wants_repo_followthrough(task):
+        return result(
+            "capability",
+            "bootstrap-improve",
+            "The task asks not only for repository bootstrap, but also for follow-through work such as setup, implementation, or running the project.",
+            "high",
+            "This should stay inside audited bootstrap plus workspace improvement flow rather than falling back to a generic unrestricted agent.",
+            "workspace_repo_bootstrap",
+            "If bootstrap plus improve still cannot finish the task, add the next named workspace capability instead of widening shell access blindly.",
+            repo_name=repo_name,
+            repo_github="yes" if wants_github_repo(task) else "no",
+        )
     if repo_name:
         return result(
             "capability",
@@ -1217,6 +1266,11 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
         run_args.command = command
         return build_and_invoke_mode(run_args)
 
+    if workflow == "bootstrap-improve":
+        bootstrap_args = argparse.Namespace(**vars(args))
+        bootstrap_args.mode = "bootstrap-improve"
+        return build_and_invoke_mode(bootstrap_args)
+
     routed = argparse.Namespace(**vars(args))
     if workflow == "action":
         routed.mode = "action"
@@ -1260,6 +1314,8 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
         repo_name = decision.get("repo_name", "")
         github_flag = " --github" if decision.get("repo_github") == "yes" else ""
         return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+    if workflow == "bootstrap-improve":
+        return f"python3 codex/bin/mentor_codex_local.py bootstrap-improve {workspace} {shlex.quote(task)}"
     if workflow == "deploy":
         return "python3 codex/bin/mentor_codex_local.py deploy"
     if workflow == "publish-plan":
@@ -1300,6 +1356,10 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
         if repo_name:
             suffix = " a rovnou připrav i GitHub remote." if decision.get("repo_github") == "yes" else "."
             return f"repo: ai-stack\nVytvoř nové repository {repo_name}{suffix}"
+    if workflow == "bootstrap-improve":
+        repo_name = decision.get("repo_name", "")
+        if repo_name:
+            return f"repo: ai-stack\nVytvoř repository {repo_name}, připrav workspace a pokračuj s bootstrapem co nejdál."
     if workflow == "deploy":
         return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
     if workflow == "publish-plan":
@@ -1350,6 +1410,10 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
         repo_name = decision.get("repo_name", "")
         lines.append(f"goal=bootstrap repository {repo_name or '(unspecified)'} through the audited create-repo workflow")
         lines.append("guardrail=use repo bootstrap capability instead of broad host/runtime mutation")
+    elif workflow == "bootstrap-improve":
+        repo_name = decision.get("repo_name", "")
+        lines.append(f"goal=bootstrap repository {repo_name or '(unspecified)'}, register the workspace, and then continue with audited improve flow")
+        lines.append("guardrail=use named bootstrap plus workspace-improve capabilities instead of generic unrestricted repo setup")
     elif workflow == "deploy":
         lines.append("goal=run the audited ai-stack deploy flow with pull, restart, and smoke checks")
         lines.append("guardrail=prefer named deploy flow over ad-hoc docker or root commands")
@@ -1561,6 +1625,14 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
             steps.append(("post-create", "verify GitHub remote, deploy key, and workspace registration"))
         else:
             steps.append(("post-create", "verify workspace registration and initial git status"))
+        return steps
+
+    if workflow == "bootstrap-improve":
+        repo_name = decision.get("repo_name", "")
+        github_hint = " with GitHub remote" if decision.get("repo_github") == "yes" else ""
+        steps.append(("bootstrap", f"create and register repository {repo_name or '(unspecified)'}{github_hint}"))
+        steps.append(("improve", recommended_next_step(decision, workspace, task)))
+        steps.append(("post-bootstrap-check", f"verify new workspace {repo_name or '(unspecified)'} status, then continue with install/test/build or a minimal patch"))
         return steps
 
     if workflow == "deploy":
@@ -1849,6 +1921,45 @@ def run_publish_plan_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    repo_name = decision.get("repo_name", "").strip()
+    if not repo_name:
+        print("BOOTSTRAP_IMPROVE_BLOCKED\nreason=repo name could not be inferred from task")
+        return 0
+
+    create_args = argparse.Namespace(**vars(args))
+    create_args.mode = "create-repo"
+    create_args.name = repo_name
+    create_args.github = decision.get("repo_github") == "yes"
+    create_args.restart = True
+    rc = build_and_invoke_mode(create_args)
+    if rc != 0:
+        return rc
+
+    improve_args = argparse.Namespace(**vars(args))
+    improve_args.mode = "improve"
+    improve_args.workspace = repo_name
+    improve_args.mentor_visible_context = prefixed_block(
+        "Mentor brief:",
+        (
+            f"- bootstrap source task: {args.task}\n"
+            f"- bootstrap repo: {repo_name}\n"
+            "- follow-through: continue with audited workspace setup and improvement after repository creation"
+        ),
+    )
+    improve_args.mentor_technical_context = prefixed_block(
+        "MENTOR_EXECUTION_BRIEF",
+        (
+            f"workspace={repo_name}\n"
+            f"bootstrap_source_task={args.task}\n"
+            "workflow=bootstrap-improve\n"
+            "goal=continue from repository bootstrap into audited install/test/build or safe patch progression"
+        ),
+    )
+    return run_improve_sequence(improve_args)
+
+
 def run_boundary_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"MENTOR_BOUNDARY_WORKSPACE={args.workspace}")
@@ -1890,6 +2001,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_publish_plan_sequence(args)
     if args.mode == "release-prep":
         return run_release_prep_sequence(args)
+    if args.mode == "bootstrap-improve":
+        return run_bootstrap_improve_sequence(args)
     if args.mode == "push-check":
         visible, technical = build_prompts(args)
         rc, _ = invoke_turn(args, visible, technical)
@@ -2101,6 +2214,14 @@ def parse_args() -> argparse.Namespace:
     create_repo.add_argument("--github", action="store_true")
     create_repo.add_argument("--restart", action="store_true")
     create_repo.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
+    bootstrap_improve = sub.add_parser("bootstrap-improve", help="Bootstrap a new repository/workspace and then continue with audited improve flow")
+    bootstrap_improve.add_argument("workspace", help="Controller workspace, typically ai-stack")
+    bootstrap_improve.add_argument("task")
+    bootstrap_improve.add_argument("--timeout", type=int, default=2400)
+    bootstrap_improve.add_argument("--max-steps", type=int, default=2)
+    bootstrap_improve.add_argument("--allow-actions", default="install,test,build,lint")
+    bootstrap_improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
     return parser.parse_args()
 

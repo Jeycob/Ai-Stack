@@ -75,11 +75,12 @@ ai-stack a nasad", "ukaz deploy status", preflight push dotazy jako
 "zkontroluj release readiness" nebo "co blokuje release", jednoduche publish zadani jako
 "pushni zmeny do GitHubu" nebo "commitni a pushni", bootstrap zadani jako
 "vytvor nove repository Test2 a vygeneruj ssh klic", "zaloz projekt Test2 na GitHubu" nebo
-"priprav workspace Test2 s deploy key", bezne repo kontroly typu "zkontroluj git status",
+"priprav workspace Test2 s deploy key", a u sirsich bootstrap use-casu i formulace typu
+"vytvor repository Test2, doinstaluj co chybi a zkus to rozbehnout", bezne repo kontroly typu "zkontroluj git status",
 developerske workflow typu "nainstaluj zavislosti" nebo "spust testy", a
 explicitni "repo: X / spust prikaz: ...". Nemel by vyrabet novy marker pro
 kazdou drobnost; cilem jsou sirsi capability workflow: deploy/status,
-workspace-run, workspace-action, workspace-autopilot, create-repo recipe a pozdeji dalsi
+workspace-run, workspace-action, workspace-autopilot, create-repo recipe, bootstrap-improve recipe a pozdeji dalsi
 profile-based schopnosti.
 Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
@@ -142,6 +143,8 @@ auditovanych capabilities. Prakticky to znamena:
 - pouzivat `workspace-action` pro install/test/build/lint/verify,
 - pro vicekrokovou praci pouzivat `mentor_codex_local.py audit` nebo
   `mentor_codex_local.py autopilot`,
+- pro nove repo/workspace use-casy, kde bootstrap hned prechazi do dalsi prace,
+  pouzivat `mentor_codex_local.py bootstrap-improve`,
 - pro review-to-patch mentoring loop pouzivat `mentor_codex_local.py patch-plan`,
 - pro pripravu maleho diff navrhu nad auditem pouzivat `mentor_codex_local.py apply-ready`,
 - pro maly auditovany patch v bezpecnem scope pouzivat `mentor_codex_local.py apply-safe`,
@@ -196,6 +199,13 @@ Priklad delegacniho loopu, ktery z textu ukolu sam zvoli nejvhodnejsi orchestrac
 
 ```bash
 python3 codex/bin/mentor_codex_local.py delegate ai-stack "Fixni to a dotahni co zvladnes."
+```
+
+Priklad sirsiho repo bootstrapu, ktery nejdriv repo zalozi a zaregistruje a pak
+nad nim rovnou pokracuje pres `improve`:
+
+```bash
+python3 codex/bin/mentor_codex_local.py bootstrap-improve ai-stack "Vytvor nove repository Test2, doinstaluj co chybi a zkus to rozbehnout."
 ```
 
 Priklad profilove klasifikace bez spousteni jakychkoli akci:
