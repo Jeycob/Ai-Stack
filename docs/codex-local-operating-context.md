@@ -91,6 +91,15 @@ Kdyz chybi OpenWebUI API key, chat scenare se automaticky prepnou do `dry-run`
 rezimu a report je oznaci jako `degraded`. Cilem je, aby self-check zustal
 uzitecny i mimo plne bezici runtime.
 
+Pokud ale potrebujes opravdu plny zivy dukaz pres audit chat, pouzij:
+
+```bash
+python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok a dotahni co pujde." --strict-live
+```
+
+`--strict-live` nedovoli fallback do `dry-run`. Bez OpenWebUI API key skonci
+okamzite jako blocker, protoze z pohledu mentora nejde o plny E2E dukaz.
+
 `codex/bin/check_ai_stack.sh` umi tenhle audit-chat smoke pridat do bezneho
 stack healthchecku automaticky. Pokud je k dispozici OpenWebUI API key, po
 gateway smoke pusti i `owui_chat_smoke.py`. Bez key se tenhle krok jen preskoci

@@ -297,6 +297,12 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 
 Když chybí OpenWebUI API key, chat scénáře se v `self-check` automaticky přepnou do `dry-run` režimu a report je označí jako `degraded` místo falešného tvrdého failu. Díky tomu jde self-check pouštět i v lokálním klonu, kde zrovna nemáš k dispozici celý běžící stack.
 
+Když naopak chceš opravdu plný živý důkaz přes OpenWebUI chat, použij:
+
+    python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok a dotahni co pujde." --strict-live
+
+`--strict-live` nedovolí fallback do `dry-run`. Pokud není dostupný OpenWebUI API key, skončí hned s jasným blockerem místo “degraded” režimu.
+
 `codex/bin/check_ai_stack.sh` to teď umí použít i automaticky. Když je dostupný OpenWebUI API key přes `OWUI_API_KEY` nebo ignorovaný `codex/state/openwebui-api.key`, healthcheck po gateway smoke přidá i audit-chat smoke. Pokud key chybí, krok se jen korektně přeskočí. Vypnout ho jde přes `SKIP_OWUI_CHAT_SMOKE=1`.
 
 Stejný healthcheck teď umí po základním audit-chat smoke spustit i lehké user-like scénáře přes `owui_chat_scenarios.py`. Výchozí sada je záměrně levná (`git-status,next-step`), aby šlo rychle ověřit, že pořád funguje i přirozený route přes filter a capability vrstvu, ne jen úzký technický smoke. Chování jde řídit přes:

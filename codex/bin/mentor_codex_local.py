@@ -2577,6 +2577,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
     stack_check = Path(__file__).resolve().parent / "check_ai_stack.sh"
     api_key_file = Path(getattr(args, "api_key_file", str(Path(__file__).resolve().parents[1] / "state/openwebui-api.key")))
     has_owui_key = bool(os.getenv(getattr(args, "api_key_env", "OWUI_API_KEY"), "").strip()) or api_key_file.is_file()
+    strict_live = bool(getattr(args, "strict_live", False))
 
     checks: list[tuple[str, list[str], dict[str, str]]] = []
     checks.append((
@@ -2620,6 +2621,30 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
 
     results = []
     overall_ok = True
+    if strict_live and not has_owui_key:
+        payload = {
+            "workspace": args.workspace,
+            "task": args.task,
+            "model": args.model,
+            "ok": False,
+            "strict_live": True,
+            "reason": "OpenWebUI API key is required for strict live self-check.",
+            "check_count": 0,
+            "results": [],
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 1
+        print("MENTOR_SELF_CHECK")
+        print(f"workspace={args.workspace}")
+        print(f"task={args.task}")
+        print(f"model={args.model}")
+        print("ok=False")
+        print("strict_live=True")
+        print("reason=OpenWebUI API key is required for strict live self-check.")
+        print("check_count=0")
+        return 1
+
     for name, command, extra_env in checks:
         effective_command = list(command)
         expected_mode = "live"
@@ -2663,6 +2688,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         "task": args.task,
         "model": args.model,
         "ok": overall_ok,
+        "strict_live": strict_live,
         "check_count": len(results),
         "results": results,
     }
@@ -2676,6 +2702,7 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
     print(f"task={args.task}")
     print(f"model={args.model}")
     print(f"ok={overall_ok}")
+    print(f"strict_live={strict_live}")
     print(f"check_count={len(results)}")
     for result in results:
         print(f"CHECK={result['name']}")
@@ -2937,6 +2964,7 @@ def parse_args() -> argparse.Namespace:
     self_check.add_argument("task", nargs="?", default="Navrhni dalsi krok a dotahni co pujde.")
     self_check.add_argument("--json", action="store_true", help="Emit JSON results")
     self_check.add_argument("--skip-openwebui", action="store_true", help="Skip OpenWebUI endpoint check inside stack summary")
+    self_check.add_argument("--strict-live", action="store_true", help="Require live OpenWebUI chat checks; fail immediately if API key is unavailable")
 
     top = sub.add_parser("top", help="Return only the current top-priority task from a multi-task set, with reason and execution brief")
     top.add_argument("workspace")
