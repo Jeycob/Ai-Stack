@@ -294,13 +294,14 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 
     python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok a dotahni co pujde."
 
-`self-check` skládá tři vrstvy do jednoho reportu:
+`self-check` skládá několik levných kontrol do jednoho reportu:
 - `mentor_scenario_runner.py` pro levný helper-orchestration smoke,
 - helper-only `bootstrap-probe` pro ověření bootstrap/create-repo reasoning bez mutací,
+- `filter_route_smoke.py` pro offline ověření, že přirozené OpenWebUI prompty routeují na správné admin/capability workflow,
 - `chat-scenarios` pro user-like OpenWebUI audit chat flow, včetně širší autonomy/profile vrstvy,
 - `check_ai_stack.sh` pro stack summary.
 
-Když chybí OpenWebUI API key, chat scénáře se v `self-check` automaticky přepnou do `dry-run` režimu a report je označí jako `degraded` místo falešného tvrdého failu. Díky tomu jde self-check pouštět i v lokálním klonu, kde zrovna nemáš k dispozici celý běžící stack.
+`filter_route_smoke.py` je záměrně offline: importuje `Codex Auto Tools Filter` přímo a ověřuje například, že `Navrhni další krok.` zůstane recommend-only autopilot, zatímco `Navrhni další krok a dotáhni co půjde.` se přepíše na mentor `delegate`. Když chybí OpenWebUI API key, chat scénáře se v `self-check` automaticky přepnou do `dry-run` režimu a report je označí jako `degraded` místo falešného tvrdého failu. Díky tomu jde self-check pouštět i v lokálním klonu, kde zrovna nemáš k dispozici celý běžící stack.
 
 Když naopak chceš opravdu plný živý důkaz přes OpenWebUI chat, použij:
 

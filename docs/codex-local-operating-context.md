@@ -89,6 +89,8 @@ python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok 
 Tenhle mod sklada:
 - helper smoke pres `mentor_scenario_runner.py`
 - helper-only `bootstrap-probe` pro create-repo/bootstrap reasoning bez mutaci
+- offline `filter_route_smoke.py`, ktery importuje OpenWebUI auto-tools filter
+  primo a overuje prirozene prompt -> admin/capability routy bez beziciho UI
 - user-like audit chat scenare, vcetne autonomy/profile routingu
 - stack summary pres `check_ai_stack.sh`
 

@@ -7,10 +7,22 @@ description: Dynamically attaches Codex toolsets and routes broader codex-local 
 
 import json
 from pathlib import Path
-from pydantic import BaseModel, Field
 from typing import Optional
 import re
 import shlex
+
+try:
+    from pydantic import BaseModel, Field
+except ModuleNotFoundError:  # pragma: no cover - used by lightweight local smoke tests
+    def Field(default=None, **_: object):
+        return default
+
+    class BaseModel:
+        def __init__(self, **kwargs):
+            for name, value in self.__class__.__dict__.items():
+                if name.startswith("_") or callable(value):
+                    continue
+                setattr(self, name, kwargs.get(name, value))
 
 
 class Filter:

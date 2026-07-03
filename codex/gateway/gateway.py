@@ -5,9 +5,14 @@
 # gateway-scheduled-chat-patch: ok
 # gateway-chat-no-error-patch: ok
 # gateway-chat-fast-ack-patch: ok
-import json, os, re, subprocess, time, uuid, urllib.error, urllib.request
+import json, os, re, subprocess, sys, time, uuid, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parents[1] / "bin"
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
 from workspace_scan import collect, load_workspace
 
 WORKSPACES_FILE = os.getenv("CODEX_WORKSPACES_FILE", "/mnt/c/Repositories/ai-stack/codex/workspaces.json")
