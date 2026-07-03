@@ -371,6 +371,20 @@ Tahle zmena je dulezita, protoze dalsi capability kroky jako `smoke`, `verify`
 nebo `pytest` uz pak navazuji na realny service starter, ne jen na prazdny repo
 s nainstalovanymi balicky.
 
+Stejny princip uz plati i pro `node-service`: scaffolder
+`codex/bin/scaffold_node_service.py` nevytvori jen package manifest, ale i
+minimalni TypeScript/Express kostru se skripty `build`, `test`, `smoke`.
+Prakticky to znamena, ze follow-up capability kroky umi navazat na realny
+starter bez dalsi bespoke logiky - `install` jde pres `npm install`, `test`
+pres `npm test`, `build` pres `npm run build` a `smoke` pres pripraveny script.
+
+Stejny princip ted plati i pro `react-app`: misto zavislosti na externim
+`npm create` ma vlastni audited starter `codex/bin/scaffold_react_app.py`,
+ktery vytvori maly Vite/React/TypeScript baseline vcetne `src/App.test.tsx`,
+`vite.config.ts` a zakladniho README bloku. To je dulezite hlavne pro sirsi
+autonomii, protoze `bootstrap-dispatch` pak umi rovnou navazat na `install`,
+`test`, `smoke` a `build` bez dalsiho improvizovaneho scaffold kroku.
+
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
 Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen

@@ -80,6 +80,18 @@ SCENARIOS: dict[str, Scenario] = {
         prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2, priprav starter, napis zaklad appky a pokracuj sam.",
         expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "bootstrap-improve"),
     ),
+    "mentor-brief-react-scaffold": Scenario(
+        name="mentor-brief-react-scaffold",
+        description="Natural mentor-brief request that should expose the React scaffold token in the routed bootstrap brief.",
+        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako React appku, priprav starter a pokracuj sam.",
+        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_react_app"),
+    ),
+    "mentor-brief-fastapi-scaffold": Scenario(
+        name="mentor-brief-fastapi-scaffold",
+        description="Natural mentor-brief request that should expose the FastAPI scaffold token in the routed bootstrap brief.",
+        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako FastAPI service, priprav starter a pokracuj sam.",
+        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_fastapi_service"),
+    ),
 }
 
 

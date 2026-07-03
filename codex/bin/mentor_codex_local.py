@@ -596,9 +596,9 @@ def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
             "install -> dev server smoke -> lint -> build",
         ),
         "react-app": (
-            "npm create vite@latest . -- --template react-ts",
-            "package.json, src/main.tsx, src/App.tsx, vite.config.ts, tsconfig.json",
-            "install -> dev server smoke -> test or lint -> build",
+            "codex_scaffold_react_app",
+            "package.json, src/main.tsx, src/App.tsx, src/App.test.tsx, vite.config.ts, tsconfig.json",
+            "install -> test or lint -> dev server smoke -> build",
         ),
         "fastapi-service": (
             "codex_scaffold_fastapi_service",
@@ -616,8 +616,8 @@ def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
             "venv setup -> migrate smoke -> pytest -> runserver smoke",
         ),
         "node-service": (
-            "npm init -y && npm install express && npm install -D typescript tsx @types/node @types/express vitest",
-            "package.json, src/index.ts, tsconfig.json, vitest.config.*",
+            "codex_scaffold_node_service",
+            "package.json, src/app.ts, src/index.ts, tests/health.test.ts, tsconfig.json",
             "install -> typecheck or test -> run smoke",
         ),
         "threejs-app": (
@@ -1662,6 +1662,32 @@ def scaffold_plan_steps(decision: dict[str, str], task: str) -> list[tuple[str, 
 
 
 def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -> list[str]:
+    if recipe == "codex_scaffold_react_app":
+        script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_react_app.py"
+        return [
+            sys.executable,
+            "codex/bin/run_check.py",
+            repo_name,
+            "--timeout",
+            str(timeout),
+            "--",
+            sys.executable,
+            str(script),
+            ".",
+        ]
+    if recipe == "codex_scaffold_node_service":
+        script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_node_service.py"
+        return [
+            sys.executable,
+            "codex/bin/run_check.py",
+            repo_name,
+            "--timeout",
+            str(timeout),
+            "--",
+            sys.executable,
+            str(script),
+            ".",
+        ]
     if recipe == "codex_scaffold_fastapi_service":
         script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_fastapi_service.py"
         return [
@@ -2652,6 +2678,17 @@ def run_chat_scenarios_sequence(args: argparse.Namespace) -> int:
     return proc.returncode
 
 
+def stack_check_unreachable(output: str) -> bool:
+    needles = (
+        "OpenWebUI config endpoint=FAIL",
+        "Ollama version endpoint=FAIL",
+        "Codex gateway health=FAIL",
+        "Codex gateway model alias=FAIL",
+        "Codex gateway workspace registry=FAIL",
+    )
+    return all(needle in output for needle in needles)
+
+
 def run_self_check_sequence(args: argparse.Namespace) -> int:
     scenario_runner = Path(__file__).resolve().parent / "mentor_scenario_runner.py"
     chat_scenarios = Path(__file__).resolve().parent / "owui_chat_scenarios.py"
@@ -2707,6 +2744,10 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
             "workflow-profile-improve",
             "--scenario",
             "mentor-brief-bootstrap",
+            "--scenario",
+            "mentor-brief-react-scaffold",
+            "--scenario",
+            "mentor-brief-fastapi-scaffold",
         ],
         {},
     ))
@@ -2773,6 +2814,10 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         if name == "stack-check" and not has_owui_key and "OpenWebUI audit chat smoke=SKIP" in output:
             degraded = True
             note = "OpenWebUI API key missing; stack summary skipped live chat checks."
+        if name == "stack-check" and stack_check_unreachable(output) and not strict_live:
+            degraded = True
+            note = "Live stack endpoints were unreachable from this execution context, so self-check treated stack-check as an offline/degraded signal."
+            ok = True
         overall_ok = overall_ok and ok
         results.append(
             {

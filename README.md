@@ -389,7 +389,7 @@ Bootstrap-improve navíc nově nese i lehký `solution_profile` a `starter_hint`
 
 K tomu se teď přidává i `public_stack` a `public_stack_rationale`: mentor pro běžné stacky rovnou doporučí osvědčené veřejné balíčky a tooling, třeba `fastapi, uvicorn, pydantic-settings, pytest, httpx` pro FastAPI nebo `vite, react, typescript, vitest, @testing-library/react` pro React. Cíl je jednoduchý: codex-local má víc reuseovat etablované moduly a méně vyrábět vlastní boilerplate.
 
-Poslední vrstva jsou `scaffold_recipe`, `scaffold_files` a `scaffold_loop`. Tady už mentor pro známé stacky neposílá jen obecné doporučení, ale i konkrétní první bootstrap recipe, klíčové soubory a doporučený ověřovací sled. Například pro React vrátí `npm create vite@latest . -- --template react-ts`, očekávané soubory `package.json, src/main.tsx, src/App.tsx, vite.config.ts, tsconfig.json` a loop `install -> dev server smoke -> test or lint -> build`.
+Poslední vrstva jsou `scaffold_recipe`, `scaffold_files` a `scaffold_loop`. Tady už mentor pro známé stacky neposílá jen obecné doporučení, ale i konkrétní první bootstrap recipe, klíčové soubory a doporučený ověřovací sled. Například pro React dnes vrátí audited scaffold token `codex_scaffold_react_app`, očekávané soubory `package.json, src/main.tsx, src/App.tsx, src/App.test.tsx, vite.config.ts, tsconfig.json` a loop `install -> test or lint -> dev server smoke -> build`.
 
 Nad tím je teď i samostatný helper `scaffold-plan`, který z bootstrap-oriented zadání vytáhne právě tenhle konkrétní starter plán bez spuštění jakékoli akce. Je to levný mezikrok mezi čistým profilem a plným `bootstrap-improve`: nejdřív si můžeš nechat vypsat scaffold recipe, očekávané soubory a verifikační sled, a teprve potom pustit samotný bootstrap nebo improve workflow.
 
@@ -399,9 +399,11 @@ Nově navíc `bootstrap-dispatch` nekončí jen u prvního scaffold commandu. Ze
 
 Zároveň už `bootstrap-dispatch` nerozbíhá nesmyslné pseudo-commandy. Pokud je `scaffold_recipe` jen popisný plán a ne skutečně spustitelný shell command, helper to označí jako `SCAFFOLD_RECIPE_MODE=manual` a vrátí jasný blocker s dalším krokem místo toho, aby se snažil pustit text typu “use CMake scaffold plus glfw...”.
 
-První takhle dříve blokovaný profil už jsme rovnou posunuli do reálné capability vrstvy: `opengl-native` má nově dedikovaný audited scaffolder `codex/bin/scaffold_opengl_native.py`. `bootstrap-dispatch` ho umí přeložit do skutečného guardrailed runneru přes `run_check.py`, takže OpenGL starter už není jen roadmap poznámka, ale opravdový první bootstrap krok.
+První takhle dříve blokované profily už jsme rovnou posunuli do reálné capability vrstvy: `opengl-native`, `fastapi-service`, `node-service` a nově i `react-app` mají dedikované audited scaffoldery v `codex/bin/`. `bootstrap-dispatch` je umí přeložit do skutečného guardrailed runneru přes `run_check.py`, takže tyhle startery už nejsou jen roadmap poznámka, ale opravdový první bootstrap krok.
 
 Stejným směrem je teď posunutý i `fastapi-service`. Místo pouhého `pip install ...` recipe má vlastní scaffolder `codex/bin/scaffold_fastapi_service.py`, který vytvoří minimální kostru `app/main.py`, `app/config.py`, `tests/test_health.py`, `requirements.txt` a doplní provozní poznámky do README. Díky tomu bootstrap neznamená jen nainstalované balíčky, ale i skutečný běžitelný starter, na který už může navázat `smoke`, `verify` nebo `pytest`.
+
+Stejný upgrade teď dostal i `node-service`: nový `codex/bin/scaffold_node_service.py` vytvoří `package.json` se skripty `build`, `test`, `smoke`, plus `src/app.ts`, `src/index.ts`, `tests/health.test.ts` a `tsconfig.json`. To je důležité hlavně pro auditované follow-up kroky, protože `workspace_action.py` pak už nad takovým starterem umí přirozeně použít `npm install`, `npm test`, `npm run build` i `npm run smoke`.
 
 Kvůli tokenům má mentor nově i lehčí `compact execution brief` větev. Používá se tam, kde jde hlavně o orchestration handoff mezi helpery a není potřeba znovu posílat celý reasoning blok. Zachovává jen minimum: `workspace`, `workflow`, případně `solution_profile`, `public_stack`, `scaffold_recipe`, `scaffold_loop`, `next_scope_hint` a `next_helper`.
 
