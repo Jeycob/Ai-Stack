@@ -334,6 +334,12 @@ Ten nevolá živé OpenWebUI, ale importuje `owui_chat_turn.py` a ověří, že 
 
 Podobně je tu i `codex/bin/gateway_recovery_smoke.py`. Ten bez živého Dockeru nebo OpenWebUI ověří, že `workspace_action_failure_recommendation()` umí z dat v `docs/codex-local-capability-roadmap.json` odvodit konkrétnější patch guidance pro časté fail signatury jako `missing script: test`, `vite: not found`, `missing script: dev` nebo neplatnou Python dependency při install kroku. Je to malý guard proti návratu k příliš obecnému “zkontroluj manifest” recovery textu.
 
+Ještě jedna levná pojistka je `codex/bin/gateway_admin_run_workspace_smoke.py`. Ten neklepe na živou gateway, ale importuje `openwebui_gateway_admin_filter.py` a ověří, že starší nebo ručně vložené nested helper commandy dostanou před spuštěním bezpečný stateless tvar. Prakticky hlídá dvě věci:
+- `python3 codex/bin/mentor_codex_local.py delegate ...` dostane automaticky `--stateless-turns`,
+- `python3 codex/bin/owui_chat_turn.py ...` dostane automaticky `--stateless`.
+
+To je důležité jako druhá obranná linie proti rekurzi `OpenWebUI chat -> helper -> stejný chat`, i kdyby někde zůstal starý builder bez stateless flagu.
+
 Stejnou věc jde teď spouštět i přes hlavní mentor helper, aby scénářový smoke nebyl další izolovaný nástroj bokem:
 
     python3 codex/bin/mentor_codex_local.py chat-scenarios ai-stack --list
@@ -348,6 +354,7 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 - helper-only `bootstrap-probe` pro ověření bootstrap/create-repo reasoning bez mutací,
 - `filter_route_smoke.py` pro offline ověření, že přirozené OpenWebUI prompty routeují na správné admin/capability workflow,
 - `owui_chat_turn_stateless_smoke.py` pro regression guard nad nested OpenWebUI helper flow,
+- `gateway_admin_run_workspace_smoke.py` pro regression guard nad automatickou stateless normalizací starších helper commandů,
 - `chat-scenarios` pro user-like OpenWebUI audit chat flow, včetně širší autonomy/profile vrstvy,
 - `check_ai_stack.sh` pro stack summary.
 

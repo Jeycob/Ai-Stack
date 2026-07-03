@@ -3388,6 +3388,15 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         ],
         {},
     ))
+    gateway_admin_run_workspace_smoke = Path(__file__).resolve().parent / "gateway_admin_run_workspace_smoke.py"
+    checks.append((
+        "gateway-admin-run-workspace-smoke",
+        [
+            sys.executable,
+            str(gateway_admin_run_workspace_smoke),
+        ],
+        {},
+    ))
     checks.append((
         "gateway-admin-dry-run",
         [

@@ -337,6 +337,48 @@ class Filter:
             )
         )
 
+    def _looks_like_read_only_repo_analysis(self, text: str) -> bool:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return False
+        lower = text.lower()
+        read_only_cues = (
+            "nic needituj",
+            "bez editace",
+            "jen analyzuj",
+            "jen analysis",
+            "jen popis",
+            "jen vysvetli",
+            "jen vysvětli",
+            "jen rekni",
+            "jen řekni",
+            "jen navrhni",
+            "jen navrh",
+            "read-only",
+        )
+        analysis_cues = (
+            "architekt",
+            "blocker",
+            "blokery",
+            "rizika",
+            "vrstvy",
+            "jak je zapojena",
+            "jak je zapojená",
+            "jak je postaven",
+            "jak je postaveny",
+            "jak je postavený",
+            "popis strukturu",
+            "prohledni strukturu",
+            "prohlédni strukturu",
+            "navrhni dalsi bezpecny krok",
+            "navrhni další bezpečný krok",
+            "safe next step",
+            "autonomie",
+            "analyzuj projekt",
+            "analyzuj architekturu",
+        )
+        return any(cue in lower for cue in read_only_cues) and any(cue in lower for cue in analysis_cues)
+
     def _looks_like_workspace_action(self, text: str) -> str | None:
         lower = text.lower()
         for action, spec in self.workspace_actions.items():
@@ -438,6 +480,9 @@ class Filter:
                     f"GATEWAY_ADMIN_EXPLAIN_FILE {shlex.quote(workspace)} {shlex.quote(rel)} "
                     f"1 400 -- {shlex.quote(question[:1200])}"
                 )
+
+        if workspace and self._looks_like_read_only_repo_analysis(text):
+            return None
 
         if workspace and any(cue in lower for cue in ("ssh", "klic", "klíč", "key", "github")) and any(
             cue in lower for cue in ("vygeneruj", "vytvor", "vytvoř", "generate", "create")
@@ -1364,6 +1409,7 @@ class Filter:
             raise ValueError("GATEWAY_ADMIN_RUN_WORKSPACE command is empty")
         if timeout < 1 or timeout > 1800:
             raise ValueError("Timeout must be between 1 and 1800 seconds")
+        command = self._canonicalize_nested_helper_command(command)
         if any("mentor_codex_local.py" in item or "owui_chat_turn.py" in item for item in command):
             background = True
             env_map.setdefault("OWUI_STATELESS", "1")
@@ -1449,6 +1495,24 @@ class Filter:
                 key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{helper_workspace}")[:64].strip("-") or "github-workspace"
                 return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(helper_workspace + '@local')}"
         return None
+
+    def _canonicalize_nested_helper_command(self, command: list[str]) -> list[str]:
+        normalized = list(command)
+        if len(normalized) >= 2 and normalized[0] == "python3":
+            script = normalized[1]
+            if script == "codex/bin/mentor_codex_local.py":
+                if "--stateless-turns" not in normalized:
+                    mode_idx = None
+                    for idx in range(2, len(normalized)):
+                        if not normalized[idx].startswith("--"):
+                            mode_idx = idx
+                            break
+                    if mode_idx is not None:
+                        normalized.insert(mode_idx + 1, "--stateless-turns")
+            elif script == "codex/bin/owui_chat_turn.py":
+                if "--stateless" not in normalized:
+                    normalized.insert(2, "--stateless")
+        return normalized
 
     def _parse_mentor_helper_command(self, command: list[str]) -> dict[str, str] | None:
         if len(command) < 4:
