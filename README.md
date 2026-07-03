@@ -320,6 +320,10 @@ Když naopak potřebuješ co nejlevnější mentor kontext pro další modelový
 
 Stejný brief už jde nově vyžádat i přirozeně přes OpenWebUI chat. Požadavky typu `repo: ai-stack` + `Dej mi krátký mentor brief pro: Fixni to a dotáhni co zvládneš.` nebo `Jaký brief má dostat model pro tenhle task...` filter přeloží na `mentor_codex_local.py brief` přes auditovaný `GATEWAY_ADMIN_RUN_WORKSPACE`.
 
+Když chceš ještě menší odpověď a jde ti jen o další praktický krok, použij `next-helper`: vrátí pouze nejlepší další helper command, důvod a malý execution brief.
+
+    python3 codex/bin/mentor_codex_local.py next-helper ai-stack "Fixni to a dotáhni co zvládneš."
+
 Když už máš víc úkolů najednou a chceš, aby si helper sám srovnal pořadí a šířku pravomocí, použij `backlog`. Nad každým taskem udělá stejnou klasifikaci jako `profile/report/plan`, ale vrátí prioritizovanou frontu s `NEXT_HELPER`, `PLAN_CMD` a připraveným audit chat promptem:
 
     python3 codex/bin/mentor_codex_local.py backlog ai-stack \
@@ -351,6 +355,8 @@ Když chceš ještě levnější variantu jen pro “co je první a proč”, po
       --tasks "Vytvoř release a pushni to na GitHub"
 
 I tohle už jde přirozeně z OpenWebUI chatu: když uživatel napíše více bodů a otázku typu `Co má dělat jako první?`, `Který úkol je první?`, `Jaký je top task?` nebo `Proč je to první?`, filter to přeloží na lehký `mentor_codex_local.py top`. Když místo toho napíše `Jen doporuč první krok bez spuštění`, stále se použije `dispatch --recommend-only`.
+
+Podobně i pro single-task otázky typu `Jaký helper mám spustit dál pro ...?`, `Co mám pustit dál pro ...?` nebo `next helper for ...` filter nově routuje na `mentor_codex_local.py next-helper`.
 
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 

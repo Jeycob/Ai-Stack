@@ -205,6 +205,12 @@ Priklad kratkeho execution briefu, ktery je vhodny jako levna mezivrstva mezi pl
 python3 codex/bin/mentor_codex_local.py brief ai-stack "Fixni to a dotahni co zvladnes."
 ```
 
+Priklad ultra-levkeho helper navadeni, kdy chceme jen dalsi konkretni command bez sirsiho planu:
+
+```bash
+python3 codex/bin/mentor_codex_local.py next-helper ai-stack "Fixni to a dotahni co zvladnes."
+```
+
 Priklad mentor planu, ktery z jednoho tasku vrati kratkou 2-4 krokovou posloupnost:
 
 ```bash
@@ -263,6 +269,12 @@ Brief vraci:
 - `MENTOR_BRIEF_NEXT_HELPER`: doporuceny dalsi helper command.
 - `MENTOR_BRIEF_EXECUTION_BRIEF`: minimalisticky cil, guardraily a dalsi krok pripraveny pro dalsi model.
 
+Next-helper vraci:
+
+- `MENTOR_NEXT_HELPER_COMMAND`: nejvhodnejsi dalsi helper command.
+- `MENTOR_NEXT_HELPER_REASON`: proc je tenhle helper dalsi spravna volba.
+- `MENTOR_NEXT_HELPER_EXECUTION_BRIEF`: nejmensi mentor payload pro dalsi krok.
+
 `delegate` navic tenhle execution brief nese dal i do dalsich helper promptu. Prakticky to znamena, ze pri prechodu z `dispatch` nebo `delegate` do `audit`/`autopilot`/`improve` uz dalsi modelovy krok nedostane jen obecny workflow prompt, ale i maly stabilni kontext ve visible casti (`Mentor brief:`) a v technicke casti (`MENTOR_EXECUTION_BRIEF`).
 
 `openwebui_codex_auto_tools_filter.py` umi tenhle use-case uz i prirozene routovat z chatu: kdyz uzivatel napise `repo: <workspace>` a pozadavek typu `Dej mi kratky mentor brief pro ...`, `Jaky brief ma dostat model pro ...` nebo `execution brief`, filter to prelozi na `mentor_codex_local.py brief` pres `GATEWAY_ADMIN_RUN_WORKSPACE`.
@@ -300,7 +312,7 @@ Top navic vraci:
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 
-`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi z viceradych bullet tasku vyrobit backlog, dispatch nebo top helper call, takze codex-local dostane i lehkou prioritizacni vrstvu nad vice ukoly bez rucniho skladani admin markeru.
+`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi ze single-task nebo vice-task promptu vyrobit brief, next-helper, backlog, dispatch nebo top helper call, takze codex-local dostane i lehkou prioritizacni a mentor vrstvu bez rucniho skladani admin markeru.
 
 Aktualni runtime profily:
 

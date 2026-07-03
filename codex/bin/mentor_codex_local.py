@@ -1061,7 +1061,10 @@ def backlog_priority(decision: dict[str, str], task: str) -> int:
 def collect_backlog_tasks(args: argparse.Namespace) -> list[str]:
     tasks: list[str] = []
     if getattr(args, "task", None):
-        tasks.extend(args.task)
+        if isinstance(args.task, str):
+            tasks.append(args.task)
+        else:
+            tasks.extend(args.task)
     if getattr(args, "tasks", None):
         tasks.extend(args.tasks)
     task_file = getattr(args, "task_file", None)
@@ -1275,6 +1278,34 @@ def run_top_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_next_helper_sequence(args: argparse.Namespace) -> int:
+    tasks = collect_backlog_tasks(args)
+    if tasks:
+        entries = build_backlog_entries(args.workspace, tasks)
+        top = entries[0]
+        decision = top.decision
+        task = top.task
+        next_helper = top.next_helper
+        source = "top-task"
+    else:
+        if not getattr(args, "task", None):
+            raise SystemExit("next-helper mode requires either a positional task or --tasks/--task-file")
+        task = args.task
+        decision = classify_task(task)
+        next_helper = recommended_next_step(decision, args.workspace, task)
+        source = "single-task"
+
+    print(f"MENTOR_NEXT_HELPER_WORKSPACE={args.workspace}")
+    print(f"MENTOR_NEXT_HELPER_SOURCE={source}")
+    print(f"MENTOR_NEXT_HELPER_TASK={task}")
+    print(f"MENTOR_NEXT_HELPER_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_NEXT_HELPER_CONFIDENCE={decision['confidence']}")
+    print(f"MENTOR_NEXT_HELPER_REASON={decision['reason']}")
+    print(f"MENTOR_NEXT_HELPER_COMMAND={next_helper}")
+    print_execution_brief("MENTOR_NEXT_HELPER", decision, args.workspace, task)
+    return 0
+
+
 def run_brief_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     print(f"MENTOR_BRIEF_WORKSPACE={args.workspace}")
@@ -1306,6 +1337,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_report_sequence(args)
     if args.mode == "plan":
         return run_plan_sequence(args)
+    if args.mode == "next-helper":
+        return run_next_helper_sequence(args)
     if args.mode == "brief":
         return run_brief_sequence(args)
     if args.mode == "top":
@@ -1420,6 +1453,13 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("workspace")
     plan.add_argument("task")
     plan.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; plan mode never calls OpenWebUI")
+
+    next_helper = sub.add_parser("next-helper", help="Return only the best next helper command for a task or top-priority task set")
+    next_helper.add_argument("workspace")
+    next_helper.add_argument("task", nargs="?", help="Single task text; omit when using --tasks or --task-file")
+    next_helper.add_argument("--tasks", action="append", default=[], help="Task text; can be repeated")
+    next_helper.add_argument("--task-file", help="Path to a newline-delimited task file")
+    next_helper.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; next-helper mode never calls OpenWebUI")
 
     brief = sub.add_parser("brief", help="Produce a minimal execution brief for a task: tiny mentor context, next helper, and guardrails")
     brief.add_argument("workspace")
