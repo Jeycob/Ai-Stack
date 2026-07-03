@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "capabilities": {
+    "github_release": {
+      "scope": "remote_repo",
+      "summary": "Auditovana GitHub/release vrstva pro vytvareni remote repozitaru, release tagu, publish kroku a push workflow mimo bezny workspace scope."
+    },
+    "host_runtime_package_install": {
+      "scope": "host_runtime",
+      "summary": "Auditovana host runtime vrstva pro systemove balicky, apt install, service restarty a dalsi akce mimo repo/workspace hranici."
+    },
+    "wider_workspace_runtime": {
+      "scope": "workspace_runtime",
+      "summary": "Sirsí auditovana workspace runtime vrstva pro use-cases, kde capability runner ani safe patch nestaci, ale stale nechceme neomezeny shell."
+    },
+    "next_workspace_capability": {
+      "scope": "workspace_capability",
+      "summary": "Dalsi pojmenovany capability krok pro workspace, kdy je potreba rozsireni nad install/test/build/lint bez slepeho rozsirovani autopilota."
+    },
+    "clarify_or_infer_capability": {
+      "scope": "mentoring",
+      "summary": "Nejužší mentoring krok pro nejednoznacne zadani: nejdriv audit, upresneni nebo inference dalsi capability, az pak rozsirovani scope."
+    }
+  }
+}

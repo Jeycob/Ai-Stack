@@ -195,7 +195,12 @@ Profilove rozhodnuti vraci i:
 
 - `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
 - `guardrail_summary`: kratke vysvetleni, proc je aktualni scope dostatecny a co jeste brani sirsi akci.
+- `capability_id`: stabilni jmeno capability nebo roadmap smeru, ke kteremu se helper vztahuje.
+- `capability_scope`: hruby scope capability, napriklad `remote_repo`, `host_runtime`, `workspace_runtime`, `workspace_capability` nebo `mentoring`.
+- `capability_summary`: kratky verzovany popis capability z roadmap registry.
 - `missing_capability_hint`: nejuzsi dalsi capability scope, ktery by daval smysl pridat nebo explicitne pouzit, pokud je ukol sirsi nez stavajici guardraily.
+
+Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 
 Aktualni runtime profily:
 

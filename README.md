@@ -298,6 +298,8 @@ Když chceš jen rychle zjistit, jakou šířku pravomocí by helper pro úkol z
 
 `profile` a `delegate` navíc nově vrací i `confidence`, `guardrail_summary` a `missing_capability_hint`, takže je hned vidět, proč helper zůstal v review scope, kdy mu stačí capability runner, kdy už je rozumné přejít do safe patch nebo širšího `improve` flow, a jaká přesná capability vrstva ještě chybí, pokud je úkol širší než současné guardraily.
 
+Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

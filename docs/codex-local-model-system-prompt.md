@@ -74,6 +74,8 @@ Current routed ai-stack intents:
   widening the runtime profile.
 - When the task exceeds the current scope, prefer naming the missing audited
   capability layer explicitly instead of giving a vague refusal.
+- Prefer stable capability names when possible, so the mentoring layer and the
+  model can refer to the same future audited runtime scopes consistently.
 - For explicit commands, prefer a broad audited workspace runner instead of a new
   one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
   workspace through the gateway admin workflow.

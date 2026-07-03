@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shlex
 import subprocess
@@ -14,6 +15,7 @@ from pathlib import Path
 
 DEFAULT_MODEL = "codex-local-plan-qwen14b"
 DEFAULT_TITLE = "Codex audit log - OpenWebUI visible history"
+CAPABILITY_ROADMAP = Path(__file__).resolve().parents[2] / "docs/codex-local-capability-roadmap.json"
 SAFE_PATCH_ROOT_FILES = {
     "README.md",
     "docker-compose.yml",
@@ -48,6 +50,17 @@ def write_temp(text: str) -> str:
 
 def repo_prefix(repo: str) -> str:
     return f"repo: {repo.strip()}"
+
+
+def load_capability_roadmap() -> dict[str, dict[str, str]]:
+    try:
+        payload = json.loads(CAPABILITY_ROADMAP.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
+    capabilities = payload.get("capabilities")
+    return capabilities if isinstance(capabilities, dict) else {}
 
 
 def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
@@ -260,6 +273,7 @@ def choose_workflow(task: str) -> str:
 
 def classify_task(task: str) -> dict[str, str]:
     lower = task.lower()
+    roadmap = load_capability_roadmap()
 
     def result(
         profile: str,
@@ -267,14 +281,19 @@ def classify_task(task: str) -> dict[str, str]:
         reason: str,
         confidence: str,
         guardrail_summary: str,
+        capability_id: str = "",
         missing_capability_hint: str = "",
     ) -> dict[str, str]:
+        capability = roadmap.get(capability_id, {}) if capability_id else {}
         return {
             "runtime_profile": profile,
             "workflow": workflow,
             "reason": reason,
             "confidence": confidence,
             "guardrail_summary": guardrail_summary,
+            "capability_id": capability_id,
+            "capability_scope": str(capability.get("scope", "")),
+            "capability_summary": str(capability.get("summary", "")),
             "missing_capability_hint": missing_capability_hint,
         }
 
@@ -285,6 +304,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task mentions remote repository or release operations that may exceed the currently delegated safe runtime scope.",
             "medium",
             "We should inspect the workspace and existing deployment/push capabilities first instead of assuming direct remote write access.",
+            "github_release",
             "If the task truly needs remote repository or release mutations, add or use a dedicated audited GitHub/release capability rather than widening generic runtime access.",
         )
     if any(token in lower for token in ("nainstaluj systemovy balik", "nainstaluj systémový balík", "apt install", "sudo ", "docker compose", "restartni service", "restartuj service")):
@@ -294,6 +314,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task likely needs host-level runtime or package-management privileges, which should not be inferred from a normal repo task.",
             "medium",
             "Current repo-safe and workspace-safe flows are not enough for host-level package/service changes without an explicit audited runtime capability.",
+            "host_runtime_package_install",
             "Add or invoke a dedicated host-runtime capability for package installs or service restarts instead of broadening workspace execution implicitly.",
         )
 
@@ -304,6 +325,7 @@ def classify_task(task: str) -> dict[str, str]:
             "Explicit command inside a registered workspace is best handled by the audited workspace runner.",
             "high",
             "Command stays inside a registered workspace, so audited workspace-run is sufficient and broader patch/runtime scope is unnecessary.",
+            "",
         )
     if any(token in lower for token in ("navrhni další krok", "navrhni dalsi krok", "co dál", "co dal", "audit", "analyzuj")):
         return result(
@@ -312,6 +334,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task asks for analysis or next-step reasoning without an explicit execution request.",
             "high",
             "No execution intent is visible, so we stay in the narrowest read-only mentoring scope.",
+            "",
         )
     if any(token in lower for token in ("apply patch", "aplikuj patch", "malý patch", "maly patch", "uprav readme", "uprav dokumentaci")):
         return result(
@@ -320,6 +343,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task points to a small documentation/config/helper change that fits the guarded safe-patch scope.",
             "medium",
             "The requested change looks small enough for guarded ai-stack patching, but only inside the safe file scope and after diff validation.",
+            "",
             "If the change grows beyond the safe ai-stack file scope, switch to a broader audited workspace capability instead of forcing apply-safe.",
         )
     if any(token in lower for token in ("fixni to", "rozběhni to", "rozbehni to", "dotáhni to", "dotahni to", "dokonči to", "dokonci to")):
@@ -329,6 +353,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task asks to push the project forward agentically and may need both capability steps and a follow-up patch.",
             "medium",
             "The task may require multiple audited steps; start with capability execution and only escalate into safe patching if capability progress runs out.",
+            "wider_workspace_runtime",
             "If capability execution and safe patching still do not unblock progress, request a dedicated wider runtime capability rather than falling back to generic unrestricted shell.",
         )
     if any(token in lower for token in ("ověř projekt", "over projekt", "pokračuj sám", "pokracuj sam", "udělej co je potřeba", "udelej co je potreba")):
@@ -338,6 +363,7 @@ def classify_task(task: str) -> dict[str, str]:
             "The task is primarily about audited install/test/build/lint progression inside the workspace.",
             "medium",
             "Execution is requested, but standard capability steps should be tried before any patch-oriented or broader runtime action.",
+            "next_workspace_capability",
             "If the next useful step is outside install/test/build/lint, expose that next step as a named audited capability instead of widening autopilot blindly.",
         )
     return result(
@@ -346,6 +372,7 @@ def classify_task(task: str) -> dict[str, str]:
         "Defaulting to the narrowest safe mentoring workflow because the task does not clearly require execution.",
         "low",
         "Intent is ambiguous, so we avoid widening permissions until the task shape is clearer from the audit context.",
+        "clarify_or_infer_capability",
         "Clarify or infer the next audited capability from the repository context before expanding runtime scope.",
     )
 
@@ -846,6 +873,9 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
     print(f"DELEGATE_CONFIDENCE={decision['confidence']}")
     print(f"DELEGATE_REASON={decision['reason']}")
     print(f"DELEGATE_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"DELEGATE_CAPABILITY_ID={decision['capability_id']}")
+    print(f"DELEGATE_CAPABILITY_SCOPE={decision['capability_scope']}")
+    print(f"DELEGATE_CAPABILITY_SUMMARY={decision['capability_summary']}")
     print(f"DELEGATE_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
 
     if workflow == "run":
@@ -871,6 +901,9 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
     print(f"CONFIDENCE={decision['confidence']}")
     print(f"REASON={decision['reason']}")
     print(f"GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"CAPABILITY_ID={decision['capability_id']}")
+    print(f"CAPABILITY_SCOPE={decision['capability_scope']}")
+    print(f"CAPABILITY_SUMMARY={decision['capability_summary']}")
     print(f"MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
     return 0
 
