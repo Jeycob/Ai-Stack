@@ -216,6 +216,16 @@ python3 codex/bin/mentor_codex_local.py backlog ai-stack \
 
 Backlog umi cist tasky i ze stdin nebo z newline-delimited souboru pres `--task-file`, takze je vhodny jako uzsi scheduler vrstva nad vice prirozenymi zadani.
 
+Priklad dispatch vrstvy nad vice tasky: helper nejdriv postavi backlog, vybere nejvyssi prioritu a pak ji preda do standardniho `delegate` flow. S `--recommend-only` se chova jako planner bez exekuce:
+
+```bash
+python3 codex/bin/mentor_codex_local.py dispatch ai-stack \
+  --tasks "Fixni to a dotahni co zvladnes." \
+  --tasks "Uprav README a aplikuj maly patch" \
+  --tasks "Vytvor release a pushni to na GitHub" \
+  --recommend-only
+```
+
 Profilove rozhodnuti vraci i:
 
 - `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
@@ -245,9 +255,16 @@ Backlog navic vraci:
 - `BACKLOG_ITEM_<N>_PLAN_CMD`: pripraveny detailni `plan` command pro danou polozku.
 - `BACKLOG_ITEM_<N>_AUDIT_CHAT_PROMPT`: viditelny prompt pripraveny do OpenWebUI auditu.
 
+Dispatch navic vraci:
+
+- `MENTOR_DISPATCH_SELECTED_TASK`: vybrany top task.
+- `MENTOR_DISPATCH_SELECTED_WORKFLOW`: workflow, ktere se nad nim ma spustit.
+- `MENTOR_DISPATCH_SELECTED_NEXT_HELPER`: helper command odpovidajici vybrane polozce.
+- `MENTOR_DISPATCH_MODE`: `recommend-only` nebo `execute`.
+
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 
-`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`.
+`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi z viceradych bullet tasku vyrobit backlog nebo dispatch helper call, takze codex-local dostane i lehkou prioritizacni vrstvu nad vice ukoly bez rucniho skladani admin markeru.
 
 Aktualni runtime profily:
 

@@ -219,6 +219,8 @@ Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `ta
 
 `Codex Auto Tools Filter` navíc umí pro modely `codex-local-*` rozpoznat přirozené požadavky a mapovat je na několik širších capability workflow. Například “pullni ai-stack a nasaď” přepíše interně na `GATEWAY_ADMIN_DEPLOY_STACK`; “ukaž deploy status/log” přepíše na `GATEWAY_ADMIN_DEPLOY_STATUS`; “vytvoř nové repository Test2 a vygeneruj ssh klíč” přepíše na `GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart`; běžné repo kontroly jako git status/remote/log nebo explicitní “spusť příkaz:” v registrovaném workspace přepíše na `GATEWAY_ADMIN_RUN_WORKSPACE`; běžné developerské akce jako install/test/build/lint/verify přepíše na `GATEWAY_ADMIN_WORKSPACE_ACTION`; širší požadavky typu “ověř a pokračuj sám”, “udělej co je potřeba”, “dotáhni to” nebo “navrhni další krok” přepíše na `GATEWAY_ADMIN_WORKSPACE_AUTOPILOT`, obvykle s limitem dvou kroků. Viditelný chat tak může zůstat lidský, zatímco technická vrstva stále používá auditovatelný admin workflow.
 
+Když je v promptu víc tasků najednou, filter nově umí i lehký multi-task routing. Požadavky typu “seřaď mi tyhle body”, “udělej z toho backlog”, “co je první” nebo “vyber další krok z těchto úkolů” přepíše na helper běžící přes `GATEWAY_ADMIN_RUN_WORKSPACE`, který zavolá `mentor_codex_local.py backlog` nebo `mentor_codex_local.py dispatch`. Díky tomu si codex-local umí samo srovnat pořadí práce a v jednodušších případech rovnou vybrat a spustit nejlepší další mentor workflow.
+
 System prompt pro stránku nastavení modelu v OpenWebUI je verzovaný v `docs/codex-local-model-system-prompt.md`. Jeho úloha je naučit model mluvit lidsky a nepodsouvat uživateli interní markery; skutečné provedení akcí má stále zajišťovat filter/tool vrstva.
 
 Příklad aplikace konkrétního patche:
@@ -324,6 +326,14 @@ Stejný backlog můžeš helperu poslat i přes stdin nebo soubor po řádcích:
       "Uprav README a aplikuj malý patch" \
       "Nainstaluj systémový balík a restartuj service" \
       | python3 codex/bin/mentor_codex_local.py backlog ai-stack
+
+Když nechceš jen backlog, ale rovnou “vezmi nejlepší další úkol a spusť správný mentor flow”, použij `dispatch`. Ten nejdřív vypíše backlog, potom vybere top položku a předá ji do `delegate`. S `--recommend-only` skončí jen doporučením bez exekuce:
+
+    python3 codex/bin/mentor_codex_local.py dispatch ai-stack \
+      --tasks "Fixni to a dotáhni co zvládneš." \
+      --tasks "Uprav README a aplikuj malý patch" \
+      --tasks "Vytvoř release a pushni to na GitHub" \
+      --recommend-only
 
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 

@@ -978,6 +978,8 @@ def collect_backlog_tasks(args: argparse.Namespace) -> list[str]:
     tasks: list[str] = []
     if getattr(args, "task", None):
         tasks.extend(args.task)
+    if getattr(args, "tasks", None):
+        tasks.extend(args.tasks)
     task_file = getattr(args, "task_file", None)
     if task_file:
         for line in Path(task_file).read_text(encoding="utf-8").splitlines():
@@ -1021,6 +1023,34 @@ def build_backlog_entries(workspace: str, tasks: list[str]) -> list[BacklogEntry
             item.task.lower(),
         ),
     )
+
+
+def print_backlog(entries: list[BacklogEntry], workspace: str) -> None:
+    print(f"MENTOR_BACKLOG_WORKSPACE={workspace}")
+    print(f"MENTOR_BACKLOG_COUNT={len(entries)}")
+    if entries:
+        print(f"MENTOR_BACKLOG_TOP_WORKFLOW={entries[0].decision['workflow']}")
+        print(f"MENTOR_BACKLOG_TOP_TASK={entries[0].task}")
+
+    for idx, entry in enumerate(entries, start=1):
+        decision = entry.decision
+        print(f"BACKLOG_ITEM_{idx}_TASK={entry.task}")
+        print(f"BACKLOG_ITEM_{idx}_PRIORITY={entry.priority}")
+        print(f"BACKLOG_ITEM_{idx}_WORKFLOW={decision['workflow']}")
+        print(f"BACKLOG_ITEM_{idx}_RUNTIME_PROFILE={decision['runtime_profile']}")
+        print(f"BACKLOG_ITEM_{idx}_CONFIDENCE={decision['confidence']}")
+        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_ID={decision['capability_id']}")
+        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_SCOPE={decision['capability_scope']}")
+        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_SUMMARY={decision['capability_summary']}")
+        print(f"BACKLOG_ITEM_{idx}_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+        print(f"BACKLOG_ITEM_{idx}_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+        print(f"BACKLOG_ITEM_{idx}_NEXT_HELPER={entry.next_helper}")
+        print(f"BACKLOG_ITEM_{idx}_REASON={decision['reason']}")
+        print(f"BACKLOG_ITEM_{idx}_PLAN_CMD=python3 codex/bin/mentor_codex_local.py plan {workspace} {shlex.quote(entry.task)}")
+        print(f"BACKLOG_ITEM_{idx}_REPORT_CMD=python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(entry.task)}")
+        print(f"BACKLOG_ITEM_{idx}_AUDIT_CHAT_PROMPT<<EOF")
+        print(entry.audit_prompt)
+        print("EOF")
 
 
 def run_report_sequence(args: argparse.Namespace) -> int:
@@ -1105,32 +1135,32 @@ def run_backlog_sequence(args: argparse.Namespace) -> int:
         raise SystemExit("backlog mode requires at least one task via --task, --task-file, or stdin")
 
     entries = build_backlog_entries(args.workspace, tasks)
-    print(f"MENTOR_BACKLOG_WORKSPACE={args.workspace}")
-    print(f"MENTOR_BACKLOG_COUNT={len(entries)}")
-    if entries:
-        print(f"MENTOR_BACKLOG_TOP_WORKFLOW={entries[0].decision['workflow']}")
-        print(f"MENTOR_BACKLOG_TOP_TASK={entries[0].task}")
-
-    for idx, entry in enumerate(entries, start=1):
-        decision = entry.decision
-        print(f"BACKLOG_ITEM_{idx}_TASK={entry.task}")
-        print(f"BACKLOG_ITEM_{idx}_PRIORITY={entry.priority}")
-        print(f"BACKLOG_ITEM_{idx}_WORKFLOW={decision['workflow']}")
-        print(f"BACKLOG_ITEM_{idx}_RUNTIME_PROFILE={decision['runtime_profile']}")
-        print(f"BACKLOG_ITEM_{idx}_CONFIDENCE={decision['confidence']}")
-        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_ID={decision['capability_id']}")
-        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_SCOPE={decision['capability_scope']}")
-        print(f"BACKLOG_ITEM_{idx}_CAPABILITY_SUMMARY={decision['capability_summary']}")
-        print(f"BACKLOG_ITEM_{idx}_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
-        print(f"BACKLOG_ITEM_{idx}_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
-        print(f"BACKLOG_ITEM_{idx}_NEXT_HELPER={entry.next_helper}")
-        print(f"BACKLOG_ITEM_{idx}_REASON={decision['reason']}")
-        print(f"BACKLOG_ITEM_{idx}_PLAN_CMD=python3 codex/bin/mentor_codex_local.py plan {args.workspace} {shlex.quote(entry.task)}")
-        print(f"BACKLOG_ITEM_{idx}_REPORT_CMD=python3 codex/bin/mentor_codex_local.py report {args.workspace} {shlex.quote(entry.task)}")
-        print(f"BACKLOG_ITEM_{idx}_AUDIT_CHAT_PROMPT<<EOF")
-        print(entry.audit_prompt)
-        print("EOF")
+    print_backlog(entries, args.workspace)
     return 0
+
+
+def run_dispatch_sequence(args: argparse.Namespace) -> int:
+    tasks = collect_backlog_tasks(args)
+    if not tasks:
+        raise SystemExit("dispatch mode requires at least one task via --task, --task-file, or stdin")
+
+    entries = build_backlog_entries(args.workspace, tasks)
+    top = entries[0]
+    print_backlog(entries, args.workspace)
+    print(f"MENTOR_DISPATCH_SELECTED_TASK={top.task}")
+    print(f"MENTOR_DISPATCH_SELECTED_WORKFLOW={top.decision['workflow']}")
+    print(f"MENTOR_DISPATCH_SELECTED_PRIORITY={top.priority}")
+    print(f"MENTOR_DISPATCH_SELECTED_NEXT_HELPER={top.next_helper}")
+
+    if args.recommend_only:
+        print("MENTOR_DISPATCH_MODE=recommend-only")
+        return 0
+
+    delegate_args = argparse.Namespace(**vars(args))
+    delegate_args.mode = "delegate"
+    delegate_args.task = top.task
+    print("MENTOR_DISPATCH_MODE=execute")
+    return run_delegate_sequence(delegate_args)
 
 
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
@@ -1156,6 +1186,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_plan_sequence(args)
     if args.mode == "backlog":
         return run_backlog_sequence(args)
+    if args.mode == "dispatch":
+        return run_dispatch_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)
@@ -1268,6 +1300,16 @@ def parse_args() -> argparse.Namespace:
     backlog.add_argument("--task", action="append", default=[], help="Task text; can be repeated")
     backlog.add_argument("--task-file", help="Path to a newline-delimited task file")
     backlog.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; backlog mode never calls OpenWebUI")
+
+    dispatch = sub.add_parser("dispatch", help="Prioritize multiple tasks, choose the best next one, and optionally execute the matching mentor workflow")
+    dispatch.add_argument("workspace")
+    dispatch.add_argument("--tasks", action="append", default=[], help="Task text; can be repeated")
+    dispatch.add_argument("--task-file", help="Path to a newline-delimited task file")
+    dispatch.add_argument("--timeout", type=int, default=2400)
+    dispatch.add_argument("--max-steps", type=int, default=2)
+    dispatch.add_argument("--allow-actions", default="install,test,build,lint")
+    dispatch.add_argument("--recommend-only", action="store_true", help="Only select and print the top task/workflow, do not execute it")
+    dispatch.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI when execution is reached")
 
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")

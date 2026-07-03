@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional
 import re
+import shlex
 
 
 class Filter:
@@ -105,7 +106,11 @@ class Filter:
         if "GATEWAY_ADMIN_" in text:
             return None
 
-        command = self._natural_capability_roadmap_command(text)
+        command = self._natural_workspace_backlog_command(text)
+        if not command:
+            command = self._natural_workspace_dispatch_command(text)
+        if not command:
+            command = self._natural_capability_roadmap_command(text)
         if not command:
             command = self._natural_workspace_run_command(text)
         if not command:
@@ -124,6 +129,114 @@ class Filter:
         self._set_message_text(latest, "repo: ai-stack\n" + command)
         body["stream"] = False
         return body
+
+    def _extract_task_list(self, text: str) -> list[str]:
+        tasks = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if re.match(r"(?i)^(repo|workspace|project)\s*:\s*[A-Za-z0-9_.-]{1,80}\s*$", stripped):
+                continue
+            for pattern in (r"^[-*]\s+(.+)$", r"^\d+[.)]\s+(.+)$"):
+                match = re.match(pattern, stripped)
+                if match:
+                    item = match.group(1).strip()
+                    if item:
+                        tasks.append(item)
+                    break
+        deduped = []
+        seen = set()
+        for item in tasks:
+            if item in seen:
+                continue
+            deduped.append(item)
+            seen.add(item)
+        return deduped
+
+    def _backlog_helper_command(self, mode: str, workspace: str, tasks: list[str], recommend_only: bool = False) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            mode,
+            workspace,
+        ]
+        if recommend_only:
+            command.append("--recommend-only")
+        task_flag = "--tasks" if mode == "dispatch" else "--task"
+        for task in tasks:
+            command.extend([task_flag, task])
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 180 -- {shlex.join(command)}"
+
+    def _natural_workspace_backlog_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        tasks = self._extract_task_list(text)
+        if len(tasks) < 2:
+            return None
+        if not any(
+            needle in lower
+            for needle in (
+                "backlog",
+                "fronta",
+                "queue",
+                "prioritiz",
+                "serad",
+                "seřaď",
+                "srovnej",
+                "roztrid",
+                "roztřiď",
+                "co driv",
+                "co dřív",
+                "co prvni",
+                "co první",
+            )
+        ):
+            return None
+        return self._backlog_helper_command("backlog", workspace, tasks)
+
+    def _natural_workspace_dispatch_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        tasks = self._extract_task_list(text)
+        if len(tasks) < 2:
+            return None
+        if not any(
+            needle in lower
+            for needle in (
+                "vyber dalsi krok",
+                "vyber další krok",
+                "zacni prvnim",
+                "začni prvním",
+                "vezmi prvni",
+                "vezmi první",
+                "udelaj prvni",
+                "udělej první",
+                "spust prvni",
+                "spusť první",
+                "udelej z toho plan a pokracuj",
+                "udělej z toho plán a pokračuj",
+            )
+        ):
+            return None
+        recommend_only = not any(
+            needle in lower
+            for needle in (
+                "spust",
+                "spusť",
+                "zacni",
+                "začni",
+                "proved",
+                "proveď",
+                "pokracuj",
+                "pokračuj",
+            )
+        )
+        return self._backlog_helper_command("dispatch", workspace, tasks, recommend_only=recommend_only)
 
     def _load_capability_roadmap(self) -> dict[str, dict]:
         module_file = globals().get("__file__")
