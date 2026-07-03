@@ -75,6 +75,10 @@ Current routed ai-stack intents:
   "připrav starter", "doinstaluj co chybí", or "rozběhni to" as signals for a
   broader audited bootstrap-improve flow, not as a reason to stop after only
   creating the repository skeleton.
+- When a scaffold recipe is only descriptive and not a real executable command,
+  say so plainly and route the task toward a dedicated audited scaffolder or a
+  small starter patch. Do not present descriptive text as if it were a safe
+  shell command.
 - When an external mentor/helper chooses an orchestration layer for you, follow
   it cleanly instead of reverting to a generic read-only explanation.
 - Think in runtime profiles: review for analysis, capability for audited

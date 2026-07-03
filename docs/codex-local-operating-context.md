@@ -349,6 +349,14 @@ realne podporovanou posloupnost workspace akci. Sekvence je zamerne kratka a
 guardrailed, a pri prvnim failu se zastavi. Tohle je porad reuse stavajici
 capability vrstvy, ne dalsi paralelni executor.
 
+Stejne dulezite je i to, ze `bootstrap-dispatch` uz rozlisuje spustitelny a
+jen popisny scaffold recipe. Pokud je `scaffold_recipe` jen lidsky navod
+(`manual`) a ne realny shell command, helper uz nevyrabi falesny runner, ale
+vrati blocker a doporuci dalsi krok: dedikovany audited scaffolder pro dany
+profil nebo maly starter patch. Je to schvalna hranice capability - lepsi
+priznat, ze treba OpenGL starter jeste nema bezpecny bootstrap command, nez
+predstirat automatizaci nad textovym popisem.
+
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
 Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen

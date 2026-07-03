@@ -1675,6 +1675,36 @@ def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -
     ]
 
 
+def scaffold_recipe_execution_mode(recipe: str) -> str:
+    recipe = recipe.strip()
+    if not recipe:
+        return "missing"
+    lower = recipe.lower()
+    executable_markers = (
+        "npm ",
+        "npx ",
+        "pnpm ",
+        "yarn ",
+        "python ",
+        "python3 ",
+        "pip ",
+        "uv ",
+        "cargo ",
+        "go ",
+        "cmake ",
+        "mvn ",
+        "gradle ",
+        "django-admin ",
+    )
+    if lower.startswith(executable_markers):
+        return "executable"
+    if "&&" in recipe or "||" in recipe or " ; " in f" {recipe} ":
+        return "executable"
+    if lower.startswith("./") or lower.startswith("bash ") or lower.startswith("sh "):
+        return "executable"
+    return "manual"
+
+
 def bootstrap_recipe_covers_action(recipe: str, action: str) -> bool:
     lower = f" {recipe.lower()} "
     if action == "install":
@@ -1755,6 +1785,7 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     repo_name = decision.get("repo_name", "").strip()
     recipe = decision.get("scaffold_recipe", "").strip()
+    recipe_mode = scaffold_recipe_execution_mode(recipe)
     loop = decision.get("scaffold_loop", "").strip()
     steps = scaffold_plan_steps(decision, args.task)
     followup_candidates = scaffold_loop_followup_candidates(loop, recipe) if loop else []
@@ -1770,6 +1801,7 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_BOOTSTRAP_DISPATCH_SOLUTION_PROFILE={decision['solution_profile']}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_PUBLIC_STACK={decision['public_stack']}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_SCAFFOLD_RECIPE={recipe}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_SCAFFOLD_RECIPE_MODE={recipe_mode}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_CANDIDATES={','.join(followup_candidates) or '(none)'}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_PLAN={','.join(followup_plan) or '(none)'}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_LIMIT={followup_limit}")
@@ -1785,6 +1817,11 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     if not recipe:
         print("BOOTSTRAP_DISPATCH_BLOCKED")
         print("reason=no scaffold recipe is known for the inferred solution profile")
+        return 0
+    if recipe_mode != "executable":
+        print("BOOTSTRAP_DISPATCH_BLOCKED")
+        print("reason=scaffold recipe is descriptive only and cannot be executed safely as a shell command")
+        print("BOOTSTRAP_DISPATCH_MANUAL_NEXT=prepare a minimal starter patch or add a dedicated audited scaffolder for this profile")
         return 0
 
     runner = bootstrap_runner_command(repo_name, recipe, args.timeout)
