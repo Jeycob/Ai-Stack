@@ -1100,10 +1100,10 @@ class Filter:
     def _create_local_repo_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_CREATE_LOCAL_REPO\s+(.+?)\s*$", text)
         if not m:
-            raise ValueError("Usage: GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
+            raise ValueError("Usage: GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--github] [--github-owner OWNER] [--private|--public] [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
         parts = shlex.split(m.group(1))
         if not parts:
-            raise ValueError("Usage: GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
+            raise ValueError("Usage: GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--github] [--github-owner OWNER] [--private|--public] [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]")
 
         name = parts.pop(0)
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
@@ -1124,6 +1124,18 @@ class Filter:
             if opt == "--memory" and parts:
                 payload["memory"] = parts.pop(0)
                 continue
+            if opt == "--github":
+                payload["github"] = True
+                continue
+            if opt == "--github-owner" and parts:
+                payload["github_owner"] = parts.pop(0)
+                continue
+            if opt == "--private":
+                payload["github_private"] = True
+                continue
+            if opt == "--public":
+                payload["github_private"] = False
+                continue
             if opt == "--default":
                 payload["default"] = True
                 continue
@@ -1135,6 +1147,7 @@ class Filter:
         result = self._gateway_admin_request("/v1/admin/repository/create-local", payload, timeout=420 if payload.get("restart") else 120)
         workspace = result.get("workspace") or {}
         key = result.get("ssh_key") or {}
+        github = result.get("github") or {}
         status = "LOCAL_REPO_CREATE_OK" if result.get("ok") else "LOCAL_REPO_CREATE_FAILED"
         lines = [
             status,
@@ -1146,8 +1159,13 @@ class Filter:
             f"private_key_path={key.get('private_key_path', '(unknown)')}",
             f"public_key_path={key.get('public_key_path', '(unknown)')}",
             f"private_key_value=NOT_PRINTED",
+            f"github_requested={result.get('github_requested', False)}",
             f"github_repo_created={result.get('github_repo_created', False)}",
             f"github_note={result.get('github_note', '')}",
+            f"github_full_name={github.get('full_name', '(none)')}",
+            f"github_ssh_url={github.get('ssh_url', '(none)')}",
+            f"github_deploy_key_added={github.get('deploy_key_added', False)}",
+            f"github_deploy_key_reason={github.get('deploy_key_reason', '')}",
             self._details("public_key", str(key.get("public_key", ""))),
             self._details("git_status", str(result.get("git_status", ""))),
             self._details("workspace_output", self._trim(str(workspace.get("output", "")), 12000)),

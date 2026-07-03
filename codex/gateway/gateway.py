@@ -5,7 +5,7 @@
 # gateway-scheduled-chat-patch: ok
 # gateway-chat-no-error-patch: ok
 # gateway-chat-fast-ack-patch: ok
-import json, os, re, subprocess, time, uuid, urllib.request
+import json, os, re, subprocess, time, uuid, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -378,6 +378,115 @@ def generate_repo_ssh_key(name, comment):
         "public_key": pub_path.read_text(encoding="utf-8").strip(),
     }
 
+def github_token():
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if token:
+        return token
+    token_file = os.getenv("GITHUB_TOKEN_FILE", "").strip()
+    candidates = [token_file] if token_file else []
+    candidates.append(str(REPO_ROOT / "codex/state/github-api.token"))
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    return ""
+
+def github_api(token, method, path, payload=None, timeout=30):
+    url = "https://api.github.com" + path
+    data = None
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "ai-stack-codex-local",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            return resp.status, json.loads(raw or "{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            body = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            body = {"message": raw[:2000]}
+        return exc.code, body
+
+def github_create_repo(name, key, owner="", private=True):
+    token = github_token()
+    if not token:
+        return {
+            "ok": False,
+            "created": False,
+            "reason": "GITHUB_TOKEN_MISSING",
+            "note": "Set GITHUB_TOKEN or ignored codex/state/github-api.token to enable GitHub repository creation.",
+        }
+    if owner and not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", owner):
+        raise ValueError("Unsafe GitHub owner")
+
+    status, user = github_api(token, "GET", "/user")
+    if status >= 400:
+        return {"ok": False, "created": False, "reason": "GITHUB_AUTH_FAILED", "status": status, "response": user}
+    login = str(user.get("login") or "").strip()
+    target_owner = owner or login
+
+    create_path = f"/orgs/{target_owner}/repos" if owner and owner != login else "/user/repos"
+    status, repo = github_api(token, "POST", create_path, {"name": name, "private": private, "auto_init": False})
+    if status == 422 and isinstance(repo, dict):
+        message = str(repo.get("message", ""))
+        errors = repo.get("errors") or []
+        already_exists = "already exists" in json.dumps(errors, ensure_ascii=False).lower() or "name already exists" in message.lower()
+        if already_exists:
+            status, repo = github_api(token, "GET", f"/repos/{target_owner}/{name}")
+            if status >= 400:
+                return {"ok": False, "created": False, "reason": "GITHUB_REPO_EXISTS_BUT_LOOKUP_FAILED", "status": status, "response": repo}
+            created = False
+        else:
+            return {"ok": False, "created": False, "reason": "GITHUB_CREATE_FAILED", "status": status, "response": repo}
+    elif status >= 400:
+        return {"ok": False, "created": False, "reason": "GITHUB_CREATE_FAILED", "status": status, "response": repo}
+    else:
+        created = True
+
+    full_name = str(repo.get("full_name") or f"{target_owner}/{name}")
+    ssh_url = str(repo.get("ssh_url") or f"git@github.com:{full_name}.git")
+    key_title = f"ai-stack-{name}"
+    status, deploy_key = github_api(
+        token,
+        "POST",
+        f"/repos/{full_name}/keys",
+        {"title": key_title, "key": key["public_key"], "read_only": False},
+    )
+    deploy_key_added = status in {200, 201}
+    deploy_key_reason = ""
+    if not deploy_key_added:
+        raw = json.dumps(deploy_key, ensure_ascii=False).lower()
+        if status == 422 and ("key is already in use" in raw or "already_exists" in raw or "already exists" in raw):
+            deploy_key_reason = "DEPLOY_KEY_ALREADY_PRESENT_OR_IN_USE"
+        else:
+            deploy_key_reason = "DEPLOY_KEY_ADD_FAILED"
+
+    return {
+        "ok": bool(full_name) and (deploy_key_added or deploy_key_reason == "DEPLOY_KEY_ALREADY_PRESENT_OR_IN_USE"),
+        "created": created,
+        "full_name": full_name,
+        "ssh_url": ssh_url,
+        "html_url": repo.get("html_url"),
+        "private": repo.get("private"),
+        "deploy_key_added": deploy_key_added,
+        "deploy_key_reason": deploy_key_reason,
+        "deploy_key_status": status,
+    }
+
 def admin_create_local_repo(payload):
     name = str(payload.get("name") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
@@ -390,6 +499,9 @@ def admin_create_local_repo(payload):
     memory = str(payload.get("memory", "16g"))
     port = payload.get("port")
     default = bool(payload.get("default", False))
+    github = bool(payload.get("github", False))
+    github_owner = str(payload.get("github_owner") or "").strip()
+    github_private = bool(payload.get("github_private", True))
 
     if repo_path.exists() and not repo_path.is_dir():
         raise FileExistsError(f"Repository path exists but is not a directory: {repo_path}")
@@ -446,6 +558,20 @@ def admin_create_local_repo(payload):
                 raise RuntimeError(f"{' '.join(cmd)} failed:\n{out}")
 
     key = generate_repo_ssh_key(f"github-{name}", f"{name}@local")
+    github_result = github_create_repo(name, key, owner=github_owner, private=github_private) if github else {
+        "ok": False,
+        "created": False,
+        "reason": "GITHUB_NOT_REQUESTED",
+        "note": "Pass github=true to create a GitHub repository when a token is configured.",
+    }
+    if github_result.get("ssh_url"):
+        rc, out = run_text(["git", "remote", "remove", "origin"], repo_path, 20)
+        commands.append(["git remote remove origin", rc, out])
+        rc, out = run_text(["git", "remote", "add", "origin", str(github_result["ssh_url"])], repo_path, 20)
+        commands.append(["git remote add origin", rc, out])
+        if rc != 0:
+            raise RuntimeError("git remote add origin failed:\n" + out)
+
     workspace_payload = {
         "name": name,
         "path": str(repo_path),
@@ -459,15 +585,18 @@ def admin_create_local_repo(payload):
     workspace_result = admin_add_workspace(workspace_payload)
 
     rc, status_out = run_text(["git", "status", "--short", "--branch"], repo_path, 30)
+    ok = bool(workspace_result.get("ok")) and rc == 0 and (not github or bool(github_result.get("ok")))
     return {
-        "ok": bool(workspace_result.get("ok")) and rc == 0,
+        "ok": ok,
         "action": "create_local_repo",
         "name": name,
         "path": str(repo_path),
         "workspace": workspace_result,
         "ssh_key": key,
-        "github_repo_created": False,
-        "github_note": "GitHub repo creation needs a GitHub API token or an authenticated gh tool; SSH keys alone cannot create GitHub repositories.",
+        "github": github_result,
+        "github_requested": github,
+        "github_repo_created": bool(github_result.get("created", False)),
+        "github_note": github_result.get("note") or github_result.get("reason", ""),
         "git_status": status_out,
         "commands": commands,
     }

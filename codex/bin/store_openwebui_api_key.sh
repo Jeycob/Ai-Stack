@@ -2,32 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_KEY_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/state/openwebui-api.key"
-KEY_FILE="${OWUI_API_KEY_FILE:-$DEFAULT_KEY_FILE}"
+CODEX_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STATE_DIR="${CODEX_STATE_DIR:-$CODEX_ROOT/state}"
 
-if [ -t 0 ]; then
-  printf 'Paste OpenWebUI API key: ' >&2
-  IFS= read -rs KEY
-  printf '\n' >&2
-else
-  IFS= read -r KEY
+if [ -n "${OWUI_API_KEY_FILE:-}" ]; then
+  RUNTIME_SECRET_TARGET="$OWUI_API_KEY_FILE" exec "$SCRIPT_DIR/store_runtime_secret.sh" openwebui-api
 fi
 
-KEY="${KEY//$'\r'/}"
-KEY="${KEY//$'\n'/}"
-if [ -z "$KEY" ]; then
-  echo "OPENWEBUI_API_KEY_NOT_STORED: empty key" >&2
-  exit 2
-fi
-
-umask 077
-mkdir -p "$(dirname "$KEY_FILE")"
-printf '%s\n' "$KEY" > "$KEY_FILE"
-chmod 600 "$KEY_FILE" 2>/dev/null || true
-
-echo "OPENWEBUI_API_KEY_STORED"
-echo "path=$KEY_FILE"
-if command -v stat >/dev/null 2>&1; then
-  mode="$(stat -c '%a' "$KEY_FILE" 2>/dev/null || true)"
-  [ -n "$mode" ] && echo "mode=$mode"
-fi
+CODEX_STATE_DIR="$STATE_DIR" exec "$SCRIPT_DIR/store_runtime_secret.sh" openwebui-api

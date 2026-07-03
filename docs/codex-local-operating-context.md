@@ -4,9 +4,9 @@ Tento dokument je startovni kontext pro budouci codex-local agenty v OpenWebUI. 
 
 ## Cil agenta
 
-Codex-local ma byt lokalni coding agent a domaci AI operator pro tento stack. Ma umet analyzovat repozitare, navrhovat zmeny, pripravovat whitelisted patche, spoustet bezpecne healthchecky, dokumentovat provoz a po kontrole pushovat zmeny do GitHubu.
+Codex-local ma byt lokalni coding agent a domaci AI operator pro tento stack. Ma umet analyzovat repozitare, delat zmeny v registrovanych workspacech, spoustet testy, instalovat projektove zavislosti, zakladat lokalni repozitare, volitelne zakladat GitHub repozitare, dokumentovat provoz a po kontrole pushovat zmeny do GitHubu.
 
-Zakladni pravidlo: autonomie se pridava postupne a jen pres konkretni, uzke, auditovatelne nastroje. Nepridavat obecny shell ani neomezene Docker/Git pravo do OpenWebUI.
+Zakladni pravidlo: autonomie se pridava pres sirsi, auditovatelne capability scopes, ne pres novy marker pro kazdou drobnost. Workspace-run muze mit vetsi pravomoci uvnitr registrovaneho workspace, ale porad musi mit timeouty, logy, omezeni na workspace cestu a nesmi vypisovat secrets. Nepridavat neomezene Docker/Git pravo mimo spravovane runtime flow.
 
 ## Architektura
 
@@ -40,7 +40,10 @@ Pro admin operace pouzivej `--no-live-status`, pokud odpoved ma byt kratka a det
 
 OpenWebUI API key nepredavej v prikazu. Helpery ho ctou z `OWUI_API_KEY`,
 nebo bezpecneji z ignorovaneho `codex/state/openwebui-api.key`. Pro ulozeni
-pouzij `codex/bin/store_openwebui_api_key.sh`, ktery klic nevypisuje.
+pouzij `codex/bin/store_openwebui_api_key.sh` nebo obecnejsi
+`codex/bin/store_runtime_secret.sh openwebui-api`; helpery klic nevypisuji.
+GitHub API token pro volitelne zakladani GitHub repozitaru ukladej pres
+`codex/bin/store_runtime_secret.sh github-api`, ne pres shell literaly.
 
 ## Modely
 
@@ -55,9 +58,12 @@ OpenWebUI model settings prompt pro `codex-local-*` je verzovany v
 `docs/codex-local-model-system-prompt.md`. Prompt ma model smerovat k normalni
 lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
 
-`Codex Auto Tools Filter` ma rozpoznavat uzke prirozene intenty typu "pullni
-ai-stack a nasad", "ukaz deploy status" nebo "vytvor nove repository Test2 a
-vygeneruj ssh klic" a prelozit je na auditovatelne whitelisted admin flow.
+`Codex Auto Tools Filter` ma rozpoznavat prirozene intenty typu "pullni
+ai-stack a nasad", "ukaz deploy status", "vytvor nove repository Test2 a
+vygeneruj ssh klic", bezne repo kontroly typu "zkontroluj git status" nebo
+explicitni "repo: X / spust prikaz: ...". Nemel by vyrabet novy marker pro
+kazdou drobnost; cilem jsou sirsi capability workflow: deploy/status,
+workspace-run, create-repo recipe a pozdeji dalsi profile-based schopnosti.
 Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
 ## Bezpecnostni pravidla
@@ -68,7 +74,7 @@ Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 - Pred pushem musi byt `blocked_paths` a `sensitive_paths_seen` prazdne.
 - OpenWebUI nesmi mit pripojeny Docker socket bez jasneho duvodu.
 - Runtime cesty `codex/state/`, `codex/audit/`, `logs/`, `.env`, `__pycache__`, `.bak-*` necommitovat.
-- Pokud je potreba novy nastroj, ma byt uzky, pojmenovany, testovany a zdokumentovany.
+- Pokud je potreba nova schopnost, nejdriv zvaz rozsirenou capability s jasnym profilem, misto dalsiho jednorazoveho markeru. Musi byt pojmenovana, testovana, auditovana a zdokumentovana.
 - Bezny chat je read-only. Pozadavky na shell, instalace, generovani klicu, GitHub repo, push nebo realne editace musi bud vratit vysvetleni, nebo jit pres explicitni whitelisted admin/tool workflow.
 
 ## Admin prikazy
@@ -86,7 +92,7 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_SMOKE [workspace]`: spusti gateway smoke test.
 - `GATEWAY_ADMIN_GIT_PUSH <branch> <message>`: commitne a pushne pouze allowed cesty.
 - `GATEWAY_ADMIN_SSH_KEYGEN`: vygeneruje SSH klic do ignorovane runtime cesty.
-- `GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]`: vytvori lokalni repo pod `/mnt/c/Repositories`, inicializuje Git, prida README, vygeneruje ignorovany deploy SSH klic, vrati public key a zaregistruje workspace. Nevytvari GitHub repo; k tomu je potreba GitHub API token nebo autentizovany `gh` tool.
+- `GATEWAY_ADMIN_CREATE_LOCAL_REPO <name> [--github] [--github-owner OWNER] [--private|--public] [--path PATH] [--port N] [--cpus N] [--memory 16g] [--default] [--restart]`: vytvori lokalni repo pod `/mnt/c/Repositories`, inicializuje Git, prida README, vygeneruje ignorovany deploy SSH klic, vrati public key a zaregistruje workspace. S `--github` pouzije `GITHUB_TOKEN`, `GITHUB_TOKEN_FILE`, nebo ignorovany `codex/state/github-api.token`, zalozi GitHub repo, prida deploy key a nastavi `origin`. Bez tokenu vraci `GITHUB_TOKEN_MISSING`.
 - `GATEWAY_ADMIN_GIT_UNTRACK_IGNORED`: pomuze odstranit ignorovane runtime soubory z indexu, pokud se tam omylem dostaly.
 
 ## Workflow zmeny

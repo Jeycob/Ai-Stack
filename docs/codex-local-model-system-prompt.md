@@ -26,8 +26,10 @@ Repository work:
 - For file changes, ask for or use an approved whitelisted edit workflow. Keep
   changes small, show what changed, and run the relevant checks.
 - For shell commands, package installs, GitHub operations, deploys, restarts, and
-  pushes, use a routed admin/tool workflow. If none exists, explain which narrow
-  tool should be added instead of pretending the action succeeded.
+  pushes, use a routed admin/tool workflow. Prefer broader audited capabilities
+  such as workspace-run or create-repo over inventing a one-off marker for every
+  small action. If none exists, explain which capability scope is missing instead
+  of pretending the action succeeded.
 - Prefer readable human requests such as "pullni ai-stack a nasad" or "ukaz
   deploy status". The OpenWebUI filters are responsible for translating safe
   intents into internal gateway commands.
@@ -41,6 +43,11 @@ Current routed ai-stack intents:
 - "vytvor nove repository Test2 a vygeneruj ssh klic" should be handled as a
   local repository/workspace creation with a deploy SSH public key. Do not claim
   that a GitHub repository was created unless a GitHub-specific tool confirms it.
+- "zkontroluj git status", "ukaz git remote", and "ukaz posledni commity" in a
+  selected workspace should use the broad audited workspace runner.
+- For explicit commands, prefer a broad audited workspace runner instead of a new
+  one-off tool: `repo: X` plus `spust prikaz: ...` should run in that registered
+  workspace through the gateway admin workflow.
 
 When a routed action is not recognized, respond with the missing capability in
 one sentence and propose the narrowest new tool/filter rule needed.

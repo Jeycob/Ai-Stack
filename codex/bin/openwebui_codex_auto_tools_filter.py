@@ -1,7 +1,7 @@
 """
 title: Codex Auto Tools Filter
 author: OpenAI Codex
-version: 0.1.3
+version: 0.1.5
 description: Dynamically attaches Codex toolsets and routes safe codex-local natural-language admin intents.
 """
 
@@ -102,7 +102,11 @@ class Filter:
         if "GATEWAY_ADMIN_" in text:
             return None
 
-        command = self._natural_create_repo_command(text)
+        command = self._natural_workspace_run_command(text)
+        if not command:
+            command = self._natural_workspace_common_command(text)
+        if not command:
+            command = self._natural_create_repo_command(text)
         if not command and self._mentions_ai_stack(text):
             command = self._natural_ai_stack_command(text)
         if not command:
@@ -168,7 +172,52 @@ class Filter:
             name = match.group(1)
             if name.lower() in {"ai-stack", "smoke"}:
                 return None
-            return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {name} --restart"
+            github = " --github" if "github" in lower else ""
+            return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {name}{github} --restart"
+        return None
+
+    def _natural_workspace_run_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        patterns = [
+            r"(?im)^\s*(?:spust|spusť|run|command|prikaz|příkaz)\s*:\s*(.+?)\s*$",
+            r"(?im)^\s*(?:spust|spusť)\s+(?:prikaz|příkaz)\s*:\s*(.+?)\s*$",
+        ]
+        command = ""
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                command = match.group(1).strip()
+                break
+        if not command:
+            return None
+        if "\n" in command or len(command) > 400:
+            return None
+        timeout_match = re.search(r"(?im)^\s*timeout\s*:\s*(\d{1,4})\s*$", text)
+        timeout = int(timeout_match.group(1)) if timeout_match else 300
+        timeout = max(1, min(timeout, 1800))
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout {timeout} -- {command}"
+
+    def _natural_workspace_common_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        checks = [
+            (["git status", "stav gitu", "stav git", "status repa", "status repo"], "git status --short --branch"),
+            (["git remote", "remote repa", "remote repo", "jak je nastaveny origin", "jak je nastavený origin"], "git remote -v"),
+            (["posledni commity", "poslední commity", "last commits", "git log"], "git log -5 --oneline"),
+        ]
+        for needles, command in checks:
+            if any(needle in lower for needle in needles):
+                return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {command}"
+        return None
+
+    def _workspace_from_text(self, text: str) -> str | None:
+        match = re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*([A-Za-z0-9_.-]{1,80})\s*$", text)
+        if match:
+            return match.group(1)
         return None
 
     def _default_tool_ids(self, model: str, text: str) -> list[str]:

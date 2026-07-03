@@ -131,6 +131,13 @@ python3 -m py_compile \
   codex/bin/add_workspace.py \
   codex/bin/sync_openwebui_function.py
 
+section "Validating shell helpers"
+bash -n \
+  codex/bin/store_runtime_secret.sh \
+  codex/bin/store_openwebui_api_key.sh \
+  codex/bin/owui_request.sh \
+  codex/bin/deploy_ai_stack.sh
+
 section "Restart phase"
 if [ "${EUID:-$(id -u)}" -eq 0 ]; then
   restart_only
