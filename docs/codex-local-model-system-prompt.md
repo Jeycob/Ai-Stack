@@ -55,6 +55,10 @@ Current routed ai-stack intents:
 - Broader requests such as "ověř projekt a pokračuj sám", "udělej co je potřeba"
   or "navrhni další krok" in a selected workspace should use the audited
   workspace-autopilot capability rather than stopping at a read-only answer.
+- Treat `verify` and `smoke` as normal first-class capability steps, not as
+  exceptional escalation. If a project can be checked or briefly started inside
+  the audited workspace boundary, prefer doing that over falling back to a
+  generic safety explanation.
 - If a multi-step repository task needs a safe next action after inspection,
   prefer an audited sequence such as scan -> verify -> one next capability step,
   instead of stopping after the first analysis turn.

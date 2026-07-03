@@ -1082,7 +1082,7 @@ def run_autopilot_sequence(args: argparse.Namespace) -> int:
     allowed_actions = {x.strip().lower() for x in args.allow_actions.split(",") if x.strip()}
     if not allowed_actions:
         raise SystemExit("--allow-actions must contain at least one action")
-    invalid = sorted(allowed_actions - {"install", "test", "build", "lint"})
+    invalid = sorted(allowed_actions - {"install", "test", "build", "lint", "verify", "smoke"})
     if invalid:
         raise SystemExit(f"Unsupported actions in --allow-actions: {', '.join(invalid)}")
 
@@ -1741,7 +1741,7 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     loop = decision.get("scaffold_loop", "").strip()
     steps = scaffold_plan_steps(decision, args.task)
     followup_candidates = scaffold_loop_followup_candidates(loop, recipe) if loop else []
-    fallback_candidates = [action for action in ["install", "verify", "build", "test", "lint"] if action not in followup_candidates]
+    fallback_candidates = [action for action in ["install", "verify", "smoke", "build", "test", "lint"] if action not in followup_candidates]
     followup_plan = followup_candidates + fallback_candidates
     preferred_followup = followup_plan[0] if followup_plan else None
     followup_limit = max(1, min(getattr(args, "followup_steps", 2), 4))
@@ -2599,7 +2599,7 @@ def parse_args() -> argparse.Namespace:
 
     action = sub.add_parser("action", help="Ask codex-local to run a broad workspace action")
     action.add_argument("workspace")
-    action.add_argument("action", choices=["install", "test", "build", "lint", "verify"])
+    action.add_argument("action", choices=["install", "test", "build", "lint", "verify", "smoke"])
     action.add_argument("--timeout", type=int, default=1800)
     action.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     action.add_argument("--dry-run-action", action="store_true")
@@ -2650,7 +2650,7 @@ def parse_args() -> argparse.Namespace:
     autopilot = sub.add_parser("autopilot", help="Run scan + verify + choose and optionally execute one safe next action")
     autopilot.add_argument("workspace")
     autopilot.add_argument("--timeout", type=int, default=2400)
-    autopilot.add_argument("--allow-actions", default="install,test,build,lint")
+    autopilot.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     autopilot.add_argument("--recommend-only", action="store_true", help="Only print the chosen next action, do not execute it")
     autopilot.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
@@ -2672,16 +2672,16 @@ def parse_args() -> argparse.Namespace:
     improve = sub.add_parser("improve", help="Run broader agentic workspace improvement: capability steps first, then safe patch workflow if needed")
     improve.add_argument("workspace")
     improve.add_argument("--timeout", type=int, default=2400)
-    improve.add_argument("--max-steps", type=int, default=2)
-    improve.add_argument("--allow-actions", default="install,test,build,lint")
+    improve.add_argument("--max-steps", type=int, default=3)
+    improve.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
     delegate = sub.add_parser("delegate", help="Choose the most suitable orchestration workflow for a workspace task and run it")
     delegate.add_argument("workspace")
     delegate.add_argument("task")
     delegate.add_argument("--timeout", type=int, default=2400)
-    delegate.add_argument("--max-steps", type=int, default=2)
-    delegate.add_argument("--allow-actions", default="install,test,build,lint")
+    delegate.add_argument("--max-steps", type=int, default=3)
+    delegate.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     delegate.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
     profile = sub.add_parser("profile", help="Classify a workspace task into a runtime profile and recommended workflow without executing it")
@@ -2746,8 +2746,8 @@ def parse_args() -> argparse.Namespace:
     dispatch.add_argument("--tasks", action="append", default=[], help="Task text; can be repeated")
     dispatch.add_argument("--task-file", help="Path to a newline-delimited task file")
     dispatch.add_argument("--timeout", type=int, default=2400)
-    dispatch.add_argument("--max-steps", type=int, default=2)
-    dispatch.add_argument("--allow-actions", default="install,test,build,lint")
+    dispatch.add_argument("--max-steps", type=int, default=3)
+    dispatch.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     dispatch.add_argument("--recommend-only", action="store_true", help="Only select and print the top task/workflow, do not execute it")
     dispatch.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI when execution is reached")
 
@@ -2762,8 +2762,8 @@ def parse_args() -> argparse.Namespace:
     bootstrap_improve.add_argument("task")
     bootstrap_improve.add_argument("--timeout", type=int, default=2400)
     bootstrap_improve.add_argument("--followup-steps", type=int, default=2, help="Maximum number of post-bootstrap workspace capability steps to attempt before improve flow")
-    bootstrap_improve.add_argument("--max-steps", type=int, default=2)
-    bootstrap_improve.add_argument("--allow-actions", default="install,test,build,lint")
+    bootstrap_improve.add_argument("--max-steps", type=int, default=3)
+    bootstrap_improve.add_argument("--allow-actions", default="install,verify,smoke,test,build,lint")
     bootstrap_improve.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
     return parser.parse_args()

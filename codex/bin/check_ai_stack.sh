@@ -10,21 +10,48 @@ TIMEOUT="${TIMEOUT:-10}"
 OWUI_CHAT_SMOKE_EXPECTED="${OWUI_CHAT_SMOKE_EXPECTED:-smoke}"
 OWUI_CHAT_SMOKE_VISIBLE="${OWUI_CHAT_SMOKE_VISIBLE:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
 OWUI_CHAT_SMOKE_PROMPT="${OWUI_CHAT_SMOKE_PROMPT:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
+SUMMARY_ONLY="${CHECK_AI_STACK_SUMMARY_ONLY:-0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_KEY_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/state/openwebui-api.key"
 OWUI_KEY_FILE="${OWUI_API_KEY_FILE:-$DEFAULT_KEY_FILE}"
 
 failures=0
+total_checks=0
+passed_checks=0
+skipped_checks=0
+summary_lines=""
+
+record_summary() {
+  local label="$1"
+  local status="$2"
+  summary_lines+="${label}=${status}"$'\n'
+  case "$status" in
+    OK)
+      total_checks=$((total_checks + 1))
+      passed_checks=$((passed_checks + 1))
+      ;;
+    FAIL)
+      total_checks=$((total_checks + 1))
+      ;;
+    SKIP)
+      skipped_checks=$((skipped_checks + 1))
+      ;;
+  esac
+}
 
 check_url() {
   local label="$1"
   local url="$2"
-  printf '[check] %s ... ' "$label"
-  if curl -fsS --connect-timeout 5 --max-time "$TIMEOUT" "$url" >/dev/null; then
-    printf 'OK\n'
+  if [ "$SUMMARY_ONLY" != "1" ]; then
+    printf '[check] %s ... ' "$label"
+  fi
+  if curl -fsS --connect-timeout 5 --max-time "$TIMEOUT" "$url" >/dev/null 2>/dev/null; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf 'OK\n'
+    record_summary "$label" "OK"
   else
-    printf 'FAIL (%s)\n' "$url"
+    [ "$SUMMARY_ONLY" != "1" ] && printf 'FAIL (%s)\n' "$url"
     failures=$((failures + 1))
+    record_summary "$label" "FAIL"
   fi
 }
 
@@ -33,28 +60,53 @@ check_json_contains() {
   local url="$2"
   local needle="$3"
   local body
-  printf '[check] %s ... ' "$label"
-  if ! body="$(curl -fsS --connect-timeout 5 --max-time "$TIMEOUT" "$url")"; then
-    printf 'FAIL (%s)\n' "$url"
+  if [ "$SUMMARY_ONLY" != "1" ]; then
+    printf '[check] %s ... ' "$label"
+  fi
+  if ! body="$(curl -fsS --connect-timeout 5 --max-time "$TIMEOUT" "$url" 2>/dev/null)"; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf 'FAIL (%s)\n' "$url"
     failures=$((failures + 1))
+    record_summary "$label" "FAIL"
     return
   fi
   if printf '%s' "$body" | grep -Fq -- "$needle"; then
-    printf 'OK\n'
+    [ "$SUMMARY_ONLY" != "1" ] && printf 'OK\n'
+    record_summary "$label" "OK"
   else
-    printf 'FAIL missing %s\n' "$needle"
+    [ "$SUMMARY_ONLY" != "1" ] && printf 'FAIL missing %s\n' "$needle"
     failures=$((failures + 1))
+    record_summary "$label" "FAIL"
   fi
 }
 
-printf 'AI stack healthcheck\n'
-printf 'openwebui=%s\n' "$OPENWEBUI_URL"
-printf 'gateway=%s\n' "$CODEX_GATEWAY_URL"
-printf 'ollama=%s\n' "$OLLAMA_URL"
-printf 'workspace=%s model=%s\n' "$WORKSPACE" "$MODEL"
+emit_summary() {
+  local verdict="OK"
+  if [ "$failures" -ne 0 ]; then
+    verdict="FAILED"
+  fi
+  printf 'AI_STACK_VERDICT\n'
+  printf 'status=%s\n' "$verdict"
+  printf 'workspace=%s\n' "$WORKSPACE"
+  printf 'model=%s\n' "$MODEL"
+  printf 'checks_total=%s\n' "$total_checks"
+  printf 'checks_passed=%s\n' "$passed_checks"
+  printf 'checks_failed=%s\n' "$failures"
+  printf 'checks_skipped=%s\n' "$skipped_checks"
+  printf 'summary:\n'
+  printf '%s' "$summary_lines"
+}
+
+if [ "$SUMMARY_ONLY" != "1" ]; then
+  printf 'AI stack healthcheck\n'
+  printf 'openwebui=%s\n' "$OPENWEBUI_URL"
+  printf 'gateway=%s\n' "$CODEX_GATEWAY_URL"
+  printf 'ollama=%s\n' "$OLLAMA_URL"
+  printf 'workspace=%s model=%s\n' "$WORKSPACE" "$MODEL"
+fi
 
 if [ "${SKIP_OPENWEBUI:-0}" = "1" ]; then
-  printf '[check] OpenWebUI config endpoint ... SKIP (self-check disabled)\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI config endpoint ... SKIP (self-check disabled)\n'
+  record_summary "OpenWebUI config endpoint" "SKIP"
 else
   check_url 'OpenWebUI config endpoint' "$OPENWEBUI_URL/api/config"
 fi
@@ -64,27 +116,38 @@ check_json_contains 'Codex gateway model alias' "$CODEX_GATEWAY_URL/v1/models" "
 check_json_contains 'Codex gateway workspace registry' "$CODEX_GATEWAY_URL/v1/workspaces" "$WORKSPACE"
 
 if command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/codex_gateway_smoke.py" ]; then
-  printf '[check] Codex gateway smoke ...\n'
-  if python3 "$SCRIPT_DIR/codex_gateway_smoke.py" --base-url "$CODEX_GATEWAY_URL" --workspace "$WORKSPACE" --model "$MODEL" --timeout 60; then
-    printf '[check] Codex gateway smoke OK\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke ...\n'
+  gateway_smoke_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/codex_gateway_smoke.py" --base-url "$CODEX_GATEWAY_URL" --workspace "$WORKSPACE" --model "$MODEL" --timeout 60 >"$gateway_smoke_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke OK\n'
+    record_summary "Codex gateway smoke" "OK"
   else
-    printf '[check] Codex gateway smoke FAIL\n'
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke FAIL\n'
     failures=$((failures + 1))
+    record_summary "Codex gateway smoke" "FAIL"
   fi
+  rm -f "$gateway_smoke_log"
 else
-  printf '[check] Codex gateway smoke SKIP (python3 or codex_gateway_smoke.py missing)\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke SKIP (python3 or codex_gateway_smoke.py missing)\n'
+  record_summary "Codex gateway smoke" "SKIP"
 fi
 
 if [ "${SKIP_OWUI_CHAT_SMOKE:-0}" = "1" ]; then
-  printf '[check] OpenWebUI audit chat smoke ... SKIP (disabled)\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI audit chat smoke ... SKIP (disabled)\n'
+  record_summary "OpenWebUI audit chat smoke" "SKIP"
 elif ! command -v python3 >/dev/null 2>&1 || [ ! -f "$SCRIPT_DIR/owui_chat_smoke.py" ]; then
-  printf '[check] OpenWebUI audit chat smoke ... SKIP (python3 or owui_chat_smoke.py missing)\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI audit chat smoke ... SKIP (python3 or owui_chat_smoke.py missing)\n'
+  record_summary "OpenWebUI audit chat smoke" "SKIP"
 elif [ -z "${OWUI_API_KEY:-}" ] && [ ! -f "$OWUI_KEY_FILE" ]; then
-  printf '[check] OpenWebUI audit chat smoke ... SKIP (no API key)\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI audit chat smoke ... SKIP (no API key)\n'
+  record_summary "OpenWebUI audit chat smoke" "SKIP"
 else
-  printf '[check] OpenWebUI audit chat smoke ...\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI audit chat smoke ...\n'
   visible_file="$(mktemp)"
   prompt_file="$(mktemp)"
+  chat_smoke_log="$(mktemp)"
   printf '%b\n' "$OWUI_CHAT_SMOKE_VISIBLE" > "$visible_file"
   printf '%b\n' "$OWUI_CHAT_SMOKE_PROMPT" > "$prompt_file"
   if python3 "$SCRIPT_DIR/owui_chat_smoke.py" \
@@ -95,19 +158,27 @@ else
       --prompt-file "$prompt_file" \
       --expected-substring "$OWUI_CHAT_SMOKE_EXPECTED" \
       --status-interval 2 \
-      --quiet; then
-    printf '[check] OpenWebUI audit chat smoke OK\n'
+      --quiet >"$chat_smoke_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$chat_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI audit chat smoke OK\n'
+    record_summary "OpenWebUI audit chat smoke" "OK"
   else
-    printf '[check] OpenWebUI audit chat smoke FAIL\n'
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$chat_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI audit chat smoke FAIL\n'
     failures=$((failures + 1))
+    record_summary "OpenWebUI audit chat smoke" "FAIL"
   fi
-  rm -f "$visible_file" "$prompt_file"
+  rm -f "$visible_file" "$prompt_file" "$chat_smoke_log"
 fi
 
 if [ "$failures" -eq 0 ]; then
-  printf 'AI STACK OK\n'
+  [ "$SUMMARY_ONLY" != "1" ] && printf 'AI STACK OK\n'
+  emit_summary
   exit 0
 fi
 
-printf 'AI STACK FAILED checks=%s\n' "$failures" >&2
+if [ "$SUMMARY_ONLY" != "1" ]; then
+  printf 'AI STACK FAILED checks=%s\n' "$failures" >&2
+fi
+emit_summary
 exit 1
