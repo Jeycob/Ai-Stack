@@ -12,6 +12,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from unittest.mock import patch
+import tempfile
+import json
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -35,6 +37,7 @@ def assert_fallback_plans() -> None:
         ("Prohlédni architekturu. Nic needituj.", "review"),
         ("vytvor repozitar: svatektest", "bootstrap"),
         ("vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic", "bootstrap"),
+        ("repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git", "workspace_git_publish"),
         ("kdo ma dneska svatek? stahni mi to z seznam.cz", "web_answer"),
         ("spust prikaz: pwd", "run"),
         ("pullni ai-stack a nasad", "deploy"),
@@ -173,6 +176,59 @@ def assert_explicit_command_stays_run() -> None:
     print("EXPLICIT_RUN_NORMALIZATION_OK")
 
 
+def assert_workspace_git_publish_manual_recovery() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        workspace_root = tmp / "TestCode"
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        workspaces_file = tmp / "workspaces.json"
+        workspaces_file.write_text(
+            json.dumps(
+                {
+                    "default": "ai-stack",
+                    "workspaces": {
+                        "ai-stack": {"path": str(tmp / "ai-stack"), "port": 4098, "cpus": 8, "memory": "16g"},
+                        "TestCode": {"path": str(workspace_root), "port": 4100, "cpus": 8, "memory": "16g"},
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        with patch.object(gateway, "WORKSPACES_FILE", str(workspaces_file)), patch.object(
+            gateway,
+            "ensure_workspace_runtime_ssh_key",
+            return_value={
+                "workspace": "TestCode",
+                "container_private_key": "/home/opencode/.ssh/github-TestCode_ed25519",
+                "container_public_key": "/home/opencode/.ssh/github-TestCode_ed25519.pub",
+                "public_key": "ssh-ed25519 AAAATEST TestCode@local",
+                "source_key": {
+                    "public_key_path": "codex/state/ssh/github-TestCode_ed25519.pub",
+                    "public_key": "ssh-ed25519 AAAATEST TestCode@local",
+                },
+            },
+        ), patch.object(
+            gateway,
+            "admin_run_workspace",
+            return_value={
+                "ok": False,
+                "runner": "container",
+                "output": "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+            },
+        ):
+            result = gateway.admin_workspace_git_publish({
+                "workspace": "TestCode",
+                "remote_url": "git@github.com:owner/repo.git",
+            })
+    if result.get("status") != "MANUAL_STEP_REQUIRED":
+        raise SystemExit(f"expected MANUAL_STEP_REQUIRED, got {result!r}")
+    if "ssh-ed25519" not in str(result.get("public_key") or ""):
+        raise SystemExit(f"expected public key in manual recovery, got {result!r}")
+    print("WORKSPACE_GIT_PUBLISH_MANUAL_RECOVERY_OK")
+
+
 def assert_agent_loop_prefers_llm_plan() -> None:
     llm_plan = {
         "workflow": "review",
@@ -196,7 +252,32 @@ def assert_agent_loop_prefers_llm_plan() -> None:
     ), patch.object(
         gateway,
         "agent_plan",
-        return_value=(llm_plan, '{"workflow":"review"}'),
+        return_value=(
+            llm_plan,
+            {
+                "current_workspace": "ai-stack",
+                "user_goal": "read-only review",
+                "is_new_workspace_request": False,
+                "is_existing_workspace_task": True,
+                "target_repo_name": "",
+                "remote_url": "",
+                "desired_end_state": "review_returned",
+                "required_capabilities": ["clarify_or_infer_capability"],
+                "missing_inputs": [],
+                "risk_level": "low",
+                "recovery_plan": "none",
+                "read_only": True,
+                "command": [],
+                "action": "",
+                "run_after": "",
+                "followup_actions": [],
+                "url": "",
+                "question": "",
+                "ssh_comment": "",
+                "confidence": "high",
+            },
+            '{"current_workspace":"ai-stack"}',
+        ),
     ) as mocked_plan, patch.object(
         gateway,
         "agent_fallback_plan",
@@ -594,6 +675,7 @@ def main() -> int:
     assert_bootstrap_beats_workspace_ssh_for_new_repo()
     assert_verify_prefers_action_over_run_without_explicit_command()
     assert_explicit_command_stays_run()
+    assert_workspace_git_publish_manual_recovery()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()
     assert_codex_local_payload_routing()

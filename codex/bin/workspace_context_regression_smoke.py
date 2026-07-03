@@ -163,6 +163,50 @@ def main() -> int:
             expect(semicolon_bootstrap["workflow"] == "bootstrap", "bootstrap-over-ssh-workflow-semicolon", json.dumps(semicolon_bootstrap, ensure_ascii=False))
             expect(semicolon_bootstrap["repo_name"] == "TestCode", "bootstrap-over-ssh-repo-name-semicolon", json.dumps(semicolon_bootstrap, ensure_ascii=False))
 
+            publish_task = "initni git repo a pushni sem git@github.com:owner/repo.git"
+            publish_plan = gateway.normalize_agent_plan(
+                {"workflow": "review"},
+                "TestCode",
+                "ai-stack",
+                True,
+                publish_task,
+            )
+            expect(publish_plan["workflow"] == "workspace_git_publish", "existing-workspace-git-publish", json.dumps(publish_plan, ensure_ascii=False))
+            expect(publish_plan["remote_url"] == "git@github.com:owner/repo.git", "existing-workspace-git-remote", json.dumps(publish_plan, ensure_ascii=False))
+
+            taskspec = gateway.normalize_agent_taskspec(
+                {
+                    "current_workspace": "TestCode",
+                    "user_goal": "init git repo and push to GitHub",
+                    "is_new_workspace_request": False,
+                    "is_existing_workspace_task": True,
+                    "target_repo_name": "",
+                    "remote_url": "git@github.com:owner/repo.git",
+                    "desired_end_state": "git_init_origin_commit_push_main",
+                    "required_capabilities": ["workspace_git_publish"],
+                    "missing_inputs": [],
+                    "risk_level": "medium",
+                    "recovery_plan": "Return manual step if auth fails.",
+                },
+                "TestCode",
+                "ai-stack",
+                True,
+                publish_task,
+            )
+            expect(taskspec["current_workspace"] == "TestCode", "taskspec-current-workspace", json.dumps(taskspec, ensure_ascii=False))
+            expect(taskspec["is_new_workspace_request"] is False, "taskspec-not-bootstrap", json.dumps(taskspec, ensure_ascii=False))
+            expect("workspace_git_publish" in taskspec["required_capabilities"], "taskspec-publish-capability", json.dumps(taskspec, ensure_ascii=False))
+            publish_plan_from_taskspec = gateway.agent_taskspec_to_plan(taskspec, "TestCode", "ai-stack", True, publish_task)
+            expect(publish_plan_from_taskspec["workflow"] == "workspace_git_publish", "taskspec-to-plan-git-publish", json.dumps(publish_plan_from_taskspec, ensure_ascii=False))
+
+            continue_messages = [
+                {"role": "user", "content": "vytvor mi nove repository TestCode"},
+                {"role": "assistant", "content": "AGENT_LOOP_OK\nrequested_workspace=ai-stack\ncontroller_workspace=ai-stack\nexecution:\n{\"name\":\"TestCode\"}"},
+                {"role": "user", "content": "pokračuj"},
+            ]
+            continue_resolved = workspace_context.resolve_workspace_context("pokračuj", continue_messages, workspaces_file, fallback_workspace="ai-stack")
+            expect(continue_resolved.workspace == "TestCode", "continue-keeps-workspace", repr(continue_resolved))
+
             recommendation = gateway.workspace_autopilot_recommendation("TestCode")
             expect(isinstance(recommendation, dict), "load-workspace-path-object", repr(recommendation))
 

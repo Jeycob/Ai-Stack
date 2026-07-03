@@ -29,6 +29,10 @@
       "scope": "public_web",
       "summary": "Auditovana capability pro cteni verejnych HTTP/HTTPS zdroju, stazeni textu a zodpovezeni dotazu pouze z nacteneho verejneho obsahu."
     },
+    "workspace_git_publish": {
+      "scope": "workspace_runtime",
+      "summary": "Auditovana capability pro existujici workspace: git init, origin remote, commit, push branch main a recovery s workspace SSH public key pri auth blockerech."
+    },
     "clarify_or_infer_capability": {
       "scope": "mentoring",
       "summary": "Nejužší mentoring krok pro nejednoznacne zadani: nejdriv audit, upresneni nebo inference dalsi capability, az pak rozsirovani scope."

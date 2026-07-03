@@ -42,6 +42,30 @@ ASSISTANT_FALLBACK_WORKSPACE_PATTERNS = (
     rf"(?im)^\s*controller_workspace\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
     rf"(?im)^\s*repo\s*:\s*({WORKSPACE_NAME_PATTERN})\s*$",
 )
+INVALID_REPO_NAME_CANDIDATES = {
+    "a",
+    "ai-stack",
+    "do",
+    "github",
+    "gitlab",
+    "git",
+    "i",
+    "na",
+    "ne",
+    "nej",
+    "new",
+    "nove",
+    "nové",
+    "novy",
+    "nový",
+    "remote",
+    "sem",
+    "smoke",
+    "ssh",
+    "to",
+    "v",
+    "ve",
+}
 
 
 @dataclass(frozen=True)
@@ -81,7 +105,7 @@ def infer_repo_name_from_text(text: str) -> str:
         match = re.search(pattern, value)
         if match:
             candidate = match.group(1).strip()
-            if candidate.lower() not in {"ai-stack", "smoke", "github", "gitlab", "remote", "new", "novy", "nový", "nove", "nové"}:
+            if candidate.lower() not in INVALID_REPO_NAME_CANDIDATES:
                 return candidate
     return ""
 
@@ -92,7 +116,7 @@ def bootstrap_repo_name_from_text(text: str) -> str:
         match = re.search(pattern, value)
         if match:
             candidate = match.group(1).strip()
-            if candidate.lower() not in {"ai-stack", "smoke", "github", "gitlab", "remote", "new", "novy", "nový", "nove", "nové"}:
+            if candidate.lower() not in INVALID_REPO_NAME_CANDIDATES:
                 return candidate
     return ""
 

@@ -16,6 +16,7 @@ if str(BIN_DIR) not in sys.path:
 
 from workspace_context import (
     WORKSPACE_LABEL_PATTERN,
+    bootstrap_repo_name_from_text,
     canonical_workspace_name,
     infer_repo_name_from_text,
     load_workspace_registry,
@@ -693,6 +694,7 @@ AGENT_LOOP_WORKFLOWS = {
     "run",
     "autopilot",
     "bootstrap",
+    "workspace_git_publish",
     "ssh_key_create",
     "ssh_key_show_public",
     "web_answer",
@@ -779,6 +781,7 @@ def agent_capability_catalog():
         "- run: execute one explicit short command inside codex-opencode-<workspace> and return output",
         "- autopilot: recovery/verify loop over install/verify/smoke/test/build/lint",
         "- bootstrap: create local repository/workspace, init git, generate SSH key, optionally continue with follow-up actions",
+        "- workspace_git_publish: operate inside an existing workspace, ensure git init/origin/commit/push using the workspace SSH key",
         "- ssh_key_create: create or reuse the workspace SSH key idempotently and return the public key path",
         "- ssh_key_show_public: return the workspace SSH public key; if missing, create it idempotently first",
         "- web_answer: answer a question from a public HTTP/HTTPS source",
@@ -928,8 +931,6 @@ def agent_bootstrap_requested(task):
         "nové repo",
         "vytvor workspace",
         "vytvoř workspace",
-        "initni git",
-        "init git",
     )
     return any(cue in lower for cue in cues)
 
@@ -978,6 +979,71 @@ def agent_workspace_ssh_comment(task, workspace):
     if email:
         return email.group(0)
     return f"{workspace}@local"
+
+
+def agent_remote_url_from_task(task):
+    text = str(task or "").strip()
+    patterns = (
+        r"\bgit@github\.com:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?\b",
+        r"\bssh://git@github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?\b",
+        r"\bhttps://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            return match.group(0)
+    return ""
+
+
+def agent_git_publish_requested(task):
+    lower = str(task or "").lower()
+    git_cues = (
+        "git push",
+        "pushni",
+        "pushnout",
+        "push to",
+        "nastav origin",
+        "set origin",
+        "git remote",
+        "remote origin",
+        "initni git",
+        "init git",
+        "git init",
+        "commitni",
+        "commit changes",
+    )
+    return agent_remote_url_from_task(task) != "" and any(cue in lower for cue in git_cues)
+
+
+def agent_new_workspace_request(task):
+    return bool(bootstrap_repo_name_from_text(task))
+
+
+def agent_executable_task_requested(task):
+    lower = str(task or "").lower()
+    generic_cues = (
+        "udělej",
+        "udelej",
+        "proveď",
+        "proved",
+        "spusť",
+        "spust",
+        "nainstaluj",
+        "doinstaluj",
+        "oprav",
+        "fixni",
+        "vytvoř",
+        "vytvor",
+        "přidej",
+        "pridej",
+        "rozběhni",
+        "rozbehni",
+        "commitni",
+        "pushni",
+        "initni",
+        "nastav",
+    )
+    return any(cue in lower for cue in generic_cues)
 
 
 def agent_public_url_from_task(task):
@@ -1136,6 +1202,8 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         workflow = "deploy"
     elif bootstrap_requested:
         workflow = "bootstrap"
+    elif workspace_exists and agent_git_publish_requested(task):
+        workflow = "workspace_git_publish"
     elif workspace_exists and agent_ssh_key_show_public_requested(task):
         workflow = "ssh_key_show_public"
     elif workspace_exists and agent_ssh_key_create_requested(task):
@@ -1164,6 +1232,8 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         "followup_actions": inferred_followups if workflow in {"bootstrap", "autopilot"} else [],
         "repo_name": agent_extract_repo_name(task) if workflow == "bootstrap" else "",
         "github": "github" in str(task or "").lower(),
+        "remote_url": agent_remote_url_from_task(task) if workflow == "workspace_git_publish" else "",
+        "desired_end_state": "git_init_origin_commit_push_main" if workflow == "workspace_git_publish" else "",
         "url": url,
         "question": str(task or "").strip() if workflow == "web_answer" else "",
         "ssh_comment": agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
@@ -1311,48 +1381,106 @@ def rescue_nested_workspace_helper(workspace, command):
     return None
 
 
-def agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
+def _boolish(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "ano"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "ne"}:
+            return False
+    return default
+
+
+def _string_list(value):
+    if not isinstance(value, list):
+        return []
+    out = []
+    seen = set()
+    for item in value:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def agent_capability_hints_from_task(task, workspace_exists):
+    capabilities = []
+    remote_url = agent_remote_url_from_task(task)
+    bootstrap_name = bootstrap_repo_name_from_text(task)
+    if bootstrap_name:
+        capabilities.append("workspace_repo_bootstrap")
+    if remote_url and workspace_exists and not bootstrap_name:
+        capabilities.append("workspace_git_publish")
+    if agent_ssh_key_show_public_requested(task):
+        capabilities.append("workspace_ssh_key_show_public")
+    elif agent_ssh_key_create_requested(task):
+        capabilities.append("workspace_ssh_key_create")
+    if agent_deploy_requested(task):
+        capabilities.append("stack_deploy")
+    if agent_public_url_from_task(task):
+        capabilities.append("public_web_access")
+    inferred_action = agent_infer_action_from_task(task)
+    if inferred_action:
+        capabilities.append(f"workspace_action:{inferred_action}")
+    if agent_edit_requested(task):
+        capabilities.append("workspace_edit")
+    explicit_command = agent_infer_command_from_task(task)
+    if explicit_command:
+        capabilities.append("workspace_run")
+    elif agent_executable_task_requested(task):
+        capabilities.append("workspace_autopilot")
+    if not capabilities:
+        capabilities.append("clarify_or_infer_capability")
+    return capabilities
+
+
+def agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
     registry = load_registry()[1]
     workspace_list = ", ".join(sorted(registry))
     return [
         {
             "role": "system",
             "content": (
-                "You are the intent planner for a local Codex-like engineering agent. "
-                "Return JSON only. Do not explain. Choose the single best next workflow, not every possible one.\n\n"
+                "You are the TaskSpec planner for a local Codex-like engineering agent. "
+                "Return JSON only. Do not explain. Do not output the workflow directly. "
+                "First understand the user's actual goal and target state, then describe the work as TaskSpec.\n\n"
                 "Output schema:\n"
                 "{\n"
-                '  "workflow": "review|edit|action|run|autopilot|bootstrap|ssh_key_create|ssh_key_show_public|web_answer|web_fetch|deploy|clarify",\n'
-                '  "reason": "short reason",\n'
-                '  "read_only": true,\n'
-                '  "workspace": "workspace-name",\n'
+                '  "current_workspace": "workspace-name",\n'
+                '  "user_goal": "what the user actually wants to end up with",\n'
+                '  "is_new_workspace_request": false,\n'
+                '  "is_existing_workspace_task": true,\n'
+                '  "target_repo_name": "repo or workspace name or empty",\n'
+                '  "remote_url": "git@github.com:owner/repo.git or empty",\n'
+                '  "desired_end_state": "concrete end state",\n'
+                '  "required_capabilities": ["workspace_git_publish"],\n'
+                '  "missing_inputs": [],\n'
+                '  "risk_level": "low|medium|high",\n'
+                '  "recovery_plan": "what to do if the preferred capability is blocked",\n'
+                '  "read_only": false,\n'
+                '  "command": ["optional","explicit","command"],\n'
                 '  "action": "install|verify|smoke|test|build|lint or empty",\n'
-                '  "command": ["short","command","args"],\n'
                 '  "run_after": "install|verify|smoke|test|build|lint or empty",\n'
-                '  "followup_actions": ["install","verify"],\n'
-                '  "repo_name": "name or empty",\n'
-                '  "github": false,\n'
+                '  "followup_actions": ["install","smoke"],\n'
                 '  "url": "public url or empty",\n'
-                '  "question": "question for public web answer or empty",\n'
+                '  "question": "public-web question or empty",\n'
+                '  "ssh_comment": "ssh key comment or empty",\n'
                 '  "confidence": "high|medium|low"\n'
                 "}\n\n"
                 "Planning rules:\n"
-                "- If the user explicitly says no edits, choose review with read_only=true.\n"
-                "- For analysis/explanation/review prompts, choose review.\n"
-                "- For file or code changes, choose edit. If the prompt also asks to verify/test/build/smoke after the edit, set run_after.\n"
-                "- For direct install/verify/smoke/test/build/lint requests, choose action.\n"
-                "- For an explicit one-off shell/terminal command or a small runtime inspection not covered by named actions, choose run and set command as a JSON string array.\n"
-                "- For 'do what is needed', 'continue autonomously', recovery, or multi-step runtime stabilization, choose autopilot.\n"
-                "- For creating a new repository/workspace/git init/SSH key bootstrap flow, choose bootstrap. "
-                "Put the new repository name in repo_name and any post-bootstrap runtime steps into followup_actions. "
-                "If the task says things like 'stáhni co je třeba', 'doinstaluj', 'rozběhni to', 'pusť to', "
-                "'otestuj' or similar, translate that into concrete followup_actions such as install, smoke, test, build, or verify.\n"
-                "- If the workspace already exists and the user asks to create an SSH key or runs ssh-keygen, choose ssh_key_create instead of bootstrap or raw run.\n"
-                "- If the user asks for the public key, choose ssh_key_show_public.\n"
-                "- If GitHub push/remote is mentioned during bootstrap, set github=true, but do not assume push is already confirmed.\n"
-                "- For public website questions, choose web_answer; for plain fetch, choose web_fetch.\n"
-                "- For ai-stack self-update/deploy/restart prompts, choose deploy.\n"
-                "- If the request is materially ambiguous, choose clarify.\n"
+                "- Bootstrap is only for clearly new repository/workspace requests.\n"
+                "- If an existing workspace is the target and the user mentions git init, origin, remote, push, or a remote URL, prefer existing-workspace git publishing instead of bootstrap.\n"
+                "- If the task asks for SSH key creation in an existing workspace, request the SSH capability instead of bootstrap or raw ssh-keygen.\n"
+                "- If the task asks for the public key, request the public-key capability.\n"
+                "- If the task is read-only or explicitly says not to edit, mark read_only=true and keep required_capabilities minimal.\n"
+                "- If there is a concrete remote URL, put it into remote_url exactly.\n"
+                "- If the user includes an explicit shell command, preserve it in command, but only if it is truly the user's intended action.\n"
+                "- If the intent is unclear or an input is missing, put it in missing_inputs instead of inventing a different task.\n"
+                "- If the task could be done safely by an existing capability, name that capability in required_capabilities.\n"
             ),
         },
         {
@@ -1368,6 +1496,194 @@ def agent_plan_messages(requested_workspace, controller_workspace, workspace_exi
             ),
         },
     ]
+
+
+def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, workspace_exists, task):
+    if not isinstance(spec, dict):
+        spec = {}
+    fallback_workspace = requested_workspace if workspace_exists else controller_workspace
+    bootstrap_repo = bootstrap_repo_name_from_text(task)
+    inferred_repo = agent_extract_repo_name(task)
+    remote_url = str(spec.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
+    read_only = _boolish(spec.get("read_only"), default=agent_read_only_requested(task))
+    current_workspace = str(spec.get("current_workspace") or "").strip() or fallback_workspace
+    user_goal = str(spec.get("user_goal") or "").strip() or str(task or "").strip()
+    target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo or inferred_repo
+    if target_repo_name and current_workspace == requested_workspace and not workspace_exists and requested_workspace != controller_workspace:
+        current_workspace = controller_workspace
+    is_new_workspace_request = _boolish(spec.get("is_new_workspace_request"), default=bool(bootstrap_repo))
+    if bootstrap_repo:
+        is_new_workspace_request = True
+        target_repo_name = bootstrap_repo
+    is_existing_workspace_task = _boolish(
+        spec.get("is_existing_workspace_task"),
+        default=workspace_exists and not is_new_workspace_request,
+    )
+    desired_end_state = str(spec.get("desired_end_state") or "").strip()
+    if not desired_end_state:
+        if is_new_workspace_request:
+            desired_end_state = "new_workspace_registered_with_git_and_ssh_ready"
+        elif remote_url and workspace_exists:
+            desired_end_state = "git_init_origin_commit_push_main"
+        elif agent_ssh_key_show_public_requested(task):
+            desired_end_state = "workspace_public_key_returned"
+        elif agent_ssh_key_create_requested(task):
+            desired_end_state = "workspace_ssh_key_ready"
+        elif agent_deploy_requested(task):
+            desired_end_state = "ai_stack_deployed"
+        elif agent_public_url_from_task(task):
+            desired_end_state = "public_web_answer_returned"
+        elif agent_edit_requested(task):
+            desired_end_state = "requested_changes_applied_and_verified_if_needed"
+        elif agent_infer_action_from_task(task):
+            desired_end_state = f"workspace_action_{agent_infer_action_from_task(task)}_completed"
+        elif agent_infer_command_from_task(task):
+            desired_end_state = "explicit_command_completed"
+        else:
+            desired_end_state = "intent_clarified"
+    required_capabilities = _string_list(spec.get("required_capabilities")) or agent_capability_hints_from_task(task, workspace_exists)
+    if is_new_workspace_request and "workspace_repo_bootstrap" not in required_capabilities:
+        required_capabilities.insert(0, "workspace_repo_bootstrap")
+    if remote_url and workspace_exists and not is_new_workspace_request and "workspace_git_publish" not in required_capabilities:
+        required_capabilities.insert(0, "workspace_git_publish")
+    if agent_ssh_key_show_public_requested(task) and "workspace_ssh_key_show_public" not in required_capabilities:
+        required_capabilities.insert(0, "workspace_ssh_key_show_public")
+    elif agent_ssh_key_create_requested(task) and "workspace_ssh_key_create" not in required_capabilities:
+        required_capabilities.insert(0, "workspace_ssh_key_create")
+    missing_inputs = _string_list(spec.get("missing_inputs"))
+    if is_new_workspace_request and not target_repo_name:
+        missing_inputs.append("target_repo_name")
+    if remote_url and not workspace_exists and not is_new_workspace_request:
+        missing_inputs.append("existing_workspace")
+    risk_level = str(spec.get("risk_level") or "").strip().lower()
+    if risk_level not in {"low", "medium", "high"}:
+        risk_level = "low" if read_only else ("medium" if remote_url or agent_edit_requested(task) else "low")
+    recovery_plan = str(spec.get("recovery_plan") or "").strip()
+    if not recovery_plan:
+        if remote_url and workspace_exists:
+            recovery_plan = (
+                "If git auth or push fails, return MANUAL_STEP_REQUIRED with the workspace public key and the exact next GitHub/SSH step."
+            )
+        elif is_new_workspace_request:
+            recovery_plan = "If bootstrap cannot finish, return the created workspace, SSH public key path, and the exact next step."
+        else:
+            recovery_plan = "If the capability is missing or blocked, return NEEDS_ATTENTION with the missing capability and a concrete recovery step."
+    action = str(spec.get("action") or "").strip().lower()
+    if action not in AGENT_LOOP_ACTIONS:
+        action = agent_infer_action_from_task(task)
+    run_after = str(spec.get("run_after") or "").strip().lower()
+    if run_after not in AGENT_LOOP_ACTIONS:
+        run_after = ""
+    followup_actions = [
+        item.lower() for item in _string_list(spec.get("followup_actions")) if item.lower() in AGENT_LOOP_ACTIONS
+    ]
+    if is_new_workspace_request and not followup_actions:
+        followup_actions = agent_infer_followup_actions(task)
+    url = str(spec.get("url") or "").strip() or agent_public_url_from_task(task)
+    question = str(spec.get("question") or "").strip() or (str(task or "").strip() if agent_web_question_requested(task) else "")
+    ssh_comment = str(spec.get("ssh_comment") or "").strip() or agent_workspace_ssh_comment(task, target_repo_name or fallback_workspace)
+    confidence = str(spec.get("confidence") or "medium").strip().lower()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "medium"
+    command = []
+    try:
+        command = normalize_agent_command(spec.get("command") or [])
+    except ValueError:
+        command = []
+    if not command:
+        command = agent_infer_command_from_task(task)
+    return {
+        "current_workspace": current_workspace,
+        "user_goal": user_goal,
+        "is_new_workspace_request": bool(is_new_workspace_request),
+        "is_existing_workspace_task": bool(is_existing_workspace_task),
+        "target_repo_name": target_repo_name,
+        "remote_url": remote_url,
+        "desired_end_state": desired_end_state,
+        "required_capabilities": required_capabilities,
+        "missing_inputs": _string_list(missing_inputs),
+        "risk_level": risk_level,
+        "recovery_plan": recovery_plan,
+        "read_only": read_only,
+        "command": command,
+        "action": action,
+        "run_after": run_after,
+        "followup_actions": followup_actions,
+        "url": url,
+        "question": question,
+        "ssh_comment": ssh_comment,
+        "confidence": confidence,
+    }
+
+
+def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, workspace_exists, task):
+    capabilities = set(spec.get("required_capabilities") or [])
+    read_only = bool(spec.get("read_only"))
+    workflow = "clarify"
+    action = ""
+    command = []
+    run_after = ""
+    followup_actions = list(spec.get("followup_actions") or [])
+    repo_name = ""
+    remote_url = str(spec.get("remote_url") or "").strip()
+
+    if read_only:
+        workflow = "review"
+    elif spec.get("missing_inputs"):
+        workflow = "clarify"
+    elif spec.get("is_new_workspace_request"):
+        workflow = "bootstrap"
+        repo_name = str(spec.get("target_repo_name") or "").strip()
+    elif workspace_exists and ("workspace_git_publish" in capabilities or (remote_url and agent_git_publish_requested(task))):
+        workflow = "workspace_git_publish"
+    elif workspace_exists and "workspace_ssh_key_show_public" in capabilities:
+        workflow = "ssh_key_show_public"
+    elif workspace_exists and "workspace_ssh_key_create" in capabilities:
+        workflow = "ssh_key_create"
+    elif "stack_deploy" in capabilities or agent_deploy_requested(task):
+        workflow = "deploy"
+    elif "public_web_access" in capabilities and spec.get("url"):
+        workflow = "web_answer" if spec.get("question") else "web_fetch"
+    elif "workspace_edit" in capabilities or agent_edit_requested(task):
+        workflow = "edit"
+        run_after = str(spec.get("run_after") or "").strip().lower()
+    elif any(str(item).startswith("workspace_action:") for item in capabilities) or spec.get("action"):
+        workflow = "action"
+        action = str(spec.get("action") or "").strip().lower()
+    elif spec.get("command"):
+        workflow = "run"
+        command = spec.get("command") or []
+    elif "workspace_autopilot" in capabilities or agent_executable_task_requested(task):
+        workflow = "autopilot"
+
+    workspace = str(spec.get("current_workspace") or "").strip() or (requested_workspace if workspace_exists else controller_workspace)
+    if workflow in {"bootstrap", "deploy"}:
+        workspace = controller_workspace
+    elif workflow in {"review", "edit", "action", "run", "autopilot", "ssh_key_create", "ssh_key_show_public", "workspace_git_publish"}:
+        workspace = requested_workspace if workspace_exists else controller_workspace
+
+    return {
+        "workflow": workflow,
+        "reason": preview_text(spec.get("user_goal") or spec.get("desired_end_state") or "", 180),
+        "read_only": read_only,
+        "workspace": workspace,
+        "action": action,
+        "command": command,
+        "run_after": run_after,
+        "followup_actions": followup_actions,
+        "repo_name": repo_name,
+        "github": "github" in remote_url.lower() or "github" in str(task or "").lower(),
+        "remote_url": remote_url,
+        "desired_end_state": str(spec.get("desired_end_state") or "").strip(),
+        "url": str(spec.get("url") or "").strip(),
+        "question": str(spec.get("question") or "").strip(),
+        "ssh_comment": str(spec.get("ssh_comment") or "").strip(),
+        "confidence": str(spec.get("confidence") or "medium").strip().lower(),
+    }
+
+
+def agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
+    return agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot)
 
 
 def normalize_agent_plan(plan, requested_workspace, controller_workspace, workspace_exists, task):
@@ -1409,15 +1725,19 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     inferred_action = agent_infer_action_from_task(task)
     inferred_followups = agent_infer_followup_actions(task)
     bootstrap_requested = agent_bootstrap_requested(task)
+    git_publish_requested = agent_git_publish_requested(task)
     ssh_key_create_requested = agent_ssh_key_create_requested(task)
     ssh_key_show_public_requested = agent_ssh_key_show_public_requested(task)
     run_requested = agent_run_requested(task)
     explicit_command_requested = agent_explicit_command_requested(task)
+    remote_url = str(plan.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
     ssh_comment = str(plan.get("ssh_comment") or "").strip()
     if not ssh_comment:
         ssh_comment = agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
     if bootstrap_requested:
         workflow = "bootstrap"
+    elif workspace_exists and git_publish_requested:
+        workflow = "workspace_git_publish"
     elif workspace_exists and ssh_key_show_public_requested:
         workflow = "ssh_key_show_public"
     elif workspace_exists and ssh_key_create_requested:
@@ -1428,6 +1748,8 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         elif inferred_action:
             workflow = "action"
             action = action or inferred_action
+        elif workspace_exists and git_publish_requested:
+            workflow = "workspace_git_publish"
         elif workspace_exists and ssh_key_show_public_requested:
             workflow = "ssh_key_show_public"
         elif workspace_exists and ssh_key_create_requested:
@@ -1463,6 +1785,9 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     if workflow == "run" and workspace_exists and ssh_key_show_public_requested and not bootstrap_requested:
         workflow = "ssh_key_show_public"
         command = []
+    if workflow == "run" and workspace_exists and git_publish_requested and not bootstrap_requested:
+        workflow = "workspace_git_publish"
+        command = []
     if workflow == "run" and not command:
         command = agent_infer_command_from_task(task)
     if workflow == "run" and not command:
@@ -1484,6 +1809,8 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         "followup_actions": followup_actions,
         "repo_name": repo_name,
         "github": bool(plan.get("github")),
+        "remote_url": remote_url if workflow == "workspace_git_publish" else "",
+        "desired_end_state": str(plan.get("desired_end_state") or "").strip(),
         "url": str(plan.get("url") or "").strip(),
         "question": str(plan.get("question") or "").strip(),
         "ssh_comment": ssh_comment,
@@ -1530,12 +1857,13 @@ def agent_plan(task, requested_workspace, controller_workspace, workspace_exists
         snapshot = f"SNAPSHOT_UNAVAILABLE: {exc}"
     response = ollama_chat(
         MODELS["codex-local-plan-qwen14b"]["model"],
-        agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot),
+        agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot),
         timeout=240,
     )
     raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    plan = normalize_agent_plan(extract_json_object(raw), requested_workspace, controller_workspace, workspace_exists, task)
-    return plan, raw
+    taskspec = normalize_agent_taskspec(extract_json_object(raw), requested_workspace, controller_workspace, workspace_exists, task)
+    plan = agent_taskspec_to_plan(taskspec, requested_workspace, controller_workspace, workspace_exists, task)
+    return plan, taskspec, raw
 
 
 def admin_agent_loop(payload):
@@ -1548,12 +1876,34 @@ def admin_agent_loop(payload):
     controller_workspace, workspace_exists, workspaces = agent_controller_workspace(requested_workspace)
     planner_source = "llm"
     try:
-        plan, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists)
+        plan, taskspec, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists)
     except Exception as exc:
         fallback = agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists)
         if not fallback:
             raise RuntimeError(f"agent planner failed and no bounded fallback matched: {exc}") from exc
         plan, raw_plan = fallback
+        taskspec = {
+            "current_workspace": requested_workspace if workspace_exists else controller_workspace,
+            "user_goal": str(task or "").strip(),
+            "is_new_workspace_request": bool(agent_bootstrap_requested(task)),
+            "is_existing_workspace_task": bool(workspace_exists and not agent_bootstrap_requested(task)),
+            "target_repo_name": agent_extract_repo_name(task),
+            "remote_url": agent_remote_url_from_task(task),
+            "desired_end_state": str(plan.get("desired_end_state") or plan.get("workflow") or "").strip(),
+            "required_capabilities": agent_capability_hints_from_task(task, workspace_exists),
+            "missing_inputs": [],
+            "risk_level": "medium",
+            "recovery_plan": "LLM planner failed; deterministic fallback selected the narrowest bounded capability.",
+            "read_only": bool(plan.get("read_only")),
+            "command": plan.get("command") or [],
+            "action": str(plan.get("action") or "").strip(),
+            "run_after": str(plan.get("run_after") or "").strip(),
+            "followup_actions": plan.get("followup_actions") or [],
+            "url": str(plan.get("url") or "").strip(),
+            "question": str(plan.get("question") or "").strip(),
+            "ssh_comment": str(plan.get("ssh_comment") or "").strip(),
+            "confidence": "medium",
+        }
         planner_source = "fallback"
 
     result = {
@@ -1563,6 +1913,7 @@ def admin_agent_loop(payload):
         "workspace_exists": workspace_exists,
         "task": task,
         "plan": plan,
+        "taskspec": taskspec,
         "raw_plan": raw_plan,
         "planner_source": planner_source,
         "workflow": plan["workflow"],
@@ -1700,6 +2051,27 @@ def admin_agent_loop(payload):
         result["execution"] = execution
         result["ok"] = bool(execution.get("ok"))
         result["summary"] = str(execution.get("summary") or "Workspace SSH public key completed.")
+        return result
+
+    if workflow == "workspace_git_publish":
+        execution = admin_workspace_git_publish({
+            "workspace": plan["workspace"],
+            "remote_url": plan.get("remote_url") or agent_remote_url_from_task(task),
+            "branch": "main",
+            "comment": plan.get("ssh_comment") or f"{plan['workspace']}@local",
+            "commit_message": str(payload.get("commit_message") or "chore: publish workspace").strip() or "chore: publish workspace",
+            "timeout": 1200,
+        })
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = str(execution.get("summary") or "Workspace git publish completed.")
+        if execution.get("status") == "MANUAL_STEP_REQUIRED":
+            result["recovery"] = {
+                "text": str(execution.get("recovery") or "").strip(),
+                "public_key": str(execution.get("public_key") or "").strip(),
+                "public_key_path": str(execution.get("public_key_path") or "").strip(),
+                "remote_url": str(execution.get("remote_url") or "").strip(),
+            }
         return result
 
     if workflow == "bootstrap":
@@ -2248,6 +2620,155 @@ def admin_workspace_ssh_key(payload):
         "ssh_key": key,
         "public_key": key.get("public_key", ""),
     }
+
+
+def workspace_runtime_home_dir(workspace):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("Unsafe workspace name")
+    return REPO_ROOT / "codex/state" / f"opencode-home-{workspace}"
+
+
+def ensure_workspace_runtime_ssh_key(workspace, comment):
+    key = generate_repo_ssh_key(f"github-{workspace}", comment)
+    source_private = REPO_ROOT / key["private_key_path"]
+    source_public = REPO_ROOT / key["public_key_path"]
+    runtime_home = workspace_runtime_home_dir(workspace)
+    ssh_dir = runtime_home / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(ssh_dir, 0o700)
+    except OSError:
+        pass
+    runtime_private = ssh_dir / source_private.name
+    runtime_public = ssh_dir / source_public.name
+    runtime_private.write_text(source_private.read_text(encoding="utf-8"), encoding="utf-8")
+    runtime_public.write_text(source_public.read_text(encoding="utf-8"), encoding="utf-8")
+    config_text = (
+        "Host github.com\n"
+        f"  IdentityFile /home/opencode/.ssh/{source_private.name}\n"
+        "  IdentitiesOnly yes\n"
+        "  StrictHostKeyChecking accept-new\n"
+    )
+    (ssh_dir / "config").write_text(config_text, encoding="utf-8")
+    for path, mode in ((runtime_private, 0o600), (runtime_public, 0o644), (ssh_dir / "config", 0o600)):
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+    return {
+        "workspace": workspace,
+        "private_key_path": runtime_private.as_posix(),
+        "public_key_path": runtime_public.as_posix(),
+        "container_private_key": f"/home/opencode/.ssh/{source_private.name}",
+        "container_public_key": f"/home/opencode/.ssh/{source_public.name}",
+        "public_key": key.get("public_key", ""),
+        "source_key": key,
+    }
+
+
+def git_push_auth_failed(text):
+    lower = str(text or "").lower()
+    needles = (
+        "permission denied (publickey)",
+        "could not read from remote repository",
+        "repository not found",
+        "fatal: could not",
+        "git@github.com: permission denied",
+        "authentication failed",
+    )
+    return any(needle in lower for needle in needles)
+
+
+def admin_workspace_git_publish(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    remote_url = str(payload.get("remote_url") or "").strip()
+    branch = str(payload.get("branch") or "main").strip() or "main"
+    commit_message = str(payload.get("commit_message") or "chore: publish workspace").strip() or "chore: publish workspace"
+    comment = str(payload.get("comment") or f"{workspace}@local").strip() or f"{workspace}@local"
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("Unsafe workspace name")
+    if not remote_url:
+        return {
+            "ok": False,
+            "action": "workspace_git_publish",
+            "workspace": workspace,
+            "status": "NEEDS_ATTENTION",
+            "marker": "WORKSPACE_GIT_REMOTE_URL_MISSING",
+            "recovery": "Doplň přesnou remote URL, například git@github.com:owner/repo.git.",
+        }
+    _, workspaces = load_registry()
+    if workspace not in workspaces:
+        raise ValueError(f"Unknown workspace '{workspace}'. Allowed: {', '.join(sorted(workspaces))}")
+
+    ssh_runtime = ensure_workspace_runtime_ssh_key(workspace, comment)
+    env = {
+        "HOME": "/home/opencode",
+        "GIT_SSH_COMMAND": (
+            f"ssh -i {ssh_runtime['container_private_key']} "
+            "-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+        ),
+    }
+
+    setup_script = (
+        "set -eu\n"
+        "git rev-parse --is-inside-work-tree >/dev/null 2>&1 || "
+        "(git init -b main >/dev/null 2>&1 || (git init >/dev/null 2>&1 && git branch -M main >/dev/null 2>&1))\n"
+        "git config user.email 'ai-sandbox@local'\n"
+        "git config user.name 'AI Sandbox'\n"
+        f"git branch -M {shlex.quote(branch)}\n"
+        "if git remote get-url origin >/dev/null 2>&1; then\n"
+        f"  git remote set-url origin {shlex.quote(remote_url)}\n"
+        "else\n"
+        f"  git remote add origin {shlex.quote(remote_url)}\n"
+        "fi\n"
+        "git add -A\n"
+        "if [ -n \"$(git status --porcelain)\" ]; then\n"
+        f"  git commit -m {shlex.quote(commit_message)}\n"
+        "fi\n"
+        f"git push -u origin HEAD:{shlex.quote(branch)}\n"
+    )
+    execution = admin_run_workspace({
+        "workspace": workspace,
+        "command": ["sh", "-lc", setup_script],
+        "timeout": int(payload.get("timeout", 900)),
+        "runner": "container",
+        "env": env,
+    })
+    result = {
+        "ok": bool(execution.get("ok")),
+        "action": "workspace_git_publish",
+        "workspace": workspace,
+        "remote_url": remote_url,
+        "branch": branch,
+        "commit_message": commit_message,
+        "runner_result": execution,
+        "ssh_key": ssh_runtime["source_key"],
+        "runtime_ssh": ssh_runtime,
+    }
+    if execution.get("ok"):
+        result["status"] = "WORKSPACE_GIT_PUBLISH_OK"
+        result["summary"] = "Workspace git init/origin/commit/push completed."
+        return result
+    output = str(execution.get("output") or execution.get("error") or "").strip()
+    if git_push_auth_failed(output):
+        result.update({
+            "status": "MANUAL_STEP_REQUIRED",
+            "ok": False,
+            "summary": "Git remote/push narazil na SSH nebo GitHub autentizaci.",
+            "public_key": ssh_runtime["public_key"],
+            "public_key_path": ssh_runtime["source_key"]["public_key_path"],
+            "recovery": (
+                "Přidej tento public key do GitHubu pro cílový repozitář nebo účet, "
+                "ověř že remote URL míří na existující repo, a potom zopakuj workspace_git_publish."
+            ),
+        })
+        return result
+    result.update({
+        "status": "WORKSPACE_GIT_PUBLISH_FAILED",
+        "summary": "Workspace git publish selhal z jiného důvodu než SSH auth.",
+    })
+    return result
+
 
 def github_token():
     token = os.getenv("GITHUB_TOKEN", "").strip()
@@ -3288,9 +3809,12 @@ def runtime_fingerprint():
         ("codex_local_agent_loop_payload", codex_local_agent_loop_payload),
         ("normal_chat_requires_tool", normal_chat_requires_tool),
         ("agent_plan", agent_plan),
+        ("normalize_agent_taskspec", normalize_agent_taskspec),
+        ("agent_taskspec_to_plan", agent_taskspec_to_plan),
         ("normalize_agent_plan", normalize_agent_plan),
         ("admin_agent_loop", admin_agent_loop),
         ("admin_run_workspace", admin_run_workspace),
+        ("admin_workspace_git_publish", admin_workspace_git_publish),
     ]
     for name, fn in targets:
         digest.update(name.encode("utf-8"))
@@ -3378,6 +3902,25 @@ def agent_loop_human_answer(result):
         return (
             f"SSH key capability ve workspace {workspace} selhala. "
             + preview_text(execution.get("error") or result.get("summary"))
+        ).strip()
+
+    if workflow == "workspace_git_publish":
+        remote_url = str(execution.get("remote_url") or (result.get("plan") or {}).get("remote_url") or "").strip()
+        if result.get("ok"):
+            return f"Ve workspace {workspace} jsem připravil git, nastavil origin na `{remote_url}` a pushnul branch `main`."
+        if execution.get("status") == "MANUAL_STEP_REQUIRED":
+            public_key = str(execution.get("public_key") or "").strip()
+            public_key_path = str(execution.get("public_key_path") or "").strip()
+            text = f"Ve workspace {workspace} jsem připravil git publish na `{remote_url}`, ale GitHub/SSH ještě potřebuje ruční krok."
+            if public_key_path:
+                text += f" Public key je v `{public_key_path}`."
+            if public_key:
+                text += f" Public key: {public_key}"
+            return text
+        runner_output = execution.get("runner_result") if isinstance(execution.get("runner_result"), dict) else {}
+        return (
+            f"Git publish ve workspace {workspace} selhal. "
+            + preview_text(runner_output.get("output") or execution.get("summary") or result.get("summary"))
         ).strip()
 
     if workflow == "run":
@@ -3493,7 +4036,7 @@ def agent_loop_response_text(result):
     if answer:
         lines.append("")
         lines.append(answer)
-    for key in ("execution", "followup", "recovery", "plan"):
+    for key in ("execution", "followup", "recovery", "plan", "taskspec"):
         value = result.get(key)
         if value in (None, {}, []):
             continue

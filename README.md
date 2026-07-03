@@ -258,6 +258,15 @@ Admin odpovědi drží hlavní stav nahoře a dlouhé části jako `output`, `ta
 
 Planner uvnitř gateway je nově výslovně `LLM-first`. To znamená, že `admin_agent_loop()` se nejdřív vždy pokusí získat plán od modelu a teprve když planner call selže nebo vrátí nepoužitelný výstup, přejde na malý bounded fallback. V audit výstupu je to vidět přes `planner_source=llm|fallback`, takže už se dá snadno poznat, jestli systém opravdu rozhodoval přes model, nebo jen zachraňoval běh bez něj.
 
+Ještě důležitější je, že planner už nemá vracet rovnou hotový workflow jen podle keywordů. Nejprve vytváří `TaskSpec`, tedy strukturovaný popis významu úlohy: aktuální workspace, skutečný cíl uživatele, jestli jde o nové repo nebo práci v existujícím workspace, cílový remote, požadovaný end-state, potřebné capability, chybějící vstupy, rizikovost a recovery plán. Deterministický kód pak z `TaskSpec` teprve mapuje capability jako `review`, `edit`, `action`, `run`, `bootstrap`, `workspace_git_publish`, `ssh_key_create`, `ssh_key_show_public`, `web_answer`, `web_fetch` nebo `deploy`.
+
+Praktický dopad je hlavně u Git/GitHub úloh. Prompt typu:
+
+    repo: TestCode
+    initni git repo a pushni sem git@github.com:owner/repo.git
+
+už nemá spadnout do bootstrapu nového repa jen proto, že obsahuje slova `repo`, `git` nebo `ssh`. Pokud workspace `TestCode` existuje, `TaskSpec` to má pochopit jako práci uvnitř existujícího workspace a zvolit capability `workspace_git_publish`: případně `git init`, nastavení `origin`, commit změn, push branch `main` přes workspace SSH key a při auth blockerech vrácení `MANUAL_STEP_REQUIRED` s public key a přesným dalším krokem místo generic rady.
+
 Novější vrstva nad tím je `GATEWAY_ADMIN_AGENT_LOOP`: intent-first orchestrace pro běžný codex-local chat. Tady už router nemá být „hlavní mozek“. Tenká OpenWebUI vrstva pouze předá workspace a původní task do gateway, a samotný loop udělá sled `intent/plán -> policy check -> capability execution -> observation -> recovery/verify -> report`.
 
 Prakticky to znamená:

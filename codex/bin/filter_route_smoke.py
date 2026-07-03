@@ -150,6 +150,12 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "ssh-keygen -t ed25519 -C"),
         unexpected=("repo: ai-stack",),
     ),
+    RouteScenario(
+        name="existing-workspace-git-publish-stays-in-workspace",
+        prompt="repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git",
+        expected=("repo: TestCode", "GATEWAY_ADMIN_AGENT_LOOP TestCode --", "git@github.com:owner/repo.git"),
+        unexpected=("repo: ai-stack", "GATEWAY_ADMIN_CREATE_LOCAL_REPO"),
+    ),
 )
 
 LEGACY_SCENARIOS: tuple[RouteScenario, ...] = (
