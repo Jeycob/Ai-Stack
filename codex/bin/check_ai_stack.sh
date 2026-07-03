@@ -230,6 +230,28 @@ else
   record_summary "Codex filter route smoke" "SKIP"
 fi
 
+if [ "${SKIP_WORKSPACE_CONTEXT_REGRESSION_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex workspace context regression smoke ... SKIP (disabled)\n'
+  record_summary "Codex workspace context regression smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/workspace_context_regression_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex workspace context regression smoke ...\n'
+  workspace_context_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/workspace_context_regression_smoke.py" >"$workspace_context_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$workspace_context_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex workspace context regression smoke OK\n'
+    record_summary "Codex workspace context regression smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$workspace_context_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex workspace context regression smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex workspace context regression smoke" "FAIL"
+  fi
+  rm -f "$workspace_context_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex workspace context regression smoke ... SKIP (python3 or workspace_context_regression_smoke.py missing)\n'
+  record_summary "Codex workspace context regression smoke" "SKIP"
+fi
+
 if [ "${SKIP_GATEWAY_RECOVERY_SMOKE:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway recovery smoke ... SKIP (disabled)\n'
   record_summary "Codex gateway recovery smoke" "SKIP"

@@ -153,6 +153,8 @@ python3 -m py_compile \
   codex/bin/owui_chat_scenarios.py \
   codex/bin/run_check.py \
   codex/bin/add_workspace.py \
+  codex/bin/workspace_context.py \
+  codex/bin/workspace_context_regression_smoke.py \
   codex/bin/workspace_scan.py \
   codex/bin/workspace_action.py \
   codex/bin/mentor_codex_local.py \
@@ -164,6 +166,7 @@ python3 -m py_compile \
 
 section "Offline routing and recovery smoke"
 python3 codex/bin/filter_route_smoke.py --json
+python3 codex/bin/workspace_context_regression_smoke.py
 python3 codex/bin/gateway_recovery_smoke.py
 python3 codex/bin/gateway_admin_run_workspace_smoke.py
 python3 codex/bin/gateway_nested_helper_rescue_smoke.py
