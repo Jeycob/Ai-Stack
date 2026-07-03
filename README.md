@@ -316,6 +316,8 @@ Když naopak potřebuješ co nejlevnější mentor kontext pro další modelový
 
     python3 codex/bin/mentor_codex_local.py brief ai-stack "Fixni to a dotáhni co zvládneš."
 
+`delegate` teď tenhle brief nejen vypíše, ale při orchestrace dalšího workflow ho automaticky přilepí i do dalších promptů jako `Mentor brief:` ve visible vrstvě a `MENTOR_EXECUTION_BRIEF` v technické vrstvě. Díky tomu se vybraný task neztratí mezi helper módy a codex-local dostane v každém dalším kroku malý, stabilní mentor payload místo toho, aby se spoléhal jen na volnou historii chatu.
+
 Když už máš víc úkolů najednou a chceš, aby si helper sám srovnal pořadí a šířku pravomocí, použij `backlog`. Nad každým taskem udělá stejnou klasifikaci jako `profile/report/plan`, ale vrátí prioritizovanou frontu s `NEXT_HELPER`, `PLAN_CMD` a připraveným audit chat promptem:
 
     python3 codex/bin/mentor_codex_local.py backlog ai-stack \

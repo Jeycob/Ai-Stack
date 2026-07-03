@@ -76,6 +76,30 @@ def repo_prefix(repo: str) -> str:
     return f"repo: {repo.strip()}"
 
 
+def prefixed_block(prefix: str, body: str) -> str:
+    body = body.strip()
+    if not body:
+        return ""
+    return f"{prefix.rstrip()}\n{body}"
+
+
+def apply_mentor_context(args: argparse.Namespace, visible: str, technical: str) -> tuple[str, str]:
+    visible_context = getattr(args, "mentor_visible_context", "").strip()
+    technical_context = getattr(args, "mentor_technical_context", "").strip()
+    if visible_context:
+        visible = prefixed_block(visible_context, visible)
+    if technical_context:
+        technical = prefixed_block(technical_context, technical)
+    return visible, technical
+
+
+def print_prompt_preview(args: argparse.Namespace, visible: str, technical: str) -> None:
+    print("VISIBLE_PROMPT")
+    print(visible)
+    print("\nTECHNICAL_PROMPT")
+    print(technical)
+
+
 def load_capability_roadmap() -> dict[str, dict[str, str]]:
     try:
         payload = json.loads(CAPABILITY_ROADMAP.read_text(encoding="utf-8"))
@@ -424,11 +448,10 @@ def invoke_turn(
     send_history: bool = False,
     capture_output: bool = False,
 ) -> tuple[int, str]:
+    visible, technical = apply_mentor_context(args, visible, technical)
+
     if args.dry_run:
-        print("VISIBLE_PROMPT")
-        print(visible)
-        print("\nTECHNICAL_PROMPT")
-        print(technical)
+        print_prompt_preview(args, visible, technical)
         return 0, ""
 
     script = Path(__file__).resolve().parent / "owui_chat_turn.py"
@@ -527,10 +550,7 @@ def run_autopilot_sequence(args: argparse.Namespace) -> int:
             (verify_visible, verify_technical),
             (chooser_visible, chooser_technical),
         ]:
-            print("VISIBLE_PROMPT")
-            print(visible)
-            print("\nTECHNICAL_PROMPT")
-            print(technical)
+            print_prompt_preview(args, *apply_mentor_context(args, visible, technical))
             print()
         return 0
 
@@ -575,10 +595,7 @@ def run_patch_plan_sequence(args: argparse.Namespace) -> int:
     )
 
     if args.dry_run:
-        print("VISIBLE_PROMPT")
-        print(visible)
-        print("\nTECHNICAL_PROMPT")
-        print(technical)
+        print_prompt_preview(args, *apply_mentor_context(args, visible, technical))
         print()
         print("FOLLOW_UP")
         print("If the response contains read_command, the helper will execute it and then ask codex-local for a minimal patch plan.")
@@ -637,10 +654,7 @@ def run_apply_ready_sequence(args: argparse.Namespace) -> int:
     )
 
     if args.dry_run:
-        print("VISIBLE_PROMPT")
-        print(visible)
-        print("\nTECHNICAL_PROMPT")
-        print(technical)
+        print_prompt_preview(args, *apply_mentor_context(args, visible, technical))
         print()
         print("FOLLOW_UP")
         print("If the response contains read_command, the helper will execute it, ask for a patch plan, and then ask codex-local for a unified diff proposal only.")
@@ -726,10 +740,7 @@ def run_apply_safe_sequence(args: argparse.Namespace) -> int:
     )
 
     if args.dry_run:
-        print("VISIBLE_PROMPT")
-        print(visible)
-        print("\nTECHNICAL_PROMPT")
-        print(technical)
+        print_prompt_preview(args, *apply_mentor_context(args, visible, technical))
         print()
         print("FOLLOW_UP")
         print("The helper will fetch read_command if available, ask for a minimal patch plan, request exactly one diff block, validate it locally, and only then call GATEWAY_ADMIN_APPLY_NOW.")
@@ -806,10 +817,7 @@ def run_improve_sequence(args: argparse.Namespace) -> int:
     )
 
     if args.dry_run:
-        print("VISIBLE_PROMPT")
-        print(visible)
-        print("\nTECHNICAL_PROMPT")
-        print(technical)
+        print_prompt_preview(args, *apply_mentor_context(args, visible, technical))
         print()
         print("FOLLOW_UP")
         print("If autopilot returns read_command or patch guidance, the helper will continue into the apply-safe flow automatically.")
@@ -901,6 +909,7 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
     print(f"DELEGATE_CAPABILITY_SCOPE={decision['capability_scope']}")
     print(f"DELEGATE_CAPABILITY_SUMMARY={decision['capability_summary']}")
     print(f"DELEGATE_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+    print_execution_brief("DELEGATE", decision, args.workspace, args.task)
 
     if workflow == "run":
         command_text = extract_run_command(args.task)
@@ -915,6 +924,8 @@ def run_delegate_sequence(args: argparse.Namespace) -> int:
 
     routed = argparse.Namespace(**vars(args))
     routed.mode = workflow
+    routed.mentor_visible_context = visible_brief_block(decision, args.workspace, args.task)
+    routed.mentor_technical_context = "MENTOR_EXECUTION_BRIEF\n" + execution_brief_block(decision, args.workspace, args.task)
     return build_and_invoke_mode(routed)
 
 
@@ -1007,6 +1018,30 @@ def print_execution_brief(prefix: str, decision: dict[str, str], workspace: str,
     for line in execution_brief_lines(decision, workspace, task):
         print(line)
     print("EOF")
+
+
+def execution_brief_block(decision: dict[str, str], workspace: str, task: str) -> str:
+    return "\n".join(execution_brief_lines(decision, workspace, task))
+
+
+def visible_brief_block(decision: dict[str, str], workspace: str, task: str) -> str:
+    next_helper = recommended_next_step(decision, workspace, task)
+    goal = ""
+    for line in execution_brief_lines(decision, workspace, task):
+        if line.startswith("goal="):
+            goal = line.split("=", 1)[1]
+            break
+    lines = [
+        "Mentor brief:",
+        f"- task: {task}",
+        f"- workflow: {decision['workflow']}",
+        f"- confidence: {decision['confidence']}",
+        f"- goal: {goal or decision['reason']}",
+        f"- next helper: {next_helper}",
+    ]
+    if decision.get("guardrail_summary"):
+        lines.append(f"- guardrail: {decision['guardrail_summary']}")
+    return "\n".join(lines)
 
 
 def backlog_priority(decision: dict[str, str], task: str) -> int:

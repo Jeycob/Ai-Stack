@@ -252,6 +252,8 @@ Brief vraci:
 - `MENTOR_BRIEF_NEXT_HELPER`: doporuceny dalsi helper command.
 - `MENTOR_BRIEF_EXECUTION_BRIEF`: minimalisticky cil, guardraily a dalsi krok pripraveny pro dalsi model.
 
+`delegate` navic tenhle execution brief nese dal i do dalsich helper promptu. Prakticky to znamena, ze pri prechodu z `dispatch` nebo `delegate` do `audit`/`autopilot`/`improve` uz dalsi modelovy krok nedostane jen obecny workflow prompt, ale i maly stabilni kontext ve visible casti (`Mentor brief:`) a v technicke casti (`MENTOR_EXECUTION_BRIEF`).
+
 Plan navic vraci:
 
 - `PLAN_STEP_<N>_LABEL`: typ dalsiho kroku.
