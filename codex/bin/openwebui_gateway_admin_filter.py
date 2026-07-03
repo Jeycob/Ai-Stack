@@ -1662,7 +1662,7 @@ class Filter:
             raise ValueError("Unsafe workspace name")
 
         timeout = 1800
-        allow_actions = ["install", "test", "build", "lint"]
+        allow_actions = ["install", "verify", "smoke", "test", "build", "lint"]
         max_steps = 1
         recommend_only = False
         env_map = {}
@@ -1743,10 +1743,20 @@ class Filter:
                 else:
                     executed_lines.append(f"- {action_name}: {state}")
 
-        install_probe = result.get("install_probe") or {}
-        install_detail = ""
-        if isinstance(install_probe, dict) and install_probe:
-            install_detail = self._details("install_probe", self._trim(str(install_probe.get("output", "")), 12000))
+        action_probes = result.get("action_probes") or {}
+        probe_lines = []
+        if isinstance(action_probes, dict):
+            for action_name in sorted(action_probes):
+                probe = action_probes.get(action_name)
+                if not isinstance(probe, dict):
+                    continue
+                state = "supported" if probe.get("ok") else f"blocked ({probe.get('error') or 'unsupported'})"
+                command = probe.get("command") or []
+                command_text = self._shell_join(command) if command else ""
+                if command_text:
+                    probe_lines.append(f"- {action_name}: {state} command={command_text}")
+                else:
+                    probe_lines.append(f"- {action_name}: {state}")
 
         output = self._trim(str(result.get("output", "")), 24000)
         status = "WORKSPACE_AUTOPILOT_OK" if result.get("ok") else "WORKSPACE_AUTOPILOT_FAILED"
@@ -1769,8 +1779,8 @@ class Filter:
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
             + ("verify_steps:\n" + "\n".join(step_lines) + "\n" if step_lines else "")
+            + ("action_probes:\n" + "\n".join(probe_lines) + "\n" if probe_lines else "")
             + ("executed_actions:\n" + "\n".join(executed_lines) + "\n" if executed_lines else "")
-            + install_detail
             + self._details("output", output)
         )
 

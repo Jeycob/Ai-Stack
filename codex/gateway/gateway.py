@@ -21,6 +21,7 @@ OLLAMA_OPENAI_URL = os.getenv("OLLAMA_OPENAI_URL", "http://192.168.0.48:11434/v1
 OPENWEBUI_HEALTH_URL = os.getenv("OPENWEBUI_HEALTH_URL", "http://127.0.0.1:9090/")
 OPENWEBUI_LOADER_URL = os.getenv("OPENWEBUI_LOADER_URL", "http://127.0.0.1:9090/static/loader.js")
 REPO_ROOT = Path(WORKSPACES_FILE).resolve().parents[1]
+CAPABILITY_ROADMAP_FILE = REPO_ROOT / "docs" / "codex-local-capability-roadmap.json"
 ADMIN_TOKEN_FILE = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN_FILE", "")
 ADMIN_TOKEN = os.getenv("CODEX_GATEWAY_ADMIN_TOKEN", "")
 if not ADMIN_TOKEN and ADMIN_TOKEN_FILE:
@@ -62,6 +63,19 @@ def load_registry():
     with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data.get("default", "smoke"), data.get("workspaces", {})
+
+def load_capability_roadmap_payload():
+    try:
+        payload = json.loads(CAPABILITY_ROADMAP_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+def load_workspace_action_registry():
+    actions = load_capability_roadmap_payload().get("workspace_actions")
+    if not isinstance(actions, dict):
+        return {}
+    return {str(name): spec for name, spec in actions.items() if isinstance(spec, dict)}
 
 def content_to_text(content):
     if isinstance(content, list):
@@ -1540,6 +1554,73 @@ def workspace_autopilot_recommendation(workspace: str) -> dict:
         "Add at least one standard verify/smoke/lint/test/build entrypoint to the project manifest.",
     )
 
+def workspace_action_failure_recommendation(workspace: str, action: str, action_result: dict | None) -> dict:
+    registry = load_workspace_action_registry()
+    spec = registry.get(action, {}) if isinstance(registry, dict) else {}
+    generic_hint = str(spec.get("recovery_hint", "")).strip()
+
+    def build(text: str, patch_target: str, patch_hint: str, patch_summary: str) -> dict:
+        read_command = f"GATEWAY_ADMIN_READ_NUMBERED {patch_target} 1 220" if patch_target else ""
+        return {
+            "text": text,
+            "patch_target": patch_target,
+            "patch_hint": patch_hint,
+            "patch_summary": patch_summary,
+            "read_command": read_command,
+        }
+
+    try:
+        root = load_workspace(WORKSPACES_FILE, workspace)
+        scan = collect(root, 80)
+    except Exception as exc:
+        return build(
+            f"Action {action} failed and workspace scan is unavailable: {exc}",
+            "",
+            generic_hint or "Inspect the failing action output and the nearest project manifest before retrying.",
+            f"Review the failing {action} step and prepare the smallest manifest/config patch that unblocks it.",
+        )
+
+    manifests = scan.get("manifests") or []
+    manifest_names = {Path(rel).name for rel in manifests}
+    if "package.json" in manifest_names:
+        patch_target = "package.json"
+    elif "pyproject.toml" in manifest_names:
+        patch_target = "pyproject.toml"
+    elif manifests:
+        patch_target = manifests[0]
+    else:
+        patch_target = ""
+
+    output = str((action_result or {}).get("output", "")).strip()
+    first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+    reason = first_line or str((action_result or {}).get("error", "") or "").strip()
+    reason_suffix = f" Failure summary: {reason}" if reason else ""
+
+    if not patch_target:
+        return build(
+            f"Action {action} failed and the project still lacks a clear manifest target.{reason_suffix}",
+            "",
+            generic_hint or "Add or repair the primary project manifest before retrying the failed capability.",
+            f"Create or repair the primary project manifest to unblock {action}.",
+        )
+
+    patch_hint = generic_hint or f"Inspect {patch_target} and adjust the config or script that blocks {action}."
+    patch_summary = f"Prepare the smallest patch in {patch_target} that unblocks the failed {action} capability."
+    text = f"Action {action} failed; inspect {patch_target} and apply the smallest fix before retrying.{reason_suffix}"
+    return build(text, patch_target, patch_hint, patch_summary)
+
+def workspace_autopilot_order(allow_actions: list[str]) -> list[str]:
+    registry = load_workspace_action_registry()
+    default_order = ["install", "verify", "smoke", "test", "build", "lint"]
+    default_rank = {action: idx for idx, action in enumerate(default_order)}
+
+    def sort_key(action: str):
+        spec = registry.get(action, {}) if isinstance(registry, dict) else {}
+        priority = int(spec.get("autopilot_priority", 1000))
+        return (priority, default_rank.get(action, 999), action)
+
+    return sorted(allow_actions, key=sort_key)
+
 def admin_workspace_autopilot(payload):
     workspace = str(payload.get("workspace") or "").strip()
     timeout = int(payload.get("timeout") or 1800)
@@ -1576,34 +1657,50 @@ def admin_workspace_autopilot(payload):
             "dry_run": True,
         })
         verify_steps_local = verify_result.get("verify_steps") or []
-        candidates = []
+        verify_step_map = {}
         for step in verify_steps_local:
             action = str(step.get("action") or "").strip().lower()
-            if action in allow_actions and step.get("supported") and action not in executed_names:
-                candidates.append(action)
+            if action and step.get("supported"):
+                verify_step_map[action] = step
 
-        install_probe_local = None
-        if not candidates and "install" in allow_actions and "install" not in executed_names:
-            install_probe_local = admin_workspace_action({
+        ordered_actions = workspace_autopilot_order(allow_actions)
+        candidates = []
+        probes = {"verify": verify_result}
+        for action in ordered_actions:
+            if action in executed_names:
+                continue
+            if action == "verify":
+                if verify_result.get("ok") and verify_step_map:
+                    candidates.append({"action": action, "reason": "verify dry-run found supported verification steps"})
+                continue
+            if action in verify_step_map:
+                probes[action] = {
+                    "ok": True,
+                    "planned_only": True,
+                    "action": action,
+                    "command": verify_step_map[action].get("command", []),
+                    "resolved_from": verify_step_map[action].get("resolved_from", ""),
+                    "output": "",
+                }
+                candidates.append({"action": action, "reason": f"verify dry-run exposed a supported {action} step"})
+                continue
+            probe_result = admin_workspace_action({
                 "workspace": workspace,
-                "action": "install",
+                "action": action,
                 "timeout": timeout,
                 "env": env_map,
                 "dry_run": True,
             })
-            if install_probe_local.get("ok"):
-                candidates.append("install")
-        return verify_result, verify_steps_local, candidates, install_probe_local
+            probes[action] = probe_result
+            if probe_result.get("ok"):
+                candidates.append({"action": action, "reason": f"{action} dry-run is supported in this workspace"})
+        return verify_result, verify_steps_local, candidates, probes
 
-    verify, verify_steps, candidate_actions, install_probe = plan_candidates(set())
+    verify, verify_steps, candidate_actions, action_probes = plan_candidates(set())
 
-    chosen_action = candidate_actions[0] if candidate_actions else None
-    if chosen_action == "install" and install_probe is not None:
-        chosen_reason = "verify found no runnable step, but dependency install is supported"
-    elif chosen_action:
-        chosen_reason = f"verify dry-run found a supported {chosen_action} step"
-    else:
-        chosen_reason = ""
+    chosen = candidate_actions[0] if candidate_actions else None
+    chosen_action = chosen["action"] if chosen else None
+    chosen_reason = chosen["reason"] if chosen else ""
 
     if not chosen_action:
         recommendation = workspace_autopilot_recommendation(workspace)
@@ -1623,7 +1720,7 @@ def admin_workspace_autopilot(payload):
             "read_command": recommendation.get("read_command", ""),
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
-            "install_probe": install_probe,
+            "action_probes": action_probes,
             "executed_actions": [],
             "stop_reason": "no_supported_action",
             "output": "",
@@ -1646,7 +1743,7 @@ def admin_workspace_autopilot(payload):
             "read_command": "",
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
-            "install_probe": install_probe,
+            "action_probes": action_probes,
             "executed_actions": [],
             "stop_reason": "recommend_only",
             "output": "",
@@ -1656,18 +1753,20 @@ def admin_workspace_autopilot(payload):
     executed_actions = []
     last_result = None
     current_verify_steps = verify_steps
-    current_install_probe = install_probe
+    current_probes = action_probes
     stop_reason = "max_steps_reached"
+    recommendation = {"text": "", "patch_target": "", "patch_hint": "", "patch_summary": "", "read_command": ""}
     for idx in range(max_steps):
         remaining_names = {step["action"] for step in executed_actions if step.get("action")}
         if idx == 0:
             next_candidates = candidate_actions
         else:
-            _, current_verify_steps, next_candidates, current_install_probe = plan_candidates(remaining_names)
+            _, current_verify_steps, next_candidates, current_probes = plan_candidates(remaining_names)
         if not next_candidates:
             stop_reason = "no_more_supported_actions"
+            recommendation = workspace_autopilot_recommendation(workspace)
             break
-        action_name = next_candidates[0]
+        action_name = next_candidates[0]["action"]
         last_result = admin_workspace_action({
             "workspace": workspace,
             "action": action_name,
@@ -1688,6 +1787,7 @@ def admin_workspace_autopilot(payload):
         })
         if not last_result.get("ok"):
             stop_reason = "step_failed"
+            recommendation = workspace_action_failure_recommendation(workspace, action_name, last_result)
             break
 
     ok = all(step.get("ok") for step in executed_actions) if executed_actions else False
@@ -1714,14 +1814,14 @@ def admin_workspace_autopilot(payload):
         "max_steps": max_steps,
         "chosen_action": chosen_action,
         "reason": chosen_reason,
-        "recommendation": "",
-        "patch_target": "",
-        "patch_hint": "",
-        "patch_summary": "",
-        "read_command": "",
+        "recommendation": recommendation.get("text", ""),
+        "patch_target": recommendation.get("patch_target", ""),
+        "patch_hint": recommendation.get("patch_hint", ""),
+        "patch_summary": recommendation.get("patch_summary", ""),
+        "read_command": recommendation.get("read_command", ""),
         "duration_ms": int((time.time() - total_started) * 1000),
         "verify_steps": current_verify_steps,
-        "install_probe": current_install_probe,
+        "action_probes": current_probes,
         "executed_actions": executed_actions,
         "stop_reason": stop_reason,
         "exit_code": last_result.get("exit_code") if last_result else None,

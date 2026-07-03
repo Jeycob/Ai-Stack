@@ -34,7 +34,9 @@
     "install": {
       "timeout": 1800,
       "runner": "container",
+      "autopilot_priority": 10,
       "summary": "Pripravi workspace runtime a zavislosti uvnitr izolovaneho kontejneru.",
+      "recovery_hint": "Zkontroluj hlavni manifest a lockfile projektu, oprav package manager skripty nebo chybejici dependency deklarace a pak install zopakuj.",
       "cues": [
         "nainstaluj zavislosti",
         "nainstaluj závislosti",
@@ -51,7 +53,9 @@
     "test": {
       "timeout": 1800,
       "runner": "container",
+      "autopilot_priority": 40,
       "summary": "Spusti projektove testy nebo nejblizsi auditovany test runner.",
+      "recovery_hint": "Najdi hlavni test entrypoint nebo manifest skript, oprav chybejici test konfiguraci a vrat se k test kroku.",
       "cues": [
         "spust testy",
         "spusť testy",
@@ -63,7 +67,9 @@
     "build": {
       "timeout": 1800,
       "runner": "container",
+      "autopilot_priority": 50,
       "summary": "Sestavi projekt nebo artefakty bez sirokeho host shell pristupu.",
+      "recovery_hint": "Zkontroluj build skript nebo hlavni manifest, oprav chybejici build konfiguraci a ověř, že projekt vystaví standardní build entrypoint.",
       "cues": [
         "postav projekt",
         "build project",
@@ -77,7 +83,9 @@
     "lint": {
       "timeout": 1200,
       "runner": "container",
+      "autopilot_priority": 60,
       "summary": "Spusti lint nebo obdobnou statickou kontrolu.",
+      "recovery_hint": "Zkontroluj lint skript nebo tool konfiguraci a oprav chybějící lint entrypoint v hlavním manifestu.",
       "cues": [
         "spust lint",
         "spusť lint",
@@ -89,7 +97,9 @@
     "verify": {
       "timeout": 2400,
       "runner": "container",
+      "autopilot_priority": 20,
       "summary": "Provede sirsi auditovane overeni pripravenosti projektu.",
+      "recovery_hint": "Pouzij verify vystup k urceni prvniho blokujiciho manifestu nebo skriptu a priprav maly patch, ktery odemkne dalsi capability krok.",
       "cues": [
         "over projekt",
         "ověř projekt",
@@ -104,7 +114,9 @@
     "smoke": {
       "timeout": 900,
       "runner": "container",
+      "autopilot_priority": 30,
       "summary": "Zkusi projekt rozbehnout nebo udelat startup smoke bez plneho nasazeni.",
+      "recovery_hint": "Zkontroluj startup skript, dev server command nebo hlavni runtime konfiguraci a oprav nejmensi blocker pro lokalni start.",
       "cues": [
         "zkus to rozbehnout",
         "zkus to rozběhnout",
