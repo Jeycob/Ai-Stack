@@ -71,7 +71,7 @@ lidske komunikaci; vykonani akci zajistuje OpenWebUI filter/tool vrstva.
 `Codex Auto Tools Filter` ma rozpoznavat prirozene intenty typu "pullni
 ai-stack a nasad", "ukaz deploy status", preflight push dotazy jako
 "je to ready na push?" nebo "co blokuje push", publish-plan dotazy jako
-"navrhni publish plan" nebo "jak publikovat release", release-prep dotazy jako
+"navrhni publish plan", "jak publikovat release" nebo "co mam delat pred releasem", release-prep dotazy jako
 "zkontroluj release readiness" nebo "co blokuje release", jednoduche publish zadani jako
 "pushni zmeny do GitHubu" nebo "commitni a pushni", bootstrap zadani jako
 "vytvor nove repository Test2 a vygeneruj ssh klic", "zaloz projekt Test2 na GitHubu" nebo

@@ -849,6 +849,8 @@ class Filter:
                 "priprav release",
                 "připrav release",
                 "zkontroluj release",
+                "zkontroluj jestli je release ready",
+                "zkontroluj, jestli je release ready",
                 "co blokuje release",
                 "what blocks release",
                 "prepare release",
@@ -893,6 +895,16 @@ class Filter:
                 "jak udělat release",
                 "navrhni publish plan",
                 "navrhni release plan",
+                "co delat pred releasem",
+                "co dělat před releasem",
+                "co mam delat pred releasem",
+                "co mám dělat před releasem",
+                "co dal pred releasem",
+                "co dál před releasem",
+                "dalsi release krok",
+                "další release krok",
+                "what next before release",
+                "next release step",
             )
         ):
             return None
