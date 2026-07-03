@@ -92,6 +92,12 @@ SCENARIOS: dict[str, Scenario] = {
         prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako 3D web appku v Three.js, priprav starter a pokracuj sam.",
         expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_threejs_app"),
     ),
+    "mentor-brief-electron-scaffold": Scenario(
+        name="mentor-brief-electron-scaffold",
+        description="Natural mentor-brief request that should expose the Electron scaffold token in the routed bootstrap brief.",
+        prompt_template="repo: {workspace}\nDej mi kratky mentor brief pro: Vytvor nove repository Test2 jako desktop appku v Electronu, priprav starter a pokracuj sam.",
+        expected_substrings=("MENTOR_BRIEF_WORKFLOW=bootstrap-improve", "codex_scaffold_electron_app"),
+    ),
     "mentor-brief-fastapi-scaffold": Scenario(
         name="mentor-brief-fastapi-scaffold",
         description="Natural mentor-brief request that should expose the FastAPI scaffold token in the routed bootstrap brief.",

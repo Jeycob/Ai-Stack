@@ -399,9 +399,11 @@ Nově navíc `bootstrap-dispatch` nekončí jen u prvního scaffold commandu. Ze
 
 Zároveň už `bootstrap-dispatch` nerozbíhá nesmyslné pseudo-commandy. Pokud je `scaffold_recipe` jen popisný plán a ne skutečně spustitelný shell command, helper to označí jako `SCAFFOLD_RECIPE_MODE=manual` a vrátí jasný blocker s dalším krokem místo toho, aby se snažil pustit text typu “use CMake scaffold plus glfw...”.
 
-První takhle dříve blokované profily už jsme rovnou posunuli do reálné capability vrstvy: `opengl-native`, `fastapi-service`, `node-service`, `react-app` a nově i `threejs-app` mají dedikované audited scaffoldery v `codex/bin/`. `bootstrap-dispatch` je umí přeložit do skutečného guardrailed runneru přes `run_check.py`, takže tyhle startery už nejsou jen roadmap poznámka, ale opravdový první bootstrap krok.
+První takhle dříve blokované profily už jsme rovnou posunuli do reálné capability vrstvy: `opengl-native`, `fastapi-service`, `node-service`, `react-app`, `threejs-app` a nově i `electron-app` mají dedikované audited scaffoldery v `codex/bin/`. `bootstrap-dispatch` je umí přeložit do skutečného guardrailed runneru přes `run_check.py`, takže tyhle startery už nejsou jen roadmap poznámka, ale opravdový první bootstrap krok.
 
 Pro 3D use-case je důležité hlavně to, že `threejs-app` už není jen kombinace “vite + npm install three”, ale skutečný audited starter `codex/bin/scaffold_threejs_app.py`. Ten vytvoří malou Three.js scénu, `vite.config.ts`, TypeScript config a smoke-friendly `dev`/`smoke` skripty, takže codex-local může na zadání typu “udělej mi 3D web appku” navázat konkrétním bootstrap krokem místo obecného doporučení.
+
+Stejným způsobem je teď pokrytý i `electron-app`. `codex/bin/scaffold_electron_app.py` drží Electron tenký a používá veřejný stack `electron + vite + typescript` místo nové vlastní infrastruktury. Starter vytvoří `main.js`, `preload.js`, renderer entry, `vite.config.ts` a jednoduchý audited smoke skript, takže i desktop use-case má konkrétní guardrailed bootstrap cestu.
 
 Stejným směrem je teď posunutý i `fastapi-service`. Místo pouhého `pip install ...` recipe má vlastní scaffolder `codex/bin/scaffold_fastapi_service.py`, který vytvoří minimální kostru `app/main.py`, `app/config.py`, `tests/test_health.py`, `requirements.txt` a doplní provozní poznámky do README. Díky tomu bootstrap neznamená jen nainstalované balíčky, ale i skutečný běžitelný starter, na který už může navázat `smoke`, `verify` nebo `pytest`.
 

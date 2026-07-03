@@ -393,6 +393,13 @@ pro 3D web use-case nevraci jen obecne “pouzij three + vite”, ale rovnou
 vykonatelny bootstrap krok, na ktery jde prirozene navazat pres `install`,
 `smoke` a `build`.
 
+Stejny princip ted plati i pro `electron-app`: audited starter
+`codex/bin/scaffold_electron_app.py` pouzije verejny stack `electron + vite +
+typescript`, vytvori `main.js`, `preload.js`, renderer entry a jednoduchy
+audited smoke skript pro kontrolu pripravene kostry. Prakticky to drzi desktop
+baseline tenky a znovupouzitelny, takze codex-local umi i pro desktop zadani
+vratit skutecny bootstrap krok misto obecneho seznamu balicku.
+
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
 Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen

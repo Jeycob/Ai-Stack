@@ -631,9 +631,9 @@ def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
             "configure -> build -> run sample window smoke",
         ),
         "electron-app": (
-            "npm init -y && npm install electron && npm install -D vite typescript",
-            "package.json, main.ts or main.js, preload.ts, renderer entry, vite.config.ts",
-            "install -> electron run smoke -> build",
+            "codex_scaffold_electron_app",
+            "package.json, main.js, preload.js, src/main.ts, src/styles.css, vite.config.ts",
+            "install -> smoke -> build",
         ),
     }
     return recipes.get(solution_profile, ("", "", ""))
@@ -1690,6 +1690,19 @@ def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -
         ]
     if recipe == "codex_scaffold_threejs_app":
         script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_threejs_app.py"
+        return [
+            sys.executable,
+            "codex/bin/run_check.py",
+            repo_name,
+            "--timeout",
+            str(timeout),
+            "--",
+            sys.executable,
+            str(script),
+            ".",
+        ]
+    if recipe == "codex_scaffold_electron_app":
+        script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_electron_app.py"
         return [
             sys.executable,
             "codex/bin/run_check.py",
@@ -2761,6 +2774,8 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
             "mentor-brief-react-scaffold",
             "--scenario",
             "mentor-brief-threejs-scaffold",
+            "--scenario",
+            "mentor-brief-electron-scaffold",
             "--scenario",
             "mentor-brief-fastapi-scaffold",
         ],
