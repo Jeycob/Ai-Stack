@@ -960,6 +960,55 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
     return f"repo: {workspace}\nAnalyzuj projekt a navrhni další krok. Nic needituj."
 
 
+def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -> list[str]:
+    workflow = decision["workflow"]
+    lines = [
+        f"workspace={workspace}",
+        f"task={task}",
+        f"workflow={workflow}",
+        f"runtime_profile={decision['runtime_profile']}",
+        f"confidence={decision['confidence']}",
+    ]
+    capability_id = decision.get("capability_id", "")
+    if capability_id:
+        lines.append(f"capability_id={capability_id}")
+    capability_scope = decision.get("capability_scope", "")
+    if capability_scope:
+        lines.append(f"capability_scope={capability_scope}")
+
+    if workflow == "run":
+        command = extract_run_command(task)
+        lines.append("goal=run audited workspace command and summarize output")
+        if command:
+            lines.append(f"command_hint={command}")
+    elif workflow == "apply-safe":
+        lines.append("goal=prepare and apply a minimal safe patch inside the guarded ai-stack scope")
+        lines.append("guardrail=stay inside safe files and validate the diff before apply")
+    elif workflow == "improve":
+        lines.append("goal=push the project forward agentically with capability steps first")
+        lines.append("guardrail=prefer install/test/build/lint or autopilot-style steps before widening patch scope")
+    elif workflow == "autopilot":
+        lines.append("goal=verify the workspace and continue with the next safe audited step")
+        lines.append("guardrail=stop when the next useful step exceeds standard workspace capability scope")
+    else:
+        lines.append("goal=analyze the repository and decide the best next audited step")
+        lines.append("guardrail=do not mutate files until the task shape is clearer")
+
+    missing = decision.get("missing_capability_hint", "")
+    if missing:
+        lines.append(f"next_scope_hint={missing}")
+    lines.append(f"next_helper={recommended_next_step(decision, workspace, task)}")
+    lines.append(f"audit_prompt={audit_chat_prompt_suggestion(decision, workspace, task)}")
+    return lines
+
+
+def print_execution_brief(prefix: str, decision: dict[str, str], workspace: str, task: str) -> None:
+    print(f"{prefix}_EXECUTION_BRIEF<<EOF")
+    for line in execution_brief_lines(decision, workspace, task):
+        print(line)
+    print("EOF")
+
+
 def backlog_priority(decision: dict[str, str], task: str) -> int:
     score = WORKFLOW_PRIORITY.get(decision["workflow"], 40)
     score += CONFIDENCE_PRIORITY.get(decision["confidence"], 0)
@@ -1070,6 +1119,7 @@ def run_report_sequence(args: argparse.Namespace) -> int:
     print("MENTOR_REPORT_AUDIT_CHAT_PROMPT<<EOF")
     print(audit_chat_prompt_suggestion(decision, args.workspace, args.task))
     print("EOF")
+    print_execution_brief("MENTOR_REPORT", decision, args.workspace, args.task)
     return 0
 
 
@@ -1126,6 +1176,7 @@ def run_plan_sequence(args: argparse.Namespace) -> int:
         print(f"PLAN_STEP_{idx}_LABEL={label}")
         print(f"PLAN_STEP_{idx}_VALUE={value}")
     print(f"PLAN_STEP_COUNT={len(steps)}")
+    print_execution_brief("MENTOR_PLAN", decision, args.workspace, args.task)
     return 0
 
 
@@ -1151,6 +1202,7 @@ def run_dispatch_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_DISPATCH_SELECTED_WORKFLOW={top.decision['workflow']}")
     print(f"MENTOR_DISPATCH_SELECTED_PRIORITY={top.priority}")
     print(f"MENTOR_DISPATCH_SELECTED_NEXT_HELPER={top.next_helper}")
+    print_execution_brief("MENTOR_DISPATCH_SELECTED", top.decision, args.workspace, top.task)
 
     if args.recommend_only:
         print("MENTOR_DISPATCH_MODE=recommend-only")
@@ -1161,6 +1213,16 @@ def run_dispatch_sequence(args: argparse.Namespace) -> int:
     delegate_args.task = top.task
     print("MENTOR_DISPATCH_MODE=execute")
     return run_delegate_sequence(delegate_args)
+
+
+def run_brief_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    print(f"MENTOR_BRIEF_WORKSPACE={args.workspace}")
+    print(f"MENTOR_BRIEF_TASK={args.task}")
+    print(f"MENTOR_BRIEF_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_BRIEF_NEXT_HELPER={recommended_next_step(decision, args.workspace, args.task)}")
+    print_execution_brief("MENTOR_BRIEF", decision, args.workspace, args.task)
+    return 0
 
 
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
@@ -1184,6 +1246,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_report_sequence(args)
     if args.mode == "plan":
         return run_plan_sequence(args)
+    if args.mode == "brief":
+        return run_brief_sequence(args)
     if args.mode == "backlog":
         return run_backlog_sequence(args)
     if args.mode == "dispatch":
@@ -1294,6 +1358,11 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("workspace")
     plan.add_argument("task")
     plan.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; plan mode never calls OpenWebUI")
+
+    brief = sub.add_parser("brief", help="Produce a minimal execution brief for a task: tiny mentor context, next helper, and guardrails")
+    brief.add_argument("workspace")
+    brief.add_argument("task")
+    brief.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; brief mode never calls OpenWebUI")
 
     backlog = sub.add_parser("backlog", help="Classify and prioritize multiple tasks into a mentor-ready queue with next helper commands")
     backlog.add_argument("workspace")

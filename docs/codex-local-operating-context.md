@@ -199,6 +199,12 @@ Priklad mentor reportu, ktery vrati workflow, capability metadata, guardraily i 
 python3 codex/bin/mentor_codex_local.py report ai-stack "Fixni to a dotahni co zvladnes."
 ```
 
+Priklad kratkeho execution briefu, ktery je vhodny jako levna mezivrstva mezi planovanim a dalsi modelovou exekuci:
+
+```bash
+python3 codex/bin/mentor_codex_local.py brief ai-stack "Fixni to a dotahni co zvladnes."
+```
+
 Priklad mentor planu, ktery z jednoho tasku vrati kratkou 2-4 krokovou posloupnost:
 
 ```bash
@@ -239,12 +245,19 @@ Report navic vraci:
 
 - `MENTOR_REPORT_NEXT_HELPER`: doporuceny dalsi helper command.
 - `MENTOR_REPORT_AUDIT_CHAT_PROMPT`: navrh viditelneho promptu pro OpenWebUI audit chat.
+- `MENTOR_REPORT_EXECUTION_BRIEF`: kratky nizkonakladovy mentor brief pro dalsi modelovy krok.
+
+Brief vraci:
+
+- `MENTOR_BRIEF_NEXT_HELPER`: doporuceny dalsi helper command.
+- `MENTOR_BRIEF_EXECUTION_BRIEF`: minimalisticky cil, guardraily a dalsi krok pripraveny pro dalsi model.
 
 Plan navic vraci:
 
 - `PLAN_STEP_<N>_LABEL`: typ dalsiho kroku.
 - `PLAN_STEP_<N>_VALUE`: konkretni helper command nebo capability review krok.
 - `PLAN_STEP_COUNT`: pocet kroku v navrhu.
+- `MENTOR_PLAN_EXECUTION_BRIEF`: stejny kratky mentor brief, ale uz vedle vicekrokoveho planu.
 
 Backlog navic vraci:
 
@@ -260,6 +273,7 @@ Dispatch navic vraci:
 - `MENTOR_DISPATCH_SELECTED_TASK`: vybrany top task.
 - `MENTOR_DISPATCH_SELECTED_WORKFLOW`: workflow, ktere se nad nim ma spustit.
 - `MENTOR_DISPATCH_SELECTED_NEXT_HELPER`: helper command odpovidajici vybrane polozce.
+- `MENTOR_DISPATCH_SELECTED_EXECUTION_BRIEF`: kratky vykonovy brief pro top task.
 - `MENTOR_DISPATCH_MODE`: `recommend-only` nebo `execute`.
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.

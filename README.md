@@ -312,6 +312,10 @@ Když chceš ještě o krok praktičtější dohled nad delším úkolem, použi
 
     python3 codex/bin/mentor_codex_local.py plan ai-stack "Fixni to a dotáhni co zvládneš."
 
+Když naopak potřebuješ co nejlevnější mentor kontext pro další modelový krok, použij `brief`: vrátí malý execution brief se zvoleným workflow, guardraily, next helperem a jednou krátkou formulací cíle. To je vhodné jako úsporná vrstva mezi plannerem a samotnou exekucí v OpenWebUI:
+
+    python3 codex/bin/mentor_codex_local.py brief ai-stack "Fixni to a dotáhni co zvládneš."
+
 Když už máš víc úkolů najednou a chceš, aby si helper sám srovnal pořadí a šířku pravomocí, použij `backlog`. Nad každým taskem udělá stejnou klasifikaci jako `profile/report/plan`, ale vrátí prioritizovanou frontu s `NEXT_HELPER`, `PLAN_CMD` a připraveným audit chat promptem:
 
     python3 codex/bin/mentor_codex_local.py backlog ai-stack \
