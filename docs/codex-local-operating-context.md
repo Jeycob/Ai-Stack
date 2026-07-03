@@ -254,6 +254,8 @@ Brief vraci:
 
 `delegate` navic tenhle execution brief nese dal i do dalsich helper promptu. Prakticky to znamena, ze pri prechodu z `dispatch` nebo `delegate` do `audit`/`autopilot`/`improve` uz dalsi modelovy krok nedostane jen obecny workflow prompt, ale i maly stabilni kontext ve visible casti (`Mentor brief:`) a v technicke casti (`MENTOR_EXECUTION_BRIEF`).
 
+`openwebui_codex_auto_tools_filter.py` umi tenhle use-case uz i prirozene routovat z chatu: kdyz uzivatel napise `repo: <workspace>` a pozadavek typu `Dej mi kratky mentor brief pro ...`, `Jaky brief ma dostat model pro ...` nebo `execution brief`, filter to prelozi na `mentor_codex_local.py brief` pres `GATEWAY_ADMIN_RUN_WORKSPACE`.
+
 Plan navic vraci:
 
 - `PLAN_STEP_<N>_LABEL`: typ dalsiho kroku.

@@ -106,7 +106,9 @@ class Filter:
         if "GATEWAY_ADMIN_" in text:
             return None
 
-        command = self._natural_workspace_backlog_command(text)
+        command = self._natural_workspace_brief_command(text)
+        if not command:
+            command = self._natural_workspace_backlog_command(text)
         if not command:
             command = self._natural_workspace_dispatch_command(text)
         if not command:
@@ -130,14 +132,20 @@ class Filter:
         body["stream"] = False
         return body
 
-    def _extract_task_list(self, text: str) -> list[str]:
-        tasks = []
+    def _non_repo_lines(self, text: str) -> list[str]:
+        lines = []
         for line in text.splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
             if re.match(r"(?i)^(repo|workspace|project)\s*:\s*[A-Za-z0-9_.-]{1,80}\s*$", stripped):
                 continue
+            lines.append(stripped)
+        return lines
+
+    def _extract_task_list(self, text: str) -> list[str]:
+        tasks = []
+        for stripped in self._non_repo_lines(text):
             for pattern in (r"^[-*]\s+(.+)$", r"^\d+[.)]\s+(.+)$"):
                 match = re.match(pattern, stripped)
                 if match:
@@ -153,6 +161,78 @@ class Filter:
             deduped.append(item)
             seen.add(item)
         return deduped
+
+    def _extract_brief_task(self, text: str) -> str | None:
+        patterns = [
+            r"(?is)\b(?:mentor\s+brief|execution\s+brief|kratky\s+brief|krátký\s+brief)\b\s*(?:pro|k|na|task|ukol|úkol)?\s*:\s*(.+)\s*$",
+            r"(?is)\b(?:dej|udelej|udělej|vytvor|vytvoř|priprav|připrav)\b.+?\b(?:mentor\s+brief|execution\s+brief|kratky\s+brief|krátký\s+brief)\b\s+(?:pro|k|na)\s+(.+?)\s*$",
+            r"(?is)\b(?:jaky|jaký)\s+brief\s+(?:ma|má)\s+dostat\s+model\s+pro\s+(.+?)\s*$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                candidate = match.group(1).strip().strip("\"'")
+                candidate = re.sub(r"(?i)^(?:task|ukol|úkol)\s*:\s*", "", candidate).strip()
+                candidate = candidate.rstrip("?. ")
+                if candidate:
+                    return candidate
+
+        lines = self._non_repo_lines(text)
+        filtered = []
+        for line in lines:
+            lower = line.lower()
+            if any(
+                needle in lower
+                for needle in (
+                    "mentor brief",
+                    "execution brief",
+                    "kratky brief",
+                    "krátký brief",
+                    "jaky brief",
+                    "jaký brief",
+                    "co ma dostat model",
+                    "co má dostat model",
+                )
+            ):
+                continue
+            filtered.append(line)
+        if filtered:
+            return " ".join(filtered)
+        return None
+
+    def _brief_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "brief",
+            workspace,
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _natural_workspace_brief_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        if not any(
+            needle in lower
+            for needle in (
+                "mentor brief",
+                "execution brief",
+                "kratky brief",
+                "krátký brief",
+                "jaky brief",
+                "jaký brief",
+                "co ma dostat model",
+                "co má dostat model",
+            )
+        ):
+            return None
+        task = self._extract_brief_task(text)
+        if not task:
+            return None
+        return self._brief_helper_command(workspace, task)
 
     def _backlog_helper_command(self, mode: str, workspace: str, tasks: list[str], recommend_only: bool = False) -> str:
         command = [
