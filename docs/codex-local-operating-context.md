@@ -132,6 +132,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pro vicekrokovou praci pouzivat `mentor_codex_local.py audit` nebo
   `mentor_codex_local.py autopilot`,
 - pro review-to-patch mentoring loop pouzivat `mentor_codex_local.py patch-plan`,
+- pro pripravu maleho diff navrhu nad auditem pouzivat `mentor_codex_local.py apply-ready`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
 Priklad doporucovaciho autopilota:
@@ -150,6 +151,12 @@ Priklad recommendation-driven patch planning loopu:
 
 ```bash
 python3 codex/bin/mentor_codex_local.py patch-plan Odysseus-Lite
+```
+
+Priklad apply-ready loopu, ktery pripravi i navrh unified diffu, ale nic neaplikuje:
+
+```bash
+python3 codex/bin/mentor_codex_local.py apply-ready Odysseus-Lite
 ```
 
 ## Pro nove nastroje

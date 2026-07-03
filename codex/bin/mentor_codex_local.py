@@ -336,6 +336,95 @@ def run_patch_plan_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_apply_ready_sequence(args: argparse.Namespace) -> int:
+    visible = (
+        f"repo: {args.workspace}\n"
+        "Najdi nejbližší bezpečný patch směr, přečti potřebný kontext a připrav návrh malého dif­fu. "
+        "Diff zatím jen navrhni, nic neaplikuj."
+    )
+    technical = (
+        f"{repo_prefix(args.repo)}\n"
+        f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {args.workspace} --recommend-only --timeout {args.timeout}"
+    )
+
+    if args.dry_run:
+        print("VISIBLE_PROMPT")
+        print(visible)
+        print("\nTECHNICAL_PROMPT")
+        print(technical)
+        print()
+        print("FOLLOW_UP")
+        print("If the response contains read_command, the helper will execute it, ask for a patch plan, and then ask codex-local for a unified diff proposal only.")
+        return 0
+
+    rc, first_output = invoke_turn(args, visible, technical, send_history=False, capture_output=True)
+    if rc != 0:
+        return rc
+    meta = parse_key_values(first_output)
+    read_command = meta.get("read_command", "").strip()
+    if read_command:
+        read_visible = (
+            f"repo: {args.workspace}\n"
+            "Přečti teď nejrelevantnější soubor pro další patch směr a vrať ho s čísly řádků. Nic needituj."
+        )
+        read_technical = f"{repo_prefix(args.repo)}\n{read_command}"
+        rc, _ = invoke_turn(args, read_visible, read_technical, send_history=True)
+        if rc != 0:
+            return rc
+
+    plan_visible = (
+        f"repo: {args.workspace}\n"
+        "Na základě dosavadní historie navrhni minimální patch plan. "
+        "Zůstaň u malého bezpečného zásahu a nic ještě needituj."
+    )
+    plan_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        "Na základě celé dosavadní historie navrhni minimální další patch plan. "
+        "Odpověz stručně a strukturovaně v těchto řádcích:\n"
+        "PATCH_TARGET: <path or none>\n"
+        "PATCH_SUMMARY: <one sentence>\n"
+        "PATCH_HINT: <one sentence>\n"
+        "NEXT_ADMIN_COMMAND: <GATEWAY_ADMIN_READ_NUMBERED ... or GATEWAY_ADMIN_APPLY_NOW or none>"
+    )
+    rc, plan_output = invoke_turn(args, plan_visible, plan_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+    plan_meta = parse_key_values(plan_output)
+
+    target = plan_meta.get("patch_target", "").strip()
+    summary = plan_meta.get("patch_summary", "").strip()
+    hint = plan_meta.get("patch_hint", "").strip()
+    if not target or target.lower() == "none":
+        if plan_output.strip():
+            print(plan_output.strip())
+        return 0
+
+    diff_visible = (
+        f"repo: {args.workspace}\n"
+        "Na základě dosavadního auditu teď navrhni malý unified diff pro daný soubor. "
+        "Diff pouze navrhni, nic neaplikuj."
+    )
+    diff_technical = (
+        f"{repo_prefix(args.workspace)}\n"
+        f"Na základě celé dosavadní historie navrhni malý unified diff jen pro {target}. "
+        "Neměň jiné soubory. Odpověz pouze jedním fenced ```diff blokem bez dalšího textu. "
+        f"Záměr změny: {summary or '(unspecified)'} . "
+        f"Hint: {hint or '(none)'}"
+    )
+    rc, diff_output = invoke_turn(args, diff_visible, diff_technical, send_history=True, capture_output=True)
+    if rc != 0:
+        return rc
+
+    final_parts = []
+    if plan_output.strip():
+        final_parts.append(plan_output.strip())
+    if diff_output.strip():
+        final_parts.append(diff_output.strip())
+    if final_parts:
+        print("\n\n".join(final_parts))
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Send structured mentor tasks to codex-local via the OpenWebUI audit chat.",
@@ -397,6 +486,11 @@ def parse_args() -> argparse.Namespace:
     patch_plan.add_argument("--timeout", type=int, default=2400)
     patch_plan.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
 
+    apply_ready = sub.add_parser("apply-ready", help="Use autopilot recommendation, follow read guidance, and ask codex-local for a diff proposal only")
+    apply_ready.add_argument("workspace")
+    apply_ready.add_argument("--timeout", type=int, default=2400)
+    apply_ready.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
@@ -423,6 +517,8 @@ def main() -> int:
         return run_autopilot_sequence(args)
     if args.mode == "patch-plan":
         return run_patch_plan_sequence(args)
+    if args.mode == "apply-ready":
+        return run_apply_ready_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)

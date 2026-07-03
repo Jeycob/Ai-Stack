@@ -276,6 +276,10 @@ Pro recommendation-driven mentoring loop je tam i mód `patch-plan`: helper nejd
 
     python3 codex/bin/mentor_codex_local.py patch-plan Odysseus-Lite
 
+Ještě o krok dál jde mód `apply-ready`: ten po recommendation a případném read kroku nechá codex-local navrhnout i malý unified diff, ale diff zatím jen vrátí do auditu a nic neaplikuje:
+
+    python3 codex/bin/mentor_codex_local.py apply-ready Odysseus-Lite
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh
