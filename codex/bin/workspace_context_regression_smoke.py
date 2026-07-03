@@ -153,6 +153,15 @@ def main() -> int:
             )
             expect(bootstrap_plan["workflow"] == "bootstrap", "bootstrap-over-ssh-workflow", json.dumps(bootstrap_plan, ensure_ascii=False))
             expect(bootstrap_plan["repo_name"] == "TestCode", "bootstrap-over-ssh-repo-name", json.dumps(bootstrap_plan, ensure_ascii=False))
+            semicolon_bootstrap = gateway.normalize_agent_plan(
+                {"workflow": "review"},
+                "ai-stack",
+                "ai-stack",
+                True,
+                "vytvor mi nove repository TestCode; vygeneruj do nej ssh klic",
+            )
+            expect(semicolon_bootstrap["workflow"] == "bootstrap", "bootstrap-over-ssh-workflow-semicolon", json.dumps(semicolon_bootstrap, ensure_ascii=False))
+            expect(semicolon_bootstrap["repo_name"] == "TestCode", "bootstrap-over-ssh-repo-name-semicolon", json.dumps(semicolon_bootstrap, ensure_ascii=False))
 
             recommendation = gateway.workspace_autopilot_recommendation("TestCode")
             expect(isinstance(recommendation, dict), "load-workspace-path-object", repr(recommendation))

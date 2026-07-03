@@ -801,8 +801,8 @@ def choose_workflow(task: str) -> str:
 
 def extract_create_repo_name(task: str) -> str:
     patterns = [
-        r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:nove|nové|new\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
-        r"(?i)\b(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+        r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:repository|repozitar|repozitář|repo)\s+([A-Za-z0-9_.-]{1,80})\b",
+        r"(?i)\b(?:repository|repozitar|repozitář|repo)\s+([A-Za-z0-9_.-]{1,80})\b",
     ]
     for pattern in patterns:
         match = re.search(pattern, task)

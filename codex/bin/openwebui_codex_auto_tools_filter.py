@@ -1637,10 +1637,10 @@ class Filter:
                 return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {routed_name}{github}{restart}"
 
         patterns = [
-            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:(?:github|gitlab|remote)\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:(?:github|gitlab|remote)\s+)?(?:repository|repozitar|repozitář|repo)\s+([A-Za-z0-9_.-]{1,80})\b",
             r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create|bootstrap|priprav|připrav)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:projekt|workspace)\s+([A-Za-z0-9_.-]{1,80})\b",
-            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+([A-Za-z0-9_.-]{1,80})\b\s+(?:repository|repo|repozitar|repozitář|projekt|workspace)\b",
-            r"(?i)\b(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+([A-Za-z0-9_.-]{1,80})\b\s+(?:repository|repozitar|repozitář|repo|projekt|workspace)\b",
+            r"(?i)\b(?:repository|repozitar|repozitář|repo)\s+([A-Za-z0-9_.-]{1,80})\b",
             r"(?i)\b(?:projekt|workspace)\s+([A-Za-z0-9_.-]{1,80})\b",
         ]
         for pattern in patterns:

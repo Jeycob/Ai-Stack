@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
+WORKSPACE_LABEL_PATTERN = r"(?:repository|repositar|repozitar|repozitář|workspace|projekt|project|repo)"
 WORKSPACE_NAME_PATTERN = r"[A-Za-z0-9_.-]{1,80}"
 WORKSPACE_VALUE_RE = re.compile(rf"(?i)\b({WORKSPACE_NAME_PATTERN})\b")
 BOOTSTRAP_TARGET_LABEL_PATTERN = r"(?:repository|repozit\w*|reposit\w*|workspace|projekt|project|repo)"
@@ -80,7 +80,9 @@ def infer_repo_name_from_text(text: str) -> str:
     for pattern in BOOTSTRAP_REPO_PATTERNS:
         match = re.search(pattern, value)
         if match:
-            return match.group(1)
+            candidate = match.group(1).strip()
+            if candidate.lower() not in {"ai-stack", "smoke", "github", "gitlab", "remote", "new", "novy", "nový", "nove", "nové"}:
+                return candidate
     return ""
 
 
@@ -89,7 +91,9 @@ def bootstrap_repo_name_from_text(text: str) -> str:
     for pattern in BOOTSTRAP_CREATE_REPO_PATTERNS:
         match = re.search(pattern, value)
         if match:
-            return match.group(1)
+            candidate = match.group(1).strip()
+            if candidate.lower() not in {"ai-stack", "smoke", "github", "gitlab", "remote", "new", "novy", "nový", "nove", "nové"}:
+                return candidate
     return ""
 
 

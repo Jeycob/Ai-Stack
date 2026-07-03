@@ -80,27 +80,30 @@ def assert_bootstrap_followup_inference() -> None:
 
 
 def assert_bootstrap_beats_workspace_ssh_for_new_repo() -> None:
-    task = "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic"
-    plan, _raw = gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True)
-    if plan.get("workflow") != "bootstrap":
-        raise SystemExit(f"expected bootstrap workflow for combined bootstrap+ssh prompt, got {plan!r}")
-    normalized = gateway.normalize_agent_plan(
-        {
-            "workflow": "review",
-            "reason": "planner drift smoke",
-            "read_only": False,
-            "workspace": "ai-stack",
-            "confidence": "medium",
-        },
-        "ai-stack",
-        "ai-stack",
-        True,
-        task,
-    )
-    if normalized.get("workflow") != "bootstrap":
-        raise SystemExit(f"expected normalized bootstrap workflow for combined bootstrap+ssh prompt, got {normalized!r}")
-    if normalized.get("repo_name") != "TestCode":
-        raise SystemExit(f"expected repo_name='TestCode', got {normalized!r}")
+    for task in (
+        "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic",
+        "vytvor mi nove repository TestCode; vygeneruj do nej ssh klic",
+    ):
+        plan, _raw = gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True)
+        if plan.get("workflow") != "bootstrap":
+            raise SystemExit(f"expected bootstrap workflow for combined bootstrap+ssh prompt, got {plan!r}")
+        normalized = gateway.normalize_agent_plan(
+            {
+                "workflow": "review",
+                "reason": "planner drift smoke",
+                "read_only": False,
+                "workspace": "ai-stack",
+                "confidence": "medium",
+            },
+            "ai-stack",
+            "ai-stack",
+            True,
+            task,
+        )
+        if normalized.get("workflow") != "bootstrap":
+            raise SystemExit(f"expected normalized bootstrap workflow for combined bootstrap+ssh prompt, got {normalized!r}")
+        if normalized.get("repo_name") != "TestCode":
+            raise SystemExit(f"expected repo_name='TestCode', got {normalized!r}")
     print("BOOTSTRAP_BEATS_SSH_INTENT_OK")
 
 
