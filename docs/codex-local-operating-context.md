@@ -214,6 +214,12 @@ FastAPI, Three.js nebo OpenGL, helper si ho ulozi jako `solution_profile` a
 puvodniho stackoveho zameru a codex-local nemusi po bootstrapu improvizovat
 uplne od nuly.
 
+Pro bezne stacky helper navic umi doplnit i `public_stack` a
+`public_stack_rationale`, tedy doporucenou sadu verejnych knihoven a
+toolingu, ktere maji byt preferovane pred vlastnim boilerplatem. Tohle je
+dulezite pro cely smer projektu: codex-local ma byt vic orchestrace a reuse,
+min vlastni framework.
+
 Priklad profilove klasifikace bez spousteni jakychkoli akci:
 
 ```bash

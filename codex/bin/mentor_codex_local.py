@@ -529,6 +529,48 @@ def infer_solution_profile(task: str) -> tuple[str, str]:
     return "", ""
 
 
+def public_stack_hint_for_profile(solution_profile: str) -> tuple[str, str]:
+    hints = {
+        "nextjs-app": (
+            "next, react, typescript, eslint, playwright",
+            "Prefer established Next.js defaults and keep custom scaffolding thin.",
+        ),
+        "react-app": (
+            "vite, react, typescript, vitest, @testing-library/react",
+            "Prefer Vite and common React testing/build defaults before inventing local scaffolding.",
+        ),
+        "fastapi-service": (
+            "fastapi, uvicorn, pydantic-settings, pytest, httpx",
+            "Prefer small proven FastAPI ecosystem packages instead of hand-rolled config or HTTP helpers.",
+        ),
+        "flask-service": (
+            "flask, pytest",
+            "Keep the Flask baseline minimal and add third-party pieces only where they reduce obvious boilerplate.",
+        ),
+        "django-app": (
+            "django, pytest-django",
+            "Prefer conventional Django layout and ecosystem defaults over custom runtime structure.",
+        ),
+        "node-service": (
+            "express or nestjs, typescript, vitest or jest",
+            "Prefer the smallest established Node service stack that still fits the requested shape.",
+        ),
+        "threejs-app": (
+            "three, vite, typescript",
+            "Prefer Three.js plus a small web scaffold instead of custom low-level rendering setup.",
+        ),
+        "opengl-native": (
+            "glfw or sdl2, glad or glew, cmake",
+            "Prefer standard OpenGL bootstrap libraries and a simple CMake build over ad-hoc native setup.",
+        ),
+        "electron-app": (
+            "electron, vite, typescript",
+            "Prefer a minimal Electron starter with well-known tooling rather than custom packaging glue.",
+        ),
+    }
+    return hints.get(solution_profile, ("", ""))
+
+
 def infer_workspace_action(task: str) -> str:
     lower = task.lower()
     action_map = [
@@ -561,6 +603,8 @@ def classify_task(task: str) -> dict[str, str]:
         repo_github: str = "",
         solution_profile: str = "",
         starter_hint: str = "",
+        public_stack: str = "",
+        public_stack_rationale: str = "",
     ) -> dict[str, str]:
         capability = roadmap.get(capability_id, {}) if capability_id else {}
         return {
@@ -578,10 +622,13 @@ def classify_task(task: str) -> dict[str, str]:
             "repo_github": repo_github,
             "solution_profile": solution_profile,
             "starter_hint": starter_hint,
+            "public_stack": public_stack,
+            "public_stack_rationale": public_stack_rationale,
         }
 
     repo_name = extract_create_repo_name(task)
     solution_profile, starter_hint = infer_solution_profile(task)
+    public_stack, public_stack_rationale = public_stack_hint_for_profile(solution_profile)
     if repo_name and wants_repo_followthrough(task):
         return result(
             "capability",
@@ -595,6 +642,8 @@ def classify_task(task: str) -> dict[str, str]:
             repo_github="yes" if wants_github_repo(task) else "no",
             solution_profile=solution_profile,
             starter_hint=starter_hint,
+            public_stack=public_stack,
+            public_stack_rationale=public_stack_rationale,
         )
     if repo_name:
         return result(
@@ -609,6 +658,8 @@ def classify_task(task: str) -> dict[str, str]:
             repo_github="yes" if wants_github_repo(task) else "no",
             solution_profile=solution_profile,
             starter_hint=starter_hint,
+            public_stack=public_stack,
+            public_stack_rationale=public_stack_rationale,
         )
     if any(
         token in lower
@@ -1413,6 +1464,8 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
     print(f"MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
     print(f"SOLUTION_PROFILE={decision['solution_profile']}")
     print(f"STARTER_HINT={decision['starter_hint']}")
+    print(f"PUBLIC_STACK={decision['public_stack']}")
+    print(f"PUBLIC_STACK_RATIONALE={decision['public_stack_rationale']}")
     return 0
 
 
@@ -1517,6 +1570,10 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
         lines.append(f"solution_profile={decision['solution_profile']}")
     if decision.get("starter_hint"):
         lines.append(f"starter_hint={decision['starter_hint']}")
+    if decision.get("public_stack"):
+        lines.append(f"public_stack={decision['public_stack']}")
+    if decision.get("public_stack_rationale"):
+        lines.append(f"public_stack_rationale={decision['public_stack_rationale']}")
 
     if workflow == "run":
         command = extract_run_command(task)
@@ -1716,6 +1773,8 @@ def run_report_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_REPORT_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
     print(f"MENTOR_REPORT_SOLUTION_PROFILE={decision['solution_profile']}")
     print(f"MENTOR_REPORT_STARTER_HINT={decision['starter_hint']}")
+    print(f"MENTOR_REPORT_PUBLIC_STACK={decision['public_stack']}")
+    print(f"MENTOR_REPORT_PUBLIC_STACK_RATIONALE={decision['public_stack_rationale']}")
     print(f"MENTOR_REPORT_NEXT_HELPER={recommended_next_step(decision, args.workspace, args.task)}")
     print("MENTOR_REPORT_AUDIT_CHAT_PROMPT<<EOF")
     print(audit_chat_prompt_suggestion(decision, args.workspace, args.task))
@@ -2071,6 +2130,8 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             f"- bootstrap repo: {repo_name}\n"
             + (f"- starter profile: {decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
             + (f"- starter hint: {decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
+            + (f"- public stack: {decision.get('public_stack')}\n" if decision.get("public_stack") else "")
+            + (f"- stack rationale: {decision.get('public_stack_rationale')}\n" if decision.get("public_stack_rationale") else "")
             +
             "- follow-through: continue with audited workspace setup and improvement after repository creation"
         ),
@@ -2083,6 +2144,8 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             "workflow=bootstrap-improve\n"
             + (f"solution_profile={decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
             + (f"starter_hint={decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
+            + (f"public_stack={decision.get('public_stack')}\n" if decision.get("public_stack") else "")
+            + (f"public_stack_rationale={decision.get('public_stack_rationale')}\n" if decision.get("public_stack_rationale") else "")
             +
             "goal=continue from repository bootstrap into audited install/test/build or safe patch progression"
         ),

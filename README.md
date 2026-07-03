@@ -314,6 +314,8 @@ Stejný princip nově platí i pro repo bootstrap. Jednoduché “vytvoř reposi
 
 Bootstrap-improve navíc nově nese i lehký `solution_profile` a `starter_hint`. Když tedy zadání zní třeba “vytvoř repository Test2 ve FastAPI”, “založ React appku” nebo “udělej Three.js starter”, mentor si tenhle stackový záměr uloží do execution briefu a posune ho dál do improve flow. Není to ještě plný framework-specific scaffolder, ale agent už díky tomu nepokračuje naslepo bez technologického směru.
 
+K tomu se teď přidává i `public_stack` a `public_stack_rationale`: mentor pro běžné stacky rovnou doporučí osvědčené veřejné balíčky a tooling, třeba `fastapi, uvicorn, pydantic-settings, pytest, httpx` pro FastAPI nebo `vite, react, typescript, vitest, @testing-library/react` pro React. Cíl je jednoduchý: codex-local má víc reuseovat etablované moduly a méně vyrábět vlastní boilerplate.
+
 Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.
 
 `Codex Auto Tools Filter` teď navíc umí pro některé přirozené požadavky, které jsou širší než dnešní safe runtime scope, propsat do audit stopy i capability-roadmap doporučení. Typicky u GitHub/release nebo host-runtime úkolů zapíše `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`, místo aby jen mlčky selhal nebo přehnaně rozšířil runtime.
