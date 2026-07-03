@@ -1238,6 +1238,43 @@ def admin_create_local_repo(payload):
         "commands": commands,
     }
 
+def workspace_run_state_dir():
+    path = REPO_ROOT / "codex/state/workspace-runs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+def workspace_run_job_path(job_id):
+    return workspace_run_state_dir() / f"{job_id}.json"
+
+def workspace_run_write(job_id, payload):
+    data = dict(payload)
+    data["updated_at"] = int(time.time())
+    workspace_run_job_path(job_id).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+def workspace_run_read(job_id):
+    path = workspace_run_job_path(job_id)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+def parse_run_check_json_from_log(log_path):
+    try:
+        raw = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(raw.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    return None
+
 def admin_run_workspace(payload):
     workspace = str(payload.get("workspace") or "").strip()
     command = payload.get("command") or []
@@ -1270,7 +1307,19 @@ def admin_run_workspace(payload):
         audit_dir = REPO_ROOT / "codex/audit"
         audit_dir.mkdir(parents=True, exist_ok=True)
         safe_workspace = re.sub(r"[^A-Za-z0-9_.-]", "-", workspace)[:80] or "workspace"
-        log_file = audit_dir / f"workspace-run-{safe_workspace}-{int(time.time())}-{uuid.uuid4().hex[:8]}.log"
+        nonce = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        job_id = f"{safe_workspace}-{nonce}"
+        log_file = audit_dir / f"workspace-run-{job_id}.log"
+        workspace_run_write(job_id, {
+            "job_id": job_id,
+            "workspace": workspace,
+            "runner": runner,
+            "command": command,
+            "executed_command": cmd,
+            "log": str(log_file),
+            "status": "scheduled",
+            "running": True,
+        })
         with open(log_file, "ab") as log:
             log.write(("scheduled_command=" + " ".join(command) + "\n").encode("utf-8", "replace"))
             proc = subprocess.Popen(
@@ -1280,10 +1329,22 @@ def admin_run_workspace(payload):
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+        workspace_run_write(job_id, {
+            "job_id": job_id,
+            "workspace": workspace,
+            "runner": runner,
+            "command": command,
+            "executed_command": cmd,
+            "log": str(log_file),
+            "status": "running",
+            "running": True,
+            "pid": proc.pid,
+        })
         return {
             "ok": True,
             "action": "workspace_run_scheduled",
             "background": True,
+            "job_id": job_id,
             "workspace": workspace,
             "runner": runner,
             "command": command,
@@ -1312,6 +1373,46 @@ def admin_run_workspace(payload):
             "output": proc.stdout,
         }
     result["runner_exit_code"] = proc.returncode
+    return result
+
+def admin_workspace_run_status(payload):
+    job_id = str(payload.get("job_id") or "").strip()
+    workspace = str(payload.get("workspace") or "").strip()
+    if not job_id and not workspace:
+        raise ValueError("job_id or workspace is required")
+    if job_id:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", job_id):
+            raise ValueError("Unsafe job_id")
+        job = workspace_run_read(job_id)
+    else:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+            raise ValueError("Unsafe workspace")
+        job = None
+        for path in sorted(workspace_run_state_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            item = workspace_run_read(path.stem)
+            if item and item.get("workspace") == workspace:
+                job = item
+                break
+    if not job:
+        return {"ok": False, "action": "workspace_run_status", "error": "job_not_found", "job_id": job_id, "workspace": workspace}
+
+    pid = int(job.get("pid") or 0)
+    log_path = str(job.get("log") or "")
+    running = bool(pid and pid_running(pid))
+    tail = tail_text(log_path) if log_path else ""
+    parsed = parse_run_check_json_from_log(log_path) if log_path else None
+    result = dict(job)
+    result.update({
+        "ok": True,
+        "action": "workspace_run_status",
+        "running": running,
+        "tail": tail,
+        "result": parsed or {},
+    })
+    if parsed:
+        result["exit_code"] = parsed.get("exit_code")
+        result["runner_exit_code"] = parsed.get("runner_exit_code")
+        result["duration_ms"] = parsed.get("duration_ms")
     return result
 
 def admin_workspace_action(payload):
@@ -1979,6 +2080,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_run_workspace(payload))
+            if self.path == "/v1/admin/workspace/run/status":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_workspace_run_status(payload))
             if self.path == "/v1/admin/workspace/edit":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)

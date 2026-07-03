@@ -144,6 +144,8 @@ class Filter:
             return self._direct_response(body, self._workspace_edit_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE"):
             return self._direct_response(body, self._run_workspace_admin(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_RUN_WORKSPACE_STATUS"):
+            return self._direct_response(body, self._run_workspace_status_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_ADD_WORKSPACE"):
             return self._direct_response(body, self._add_workspace_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_CREATE_LOCAL_REPO"):
@@ -215,6 +217,8 @@ class Filter:
             return self._workspace_edit_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_RUN_WORKSPACE"):
             return self._run_workspace_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_RUN_WORKSPACE_STATUS"):
+            return self._run_workspace_status_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_CREATE_LOCAL_REPO"):
             return self._create_local_repo_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_ANSWER"):
@@ -424,6 +428,8 @@ class Filter:
             return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
 
         if workspace:
+            if any(cue in lower for cue in ("status jobu", "stav jobu", "background status", "status background", "jak bezi job", "jak běží job", "status runu", "stav runu")):
+                return f"GATEWAY_ADMIN_RUN_WORKSPACE_STATUS {shlex.quote(workspace)}"
             if self._looks_like_create_workspace_request(task_text) and workspace.lower() not in {"ai-stack", "smoke"}:
                 return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {shlex.quote(workspace)}"
             if self._looks_like_edit_request(task_text):
@@ -1337,6 +1343,10 @@ class Filter:
         if any("mentor_codex_local.py" in item or "owui_chat_turn.py" in item for item in command):
             background = True
 
+        rescue = self._workspace_run_rescue_command(workspace, command)
+        if rescue:
+            return self._dispatch_admin_command(rescue)
+
         payload = {"workspace": workspace, "timeout": timeout, "runner": runner, "command": command}
         if background:
             payload["background"] = True
@@ -1351,6 +1361,7 @@ class Filter:
                 f"{status}\n"
                 f"workspace={result.get('workspace', workspace)}\n"
                 f"runner={result.get('runner', runner)}\n"
+                f"job_id={result.get('job_id', '')}\n"
                 f"pid={result.get('pid')}\n"
                 f"log={result.get('log')}\n"
                 f"command={self._shell_join(result.get('command', command))}\n"
@@ -1370,6 +1381,61 @@ class Filter:
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
             + self._details("output", output)
         )
+
+    def _run_workspace_status_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_RUN_WORKSPACE_STATUS\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE_STATUS <job-id|workspace>")
+        token = shlex.split(m.group(1))
+        if not token:
+            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE_STATUS <job-id|workspace>")
+        value = token[0]
+        payload = {"job_id": value} if "-" in value else {"workspace": value}
+        result = self._gateway_admin_request("/v1/admin/workspace/run/status", payload, timeout=60)
+        status = "WORKSPACE_RUN_STATUS_OK" if result.get("ok") else "WORKSPACE_RUN_STATUS_FAILED"
+        parsed = result.get("result") or {}
+        return (
+            f"{status}\n"
+            f"job_id={result.get('job_id', value)}\n"
+            f"workspace={result.get('workspace', '')}\n"
+            f"running={result.get('running')}\n"
+            f"pid={result.get('pid')}\n"
+            f"log={result.get('log', '')}\n"
+            f"exit_code={result.get('exit_code')}\n"
+            f"runner_exit_code={result.get('runner_exit_code')}\n"
+            f"duration_ms={result.get('duration_ms', '')}\n"
+            + (self._details("result", self._trim(json.dumps(parsed, ensure_ascii=False, indent=2), 12000)) if parsed else "")
+            + (self._details("tail", self._trim(str(result.get('tail', '')), 12000)) if result.get("tail") else "")
+            + (self._details("error", str(result.get("error", ""))) if result.get("error") else "")
+        )
+
+    def _workspace_run_rescue_command(self, workspace: str, command: list[str]) -> str | None:
+        parsed = self._parse_mentor_helper_command(command)
+        if not parsed:
+            return None
+        mode = parsed["mode"]
+        helper_workspace = parsed["workspace"]
+        task = parsed["task"]
+        task_lower = task.lower()
+        if mode == "delegate" and helper_workspace and helper_workspace.lower() not in {"ai-stack", "smoke"}:
+            if self._looks_like_create_workspace_request(task):
+                return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {shlex.quote(helper_workspace)}"
+            if any(cue in task_lower for cue in ("ssh key", "ssh klic", "ssh klíč", "github key")):
+                key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{helper_workspace}")[:64].strip("-") or "github-workspace"
+                return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(helper_workspace + '@local')}"
+        return None
+
+    def _parse_mentor_helper_command(self, command: list[str]) -> dict[str, str] | None:
+        if len(command) < 5:
+            return None
+        if command[0] != "python3" or command[1] != "codex/bin/mentor_codex_local.py":
+            return None
+        mode = command[2]
+        if mode not in {"delegate", "profile", "report", "plan", "next-helper", "bootstrap-improve"}:
+            return None
+        workspace = command[3]
+        task = command[4]
+        return {"mode": mode, "workspace": workspace, "task": task}
 
     def _workspace_edit_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_EDIT\s+(.+?)\s*$", text)
