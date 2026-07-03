@@ -215,6 +215,8 @@ class Filter:
             return self._workspace_edit_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_RUN_WORKSPACE"):
             return self._run_workspace_admin(command)
+        if self._admin_command_requested(command, "GATEWAY_ADMIN_CREATE_LOCAL_REPO"):
+            return self._create_local_repo_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_ANSWER"):
             return self._web_answer_admin(command)
         if self._admin_command_requested(command, "GATEWAY_ADMIN_WEB_FETCH"):
@@ -370,6 +372,17 @@ class Filter:
             )
         )
 
+    def _looks_like_create_workspace_request(self, text: str) -> bool:
+        lower = text.lower()
+        create_cues = ("vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav")
+        target_cues = ("workspace", "repository", "repozitar", "repozitář", "repo ", "projekt")
+        key_only_cues = ("ssh key", "ssh klic", "ssh klíč", "vygeneruj klic", "vygeneruj klíč")
+        return (
+            any(cue in lower for cue in create_cues)
+            and any(cue in lower for cue in target_cues)
+            and not any(cue in lower for cue in key_only_cues)
+        )
+
     def _natural_web_url(self, text: str) -> str | None:
         match = re.search(r"https?://[^\s<>'\")]+", text)
         if match:
@@ -411,6 +424,8 @@ class Filter:
             return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
 
         if workspace:
+            if self._looks_like_create_workspace_request(task_text) and workspace.lower() not in {"ai-stack", "smoke"}:
+                return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {shlex.quote(workspace)}"
             if self._looks_like_edit_request(task_text):
                 action = self._looks_like_workspace_action(task_text)
                 run_after = f" --run-after {action}" if action else ""
@@ -1284,6 +1299,7 @@ class Filter:
         timeout = 300
         env_map = {}
         runner = "container"
+        background = False
         while parts and parts[0] != "--":
             opt = parts.pop(0)
             if opt == "--timeout" and parts:
@@ -1303,6 +1319,12 @@ class Filter:
                     raise ValueError(f"Unsafe env key: {key}")
                 env_map[key] = value
                 continue
+            if opt == "--background":
+                background = True
+                continue
+            if opt == "--foreground":
+                background = False
+                continue
             raise ValueError(f"Unknown GATEWAY_ADMIN_RUN_WORKSPACE option before --: {opt}")
 
         if not parts or parts[0] != "--":
@@ -1312,13 +1334,28 @@ class Filter:
             raise ValueError("GATEWAY_ADMIN_RUN_WORKSPACE command is empty")
         if timeout < 1 or timeout > 1800:
             raise ValueError("Timeout must be between 1 and 1800 seconds")
+        if any("mentor_codex_local.py" in item or "owui_chat_turn.py" in item for item in command):
+            background = True
 
         payload = {"workspace": workspace, "timeout": timeout, "runner": runner, "command": command}
+        if background:
+            payload["background"] = True
         if env_map:
             payload["env"] = env_map
         result = self._gateway_admin_request("/v1/admin/workspace/run", payload, timeout=max(timeout + 45, 90))
         output = str(result.get("output", ""))
         output = self._trim(output, 24000)
+        if result.get("background"):
+            status = "WORKSPACE_RUN_SCHEDULED" if result.get("ok") else "WORKSPACE_RUN_SCHEDULE_FAILED"
+            return (
+                f"{status}\n"
+                f"workspace={result.get('workspace', workspace)}\n"
+                f"runner={result.get('runner', runner)}\n"
+                f"pid={result.get('pid')}\n"
+                f"log={result.get('log')}\n"
+                f"command={self._shell_join(result.get('command', command))}\n"
+                f"executed_command={self._shell_join(result.get('executed_command', []))}\n"
+            ).rstrip()
         status = "WORKSPACE_RUN_OK" if result.get("ok") else "WORKSPACE_RUN_FAILED"
         return (
             f"{status}\n"

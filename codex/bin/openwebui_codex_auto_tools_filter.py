@@ -155,6 +155,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_release_boundary_command(text)
         if not command:
+            command = self._natural_workspace_ssh_key_command(text)
+        if not command:
             command = self._natural_create_repo_command(text)
         if not command:
             command = self._natural_capability_roadmap_command(text)
@@ -1350,6 +1352,19 @@ class Filter:
         ]
         return f"GATEWAY_ADMIN_RUN_WORKSPACE ai-stack --timeout 240 -- {shlex.join(command)}"
 
+    def _natural_workspace_ssh_key_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        task = " ".join(self._non_repo_lines(text)).strip() or text.strip()
+        lower = task.lower()
+        if not any(cue in lower for cue in ("ssh", "klic", "klíč", "key", "deploy key", "github")):
+            return None
+        if not any(cue in lower for cue in ("vygeneruj", "vytvor", "vytvoř", "generate", "create")):
+            return None
+        key_name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"github-{workspace}")[:64].strip("-") or "github-workspace"
+        return f"GATEWAY_ADMIN_SSH_KEYGEN {shlex.quote(key_name)} {shlex.quote(workspace + '@local')}"
+
     def _negated_near(self, lower: str, word: str) -> bool:
         return re.search(rf"\b(?:bez|bez\s+toho\s+aby|without|no)\s+{re.escape(word)}\b", lower) is not None
 
@@ -1398,6 +1413,8 @@ class Filter:
 
     def _natural_create_repo_command(self, text: str) -> str | None:
         lower = text.lower()
+        task = " ".join(self._non_repo_lines(text)).strip() or text.strip()
+        task_lower = task.lower()
         create_words = ["vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav"]
         repo_words = ["repository", "repozitar", "repozitář", "repo ", "projekt ", "workspace "]
         setup_words = ["ssh key", "ssh klic", "ssh klíč", "github", "deploy key", "git remote", "origin"]
@@ -1459,6 +1476,21 @@ class Filter:
         has_setup = any(word in lower for word in setup_words)
         if not (has_create and (has_repo or has_setup)):
             return None
+
+        routed_name = self._workspace_from_text(text)
+        if routed_name and routed_name.lower() not in {"ai-stack", "smoke", "github", "gitlab", "remote", "new", "novy", "nový", "nove", "nové"}:
+            has_task_create = any(word in task_lower for word in create_words)
+            has_task_repo = any(
+                word in task_lower
+                for word in ("repository", "repozitar", "repozitář", "repo", "projekt", "workspace")
+            )
+            asks_only_for_key = any(word in task_lower for word in ("ssh key", "ssh klic", "ssh klíč", "vygeneruj klic", "vygeneruj klíč"))
+            if has_task_create and has_task_repo and not asks_only_for_key:
+                if any(word in lower for word in followthrough_words):
+                    return self._bootstrap_improve_helper_command(task)
+                github = " --github" if self._github_requested_for_bootstrap(lower) else ""
+                restart = " --restart" if self._restart_requested_for_bootstrap(lower) else ""
+                return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {routed_name}{github}{restart}"
 
         patterns = [
             r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:(?:github|gitlab|remote)\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",

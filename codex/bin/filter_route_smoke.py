@@ -115,6 +115,18 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         unexpected=("GATEWAY_ADMIN_READ_NUMBERED", "nemohl najít"),
     ),
     RouteScenario(
+        name="labelled-create-workspace",
+        prompt="repozitar: Test3\nvytvor workspace",
+        expected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test3",),
+        unexpected=("GATEWAY_ADMIN_WORKSPACE_EDIT", "mentor_codex_local.py delegate"),
+    ),
+    RouteScenario(
+        name="labelled-ssh-key-is-not-create-repo",
+        prompt="repozitar: Test2\nvytvor mi ssh klic pro github",
+        expected=("GATEWAY_ADMIN_SSH_KEYGEN github-Test2 Test2@local",),
+        unexpected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2", "GATEWAY_ADMIN_WORKSPACE_EDIT"),
+    ),
+    RouteScenario(
         name="workspace-direct-edit-webgl",
         prompt="repozitar: Test2\npridej webgl soubor s kouli",
         expected=("GATEWAY_ADMIN_WORKSPACE_EDIT Test2 --timeout 900", "webgl soubor s kouli"),

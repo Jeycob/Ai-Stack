@@ -1199,6 +1199,7 @@ def admin_run_workspace(payload):
     timeout = int(payload.get("timeout", 300))
     env_map = payload.get("env") or {}
     runner = str(payload.get("runner") or os.getenv("CODEX_GATEWAY_WORKSPACE_RUNNER", "container")).strip()
+    background = bool(payload.get("background", False))
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("Unsafe workspace name")
     if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
@@ -1220,6 +1221,33 @@ def admin_run_workspace(payload):
     cmd.append(workspace)
     cmd.append("--")
     cmd.extend(command)
+    if background:
+        audit_dir = REPO_ROOT / "codex/audit"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        safe_workspace = re.sub(r"[^A-Za-z0-9_.-]", "-", workspace)[:80] or "workspace"
+        log_file = audit_dir / f"workspace-run-{safe_workspace}-{int(time.time())}-{uuid.uuid4().hex[:8]}.log"
+        with open(log_file, "ab") as log:
+            log.write(("scheduled_command=" + " ".join(command) + "\n").encode("utf-8", "replace"))
+            proc = subprocess.Popen(
+                cmd,
+                cwd=REPO_ROOT,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        return {
+            "ok": True,
+            "action": "workspace_run_scheduled",
+            "background": True,
+            "workspace": workspace,
+            "runner": runner,
+            "command": command,
+            "executed_command": cmd,
+            "pid": proc.pid,
+            "log": str(log_file),
+            "duration_ms": 0,
+            "output": "",
+        }
     proc = subprocess.run(
         cmd,
         cwd=REPO_ROOT,
