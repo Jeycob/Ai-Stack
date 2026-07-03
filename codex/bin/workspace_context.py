@@ -13,11 +13,14 @@ from typing import Iterable
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
 WORKSPACE_NAME_PATTERN = r"[A-Za-z0-9_.-]{1,80}"
 WORKSPACE_VALUE_RE = re.compile(rf"(?i)\b({WORKSPACE_NAME_PATTERN})\b")
-BOOTSTRAP_REPO_PATTERNS = (
-    rf"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:repo|repository|repozitar|repozitář|repositar|workspace|projekt|project)\s*:?\s*({WORKSPACE_NAME_PATTERN})\b",
-    rf"(?i)\b(?:repo|repository|repozitar|repozitář|repositar)\s+({WORKSPACE_NAME_PATTERN})\b",
-    rf"(?i)\bv\s+(?:repo\w*|repository|repozit\w*|reposit\w*|workspace|projektu|projectu)\s+({WORKSPACE_NAME_PATTERN})\b",
-    rf"(?i)\b(?:workspace|projekt|project)\s+({WORKSPACE_NAME_PATTERN})\b",
+BOOTSTRAP_TARGET_LABEL_PATTERN = r"(?:repository|repozit\w*|reposit\w*|workspace|projekt|project|repo)"
+BOOTSTRAP_CREATE_REPO_PATTERNS = (
+    rf"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?{BOOTSTRAP_TARGET_LABEL_PATTERN}\b\s*:?\s*({WORKSPACE_NAME_PATTERN})\b",
+)
+BOOTSTRAP_REPO_PATTERNS = BOOTSTRAP_CREATE_REPO_PATTERNS + (
+    rf"(?i)\b{BOOTSTRAP_TARGET_LABEL_PATTERN}\b\s+({WORKSPACE_NAME_PATTERN})\b",
+    rf"(?i)\bv\s+(?:repository|repozit\w*|reposit\w*|workspace|projektu|projectu|repo)\b\s+({WORKSPACE_NAME_PATTERN})\b",
+    rf"(?i)\b(?:workspace|projekt|project)\b\s+({WORKSPACE_NAME_PATTERN})\b",
 )
 ASSISTANT_CONTEXT_PATTERNS = (
     rf"(?im)^\s*requested_workspace\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
@@ -62,6 +65,15 @@ def canonical_workspace_name(candidate: str, workspaces: dict[str, dict]) -> str
 def infer_repo_name_from_text(text: str) -> str:
     value = str(text or "")
     for pattern in BOOTSTRAP_REPO_PATTERNS:
+        match = re.search(pattern, value)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def bootstrap_repo_name_from_text(text: str) -> str:
+    value = str(text or "")
+    for pattern in BOOTSTRAP_CREATE_REPO_PATTERNS:
         match = re.search(pattern, value)
         if match:
             return match.group(1)
@@ -116,6 +128,9 @@ def resolve_workspace_from_text(text: str, workspaces: dict[str, dict]) -> Works
             return WorkspaceResolution(workspace, source, True, True)
     inferred = infer_repo_name_from_text(text)
     inferred_name = canonical_workspace_name(inferred, workspaces)
+    bootstrap_name = canonical_workspace_name(bootstrap_repo_name_from_text(text), workspaces)
+    if bootstrap_name and inferred_name == bootstrap_name:
+        return None
     if inferred_name:
         return WorkspaceResolution(inferred_name, "inferred_repo_name", False, True)
     return None

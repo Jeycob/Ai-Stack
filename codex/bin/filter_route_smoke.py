@@ -78,7 +78,12 @@ SCENARIOS: tuple[RouteScenario, ...] = (
     RouteScenario(
         name="transcript-bootstrap-testcode",
         prompt="vytvor mi nove repository TestCode",
-        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "vytvor mi nove repository TestCode"),
+        expected=("GATEWAY_ADMIN_AGENT_LOOP ", "vytvor mi nove repository TestCode"),
+    ),
+    RouteScenario(
+        name="transcript-bootstrap-testcode-with-ssh",
+        prompt="vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic",
+        expected=("GATEWAY_ADMIN_AGENT_LOOP ", "vytvor mi nove repository TestCode", "vygeneruj do nej ssh klic"),
     ),
     RouteScenario(
         name="transcript-ssh-create-existing-workspace",

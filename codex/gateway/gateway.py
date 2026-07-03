@@ -1055,16 +1055,17 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
     inferred_followups = agent_infer_followup_actions(task)
     command = agent_infer_command_from_task(task)
 
+    bootstrap_requested = agent_bootstrap_requested(task)
     if agent_read_only_requested(task):
         workflow = "review"
     elif agent_deploy_requested(task):
         workflow = "deploy"
+    elif bootstrap_requested:
+        workflow = "bootstrap"
     elif workspace_exists and agent_ssh_key_show_public_requested(task):
         workflow = "ssh_key_show_public"
     elif workspace_exists and agent_ssh_key_create_requested(task):
         workflow = "ssh_key_create"
-    elif agent_bootstrap_requested(task):
-        workflow = "bootstrap"
     elif url and agent_web_question_requested(task):
         workflow = "web_answer"
     elif url:
@@ -1341,7 +1342,9 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     ssh_comment = str(plan.get("ssh_comment") or "").strip()
     if not ssh_comment:
         ssh_comment = agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
-    if workspace_exists and ssh_key_show_public_requested:
+    if bootstrap_requested:
+        workflow = "bootstrap"
+    elif workspace_exists and ssh_key_show_public_requested:
         workflow = "ssh_key_show_public"
     elif workspace_exists and ssh_key_create_requested:
         workflow = "ssh_key_create"
@@ -1380,16 +1383,20 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         workflow = "action"
         action = action or inferred_action
         command = []
-    if workflow == "run" and workspace_exists and ssh_key_create_requested:
+    if workflow == "run" and workspace_exists and ssh_key_create_requested and not bootstrap_requested:
         workflow = "ssh_key_create"
         command = []
-    if workflow == "run" and workspace_exists and ssh_key_show_public_requested:
+    if workflow == "run" and workspace_exists and ssh_key_show_public_requested and not bootstrap_requested:
         workflow = "ssh_key_show_public"
         command = []
     if workflow == "run" and not command:
         command = agent_infer_command_from_task(task)
     if workflow == "run" and not command:
         workflow = "clarify"
+    if workflow == "bootstrap" and not repo_name:
+        repo_name = agent_extract_repo_name(task) or (
+            requested_workspace if not workspace_exists and requested_workspace != controller_workspace else ""
+        )
     if workflow != "bootstrap":
         repo_name = ""
     return {

@@ -116,6 +116,11 @@ def main() -> int:
             "messages": messages + [{"role": "user", "content": "vrat mi public key"}],
         }
         with patch.object(gateway, "WORKSPACES_FILE", str(workspaces_file)):
+            bootstrap_name = workspace_context.infer_repo_name_from_text(
+                "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic"
+            )
+            expect(bootstrap_name == "TestCode", "bootstrap-repo-name", repr(bootstrap_name))
+
             natural = gateway.codex_local_agent_loop_payload(payload)
             expect(natural is not None, "natural-loop-payload", repr(natural))
             expect(natural["workspace"] == "TestCode", "natural-loop-workspace", json.dumps(natural, ensure_ascii=False))
@@ -138,6 +143,16 @@ def main() -> int:
             )
             expect(plan["workflow"] == "ssh_key_create", "ssh-keygen-capability", json.dumps(plan, ensure_ascii=False))
             expect(plan["ssh_comment"] == "your_email@example.com", "ssh-comment", json.dumps(plan, ensure_ascii=False))
+
+            bootstrap_plan = gateway.normalize_agent_plan(
+                {"workflow": "review"},
+                "ai-stack",
+                "ai-stack",
+                True,
+                "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic",
+            )
+            expect(bootstrap_plan["workflow"] == "bootstrap", "bootstrap-over-ssh-workflow", json.dumps(bootstrap_plan, ensure_ascii=False))
+            expect(bootstrap_plan["repo_name"] == "TestCode", "bootstrap-over-ssh-repo-name", json.dumps(bootstrap_plan, ensure_ascii=False))
 
             recommendation = gateway.workspace_autopilot_recommendation("TestCode")
             expect(isinstance(recommendation, dict), "load-workspace-path-object", repr(recommendation))
