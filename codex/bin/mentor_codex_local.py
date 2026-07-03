@@ -1656,11 +1656,87 @@ def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -
     ]
 
 
+def bootstrap_recipe_covers_action(recipe: str, action: str) -> bool:
+    lower = f" {recipe.lower()} "
+    if action == "install":
+        needles = (
+            " pip install ",
+            " npm install",
+            " pnpm install",
+            " yarn install",
+            " cargo fetch",
+            " go mod download",
+            " dependency:resolve",
+            " create-next-app",
+        )
+        return any(needle in lower for needle in needles)
+    return False
+
+
+def scaffold_loop_followup_candidates(loop: str, recipe: str) -> list[str]:
+    candidates: list[str] = []
+    for part in [p.strip().lower() for p in loop.split("->") if p.strip()]:
+        mapped: list[str] = []
+        if "test or lint" in part or "lint or test" in part:
+            mapped = ["test", "lint"]
+        elif "install" in part or "venv setup" in part:
+            mapped = ["install"]
+        elif "lint" in part:
+            mapped = ["lint"]
+        elif "test" in part or "pytest" in part:
+            mapped = ["test"]
+        elif "build" in part or "configure" in part or "package" in part:
+            mapped = ["build"]
+        elif "smoke" in part or "run" in part or "import" in part or "typecheck" in part:
+            mapped = ["verify"]
+        for action in mapped:
+            if bootstrap_recipe_covers_action(recipe, action):
+                continue
+            if action not in candidates:
+                candidates.append(action)
+    return candidates
+
+
+def workspace_action_probe_command(workspace: str, action: str, timeout: int = 900, dry_run: bool = True) -> list[str]:
+    command = [
+        sys.executable,
+        "codex/bin/workspace_action.py",
+        action,
+        "--workspace",
+        workspace,
+        "--timeout",
+        str(timeout),
+    ]
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def first_supported_workspace_action(workspace: str, actions: list[str], timeout: int = 900) -> tuple[str, str] | tuple[None, None]:
+    for action in actions:
+        probe = workspace_action_probe_command(workspace, action, timeout=timeout, dry_run=True)
+        proc = subprocess.run(
+            probe,
+            cwd=Path(__file__).resolve().parents[2],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.returncode == 0:
+            return action, proc.stdout.strip()
+    return None, None
+
+
 def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     decision = classify_task(args.task)
     repo_name = decision.get("repo_name", "").strip()
     recipe = decision.get("scaffold_recipe", "").strip()
+    loop = decision.get("scaffold_loop", "").strip()
     steps = scaffold_plan_steps(decision, args.task)
+    followup_candidates = scaffold_loop_followup_candidates(loop, recipe) if loop else []
+    fallback_candidates = [action for action in ["install", "verify", "build", "test", "lint"] if action not in followup_candidates]
+    followup_plan = followup_candidates + fallback_candidates
+    preferred_followup = followup_plan[0] if followup_plan else None
 
     print(f"MENTOR_BOOTSTRAP_DISPATCH_WORKSPACE={args.workspace}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_TASK={args.task}")
@@ -1669,6 +1745,8 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_BOOTSTRAP_DISPATCH_SOLUTION_PROFILE={decision['solution_profile']}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_PUBLIC_STACK={decision['public_stack']}")
     print(f"MENTOR_BOOTSTRAP_DISPATCH_SCAFFOLD_RECIPE={recipe}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_CANDIDATES={','.join(followup_candidates) or '(none)'}")
+    print(f"MENTOR_BOOTSTRAP_DISPATCH_FOLLOWUP_PLAN={','.join(followup_plan) or '(none)'}")
     for idx, (label, value) in enumerate(steps, start=1):
         print(f"BOOTSTRAP_STEP_{idx}_LABEL={label}")
         print(f"BOOTSTRAP_STEP_{idx}_VALUE={value}")
@@ -1685,6 +1763,10 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
 
     runner = bootstrap_runner_command(repo_name, recipe, args.timeout)
     print(f"BOOTSTRAP_DISPATCH_RUNNER={shlex.join(runner)}")
+    print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_ACTION={preferred_followup or 'none'}")
+    print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_SOURCE={'inferred' if preferred_followup else 'none'}")
+    if preferred_followup:
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_RUNNER={shlex.join(workspace_action_probe_command(repo_name, preferred_followup, timeout=min(args.timeout, 900), dry_run=False))}")
     print_execution_brief("MENTOR_BOOTSTRAP_DISPATCH", decision, args.workspace, args.task)
 
     if args.dry_run or not getattr(args, "execute", False):
@@ -1703,6 +1785,35 @@ def run_bootstrap_dispatch_sequence(args: argparse.Namespace) -> int:
         print(proc.stdout.strip())
     print("BOOTSTRAP_DISPATCH_EXECUTION_END")
     print(f"BOOTSTRAP_DISPATCH_EXIT_CODE={proc.returncode}")
+    if proc.returncode != 0:
+        return 0
+
+    selected_followup, followup_probe_output = first_supported_workspace_action(
+        repo_name,
+        followup_plan,
+        timeout=min(args.timeout, 900),
+    )
+    if followup_probe_output:
+        print("BOOTSTRAP_DISPATCH_FOLLOWUP_PROBE_BEGIN")
+        print(followup_probe_output)
+        print("BOOTSTRAP_DISPATCH_FOLLOWUP_PROBE_END")
+    if selected_followup:
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_SELECTED={selected_followup}")
+        followup_runner = workspace_action_probe_command(repo_name, selected_followup, timeout=min(args.timeout, 900), dry_run=False)
+        followup_proc = subprocess.run(
+            followup_runner,
+            cwd=Path(__file__).resolve().parents[2],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        print("BOOTSTRAP_DISPATCH_FOLLOWUP_EXECUTION_BEGIN")
+        if followup_proc.stdout:
+            print(followup_proc.stdout.strip())
+        print("BOOTSTRAP_DISPATCH_FOLLOWUP_EXECUTION_END")
+        print(f"BOOTSTRAP_DISPATCH_FOLLOWUP_EXIT_CODE={followup_proc.returncode}")
+    else:
+        print("BOOTSTRAP_DISPATCH_FOLLOWUP_SELECTED=none")
     return 0
 
 

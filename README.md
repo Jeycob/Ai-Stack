@@ -322,6 +322,8 @@ Nad tím je teď i samostatný helper `scaffold-plan`, který z bootstrap-orient
 
 Další vrstva je `bootstrap-dispatch`. Ten už z téhož zadání vezme konkrétní scaffold recipe, přeloží ho do spustitelného guardrailed runneru přes `run_check.py` a umí vrátit nebo rovnou provést první bootstrap command v nově založeném workspace. Prakticky to znamená, že codex-local už nemusí po bootstrapu znovu “hádat”, co je první rozumný instalační nebo scaffold krok; dostane ho jako explicitní capability.
 
+Nově navíc `bootstrap-dispatch` nekončí jen u prvního scaffold commandu. Ze `scaffold_loop` si odvodí další kandidátní capability krok (`install`, `verify`, `build`, `test`, `lint`), zohlední co už pokryl samotný recipe, a po úspěšném bootstrapu zkusí najít první skutečně podporovanou workspace akci přes existující `workspace_action.py`. Tím se další krok opírá o reuse už hotových capability resolverů místo nové bespoke logiky.
+
 Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.
 
 `Codex Auto Tools Filter` teď navíc umí pro některé přirozené požadavky, které jsou širší než dnešní safe runtime scope, propsat do audit stopy i capability-roadmap doporučení. Typicky u GitHub/release nebo host-runtime úkolů zapíše `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`, místo aby jen mlčky selhal nebo přehnaně rozšířil runtime.
