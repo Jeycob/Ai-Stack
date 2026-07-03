@@ -278,18 +278,21 @@ else
   explicit_prompt_file="$(mktemp)"
   explicit_smoke_log="$(mktemp)"
   printf 'repo: %s\nGATEWAY_ADMIN_AGENT_LOOP %s -- Prohlédni workspace. Nic needituj. Odpověz stručně.\n' "$WORKSPACE" "$WORKSPACE" > "$explicit_prompt_file"
-  if python3 "$SCRIPT_DIR/owui_chat_smoke.py" \
+  if python3 "$SCRIPT_DIR/owui_chat_turn.py" \
+      --stateless \
       --base-url "$OPENWEBUI_URL" \
-      --chat-id "${OWUI_AUDIT_CHAT_ID:-57529037-84b9-42e1-8bae-9eab35b601bd}" \
       --model "$MODEL" \
-      --visible-prompt-file "$explicit_prompt_file" \
       --prompt-file "$explicit_prompt_file" \
-      --expected-substring "AGENT_LOOP" \
-      --status-interval 2 \
-      --quiet >"$explicit_smoke_log" 2>&1; then
-    [ "$SUMMARY_ONLY" != "1" ] && cat "$explicit_smoke_log"
-    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke OK\n'
-    record_summary "OpenWebUI explicit agent-loop smoke" "OK"
+      --timeout "$TIMEOUT" \
+      --attempts 2 \
+      --initial-delay 1 \
+      --max-delay 2 \
+      --total-timeout 90 \
+      --no-follow-scheduled \
+      --quiet >"$explicit_smoke_log" 2>&1 && grep -Fq "AGENT_LOOP" "$explicit_smoke_log"; then
+      [ "$SUMMARY_ONLY" != "1" ] && cat "$explicit_smoke_log"
+      [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke OK\n'
+      record_summary "OpenWebUI explicit agent-loop smoke" "OK"
   else
     [ "$SUMMARY_ONLY" != "1" ] && cat "$explicit_smoke_log"
     [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI explicit agent-loop smoke FAIL\n'

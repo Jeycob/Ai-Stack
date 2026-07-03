@@ -205,19 +205,28 @@ def run_scenario(args: argparse.Namespace, scenario: Scenario) -> dict[str, obje
                 "command": cmd,
             }
 
-        proc = subprocess.run(
-            cmd,
-            cwd=ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        output = proc.stdout or ""
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=max(30.0, min(args.total_timeout, scenario.total_timeout) + 90.0),
+            )
+            output = proc.stdout or ""
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired as exc:
+            output = exc.stdout or ""
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", "replace")
+            output += "\nOWUI_CHAT_SCENARIO_TIMEOUT\n"
+            returncode = 124
         ok, missing = output_contains_all(output, scenario.expected_substrings)
         return {
             "name": scenario.name,
-            "ok": proc.returncode == 0 and ok,
-            "runner_exit_code": proc.returncode,
+            "ok": returncode == 0 and ok,
+            "runner_exit_code": returncode,
             "duration_ms": int((time.time() - started) * 1000),
             "description": scenario.description,
             "prompt": prompt,

@@ -140,7 +140,19 @@ def run_turn(args: argparse.Namespace, technical: str, visible: str) -> tuple[in
         if args.quiet:
             cmd.append("--quiet")
 
-        proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            proc = subprocess.run(
+                cmd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=max(30.0, args.total_timeout + 60.0),
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = exc.stdout or ""
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", "replace")
+            return 124, output + "\nOWUI_CHAT_TURN_TIMEOUT\n", {}
         raw_completion = {}
         response_json = Path(response_json_path)
         if response_json.is_file() and response_json.stat().st_size > 0:

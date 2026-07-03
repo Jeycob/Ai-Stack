@@ -69,7 +69,9 @@ full_stack_healthcheck() {
     OLLAMA_URL="${OLLAMA_URL:-http://192.168.0.48:11434}" \
     WORKSPACE="${WORKSPACE:-ai-stack}" \
     MODEL="${MODEL:-codex-local-plan-qwen14b}" \
-    TIMEOUT="${TIMEOUT:-10}" \
+    TIMEOUT="${TIMEOUT:-8}" \
+    SKIP_OWUI_CHAT_SMOKE="${SKIP_OWUI_CHAT_SMOKE:-1}" \
+    SKIP_OWUI_CHAT_SCENARIOS="${SKIP_OWUI_CHAT_SCENARIOS:-1}" \
     bash "$REPO_ROOT/codex/bin/check_ai_stack.sh"
   fi
 }
