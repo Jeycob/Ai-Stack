@@ -59,7 +59,9 @@ restart_only() {
   printf 'loader_bytes='
   wc -c < "$tmp_loader" | tr -d ' '
   rm -f "$tmp_loader"
+}
 
+full_stack_healthcheck() {
   if [ -f "$REPO_ROOT/codex/bin/check_ai_stack.sh" ]; then
     section "Full stack healthcheck"
     OPENWEBUI_URL="${OPENWEBUI_URL:-http://127.0.0.1:9090}" \
@@ -188,6 +190,8 @@ else
 fi
 
 sync_openwebui_function
+
+full_stack_healthcheck
 
 section "AI Stack deploy finished"
 echo "DEPLOY_OK"
