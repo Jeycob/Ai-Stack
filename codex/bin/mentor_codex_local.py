@@ -2953,6 +2953,7 @@ def stack_check_unreachable(output: str) -> bool:
 def run_self_check_sequence(args: argparse.Namespace) -> int:
     scenario_runner = Path(__file__).resolve().parent / "mentor_scenario_runner.py"
     filter_route_smoke = Path(__file__).resolve().parent / "filter_route_smoke.py"
+    gateway_admin = Path(__file__).resolve().parent / "gateway_admin.py"
     chat_scenarios = Path(__file__).resolve().parent / "owui_chat_scenarios.py"
     stack_check = Path(__file__).resolve().parent / "check_ai_stack.sh"
     api_key_file = Path(getattr(args, "api_key_file", str(Path(__file__).resolve().parents[1] / "state/openwebui-api.key")))
@@ -2993,6 +2994,17 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
         [
             sys.executable,
             str(filter_route_smoke),
+            "--json",
+        ],
+        {},
+    ))
+    checks.append((
+        "gateway-admin-dry-run",
+        [
+            sys.executable,
+            str(gateway_admin),
+            "deploy",
+            "--dry-run",
             "--json",
         ],
         {},

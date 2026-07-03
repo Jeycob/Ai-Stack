@@ -91,6 +91,8 @@ Tenhle mod sklada:
 - helper-only `bootstrap-probe` pro create-repo/bootstrap reasoning bez mutaci
 - offline `filter_route_smoke.py`, ktery importuje OpenWebUI auto-tools filter
   primo a overuje prirozene prompt -> admin/capability routy bez beziciho UI
+- `gateway_admin.py deploy --dry-run`, ktery overuje primy fallback pro gateway
+  deploy/status cestu bez nutnosti posilat turn do OpenWebUI
 - user-like audit chat scenare, vcetne autonomy/profile routingu
 - stack summary pres `check_ai_stack.sh`
 

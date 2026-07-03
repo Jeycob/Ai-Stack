@@ -137,6 +137,7 @@ python3 -m py_compile \
   codex/bin/openwebui_gateway_admin_filter.py \
   codex/bin/openwebui_codex_auto_tools_filter.py \
   codex/bin/http_retry.py \
+  codex/bin/gateway_admin.py \
   codex/bin/owui_chat_turn.py \
   codex/bin/owui_chat_scenarios.py \
   codex/bin/run_check.py \
