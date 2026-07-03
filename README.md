@@ -245,6 +245,15 @@ Nebo například:
 
 `mentor_codex_local.py` vytváří lidský visible prompt do audit chatu a vedle něj technický prompt pro gateway admin workflow, takže Codex může co nejvíc práce offloadnout na codex-local bez ručního psaní interních markerů.
 
+Pro vyšší orchestrace je tam i mód `audit`, který udělá tři audit chat turny za sebou:
+1. `workspace scan`
+2. `verify --dry-run`
+3. shrnutí a návrh jednoho dalšího kroku od codex-local nad předchozí historií
+
+Příklad:
+
+    python3 codex/bin/mentor_codex_local.py audit Odysseus-Lite
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

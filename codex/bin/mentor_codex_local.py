@@ -78,7 +78,80 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
             technical += " --restart"
         return visible, technical
 
+    if args.mode == "audit":
+        visible = (
+            f"repo: {args.workspace}\n"
+            "Proveď technický audit workspace a potom navrhni jeden nejlepší další bezpečný krok. "
+            "V téhle fázi nic needituj."
+        )
+        technical = (
+            f"{repo_prefix(args.workspace)}\n"
+            "Proveď technický audit na základě předchozích výsledků. "
+            "Stručně shrň architekturu, rizika a navrhni právě jeden další krok. "
+            "Nic nespouštěj a nic needituj."
+        )
+        return visible, technical
+
     raise SystemExit(f"Unsupported mode: {args.mode}")
+
+
+def invoke_turn(args: argparse.Namespace, visible: str, technical: str, send_history: bool = False) -> int:
+    if args.dry_run:
+        print("VISIBLE_PROMPT")
+        print(visible)
+        print("\nTECHNICAL_PROMPT")
+        print(technical)
+        return 0
+
+    script = Path(__file__).resolve().parent / "owui_chat_turn.py"
+    visible_file = write_temp(visible + "\n")
+    technical_file = write_temp(technical + "\n")
+    cmd = [
+        sys.executable,
+        str(script),
+        "--model",
+        args.model,
+        "--title",
+        args.title,
+        "--visible-prompt-file",
+        visible_file,
+        "--prompt-file",
+        technical_file,
+        "--status-interval",
+        str(args.status_interval),
+        "--quiet",
+    ]
+    if args.no_live_status:
+        cmd.append("--no-live-status")
+    if args.send_history or send_history:
+        cmd.append("--send-history")
+
+    proc = subprocess.run(cmd, text=True)
+    return proc.returncode
+
+
+def run_audit_sequence(args: argparse.Namespace) -> int:
+    scan_visible = f"repo: {args.workspace}\nNejdřív si technicky zmapuj workspace. Nic nespouštěj."
+    scan_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_SCAN {args.workspace}"
+
+    verify_visible = (
+        f"repo: {args.workspace}\n"
+        "Teď si připrav ověřovací plán projektu jako senior developer. Nic ještě nespouštěj, jen vyhodnoť verify kroky."
+    )
+    verify_technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_WORKSPACE_ACTION {args.workspace} verify --timeout {args.timeout} --dry-run"
+
+    summary_visible, summary_technical = build_prompts(args)
+
+    steps = [
+        (scan_visible, scan_technical, False),
+        (verify_visible, verify_technical, True),
+        (summary_visible, summary_technical, True),
+    ]
+    for visible, technical, send_history in steps:
+        rc = invoke_turn(args, visible, technical, send_history=send_history)
+        if rc != 0:
+            return rc
+    return 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,6 +198,11 @@ def parse_args() -> argparse.Namespace:
     deploy_status.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     deploy_status.set_defaults()
 
+    audit = sub.add_parser("audit", help="Run scan + verify plan + next-step recommendation for a workspace")
+    audit.add_argument("workspace")
+    audit.add_argument("--timeout", type=int, default=2400)
+    audit.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")
     create_repo.add_argument("--github", action="store_true")
@@ -145,39 +223,11 @@ def main() -> int:
         if not args.command:
             raise SystemExit("run mode requires a command after --")
 
+    if args.mode == "audit":
+        return run_audit_sequence(args)
+
     visible, technical = build_prompts(args)
-    if args.dry_run:
-        print("VISIBLE_PROMPT")
-        print(visible)
-        print("\nTECHNICAL_PROMPT")
-        print(technical)
-        return 0
-
-    script = Path(__file__).resolve().parent / "owui_chat_turn.py"
-    visible_file = write_temp(visible + "\n")
-    technical_file = write_temp(technical + "\n")
-    cmd = [
-        sys.executable,
-        str(script),
-        "--model",
-        args.model,
-        "--title",
-        args.title,
-        "--visible-prompt-file",
-        visible_file,
-        "--prompt-file",
-        technical_file,
-        "--status-interval",
-        str(args.status_interval),
-        "--quiet",
-    ]
-    if args.no_live_status:
-        cmd.append("--no-live-status")
-    if args.send_history:
-        cmd.append("--send-history")
-
-    proc = subprocess.run(cmd, text=True)
-    return proc.returncode
+    return invoke_turn(args, visible, technical)
 
 
 if __name__ == "__main__":
