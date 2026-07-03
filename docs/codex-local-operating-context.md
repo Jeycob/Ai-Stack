@@ -152,6 +152,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pro bezne mentor orchestracni volani bez rucni volby modu pouzivat `mentor_codex_local.py delegate`,
 - pro rychle rozhodnuti o sirce pravomoci pouzivat `mentor_codex_local.py profile`,
 - pro kompaktní mentoring souhrn nad jednim taskem pouzivat `mentor_codex_local.py report`,
+- pro konkretni starter/bootstrap recipe nad novym projektem pouzivat `mentor_codex_local.py scaffold-plan`,
 - pro kratky sequenced mentoring plan nad jednim taskem pouzivat `mentor_codex_local.py plan`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
@@ -226,6 +227,17 @@ asi FastAPI" nebo "tohle vypada jako React", ale i prvni konkretni bootstrap
 krok, seznam klicovych souboru a doporuceny smoke/test/build sled. Presne tohle
 ma lokalni modelu pomahat, aby se choval vic jako vedena implementace a min
 jako neurcite improvizovani.
+
+Kdyz tenhle mezikrok chceme explicitne a bez dalsi exekuce, je na to helper
+`mentor_codex_local.py scaffold-plan`. Ten vraci prave starter recipe,
+ocekavane soubory a verifikacni sled pred tim, nez se pusti `bootstrap-improve`
+nebo jiny vykonavajici workflow.
+
+Priklad explicitniho scaffold planu:
+
+```bash
+python3 codex/bin/mentor_codex_local.py scaffold-plan ai-stack "Vytvor nove repository Test2 jako React appku, doinstaluj co chybi a zkus to rozbehnout."
+```
 
 Priklad profilove klasifikace bez spousteni jakychkoli akci:
 

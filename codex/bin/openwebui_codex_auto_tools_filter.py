@@ -118,6 +118,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_report_command(text)
         if not command:
+            command = self._natural_workspace_scaffold_plan_command(text)
+        if not command:
             command = self._natural_workspace_plan_command(text)
         if not command:
             command = self._natural_workspace_fix_plan_command(text)
@@ -520,6 +522,50 @@ class Filter:
         if not task:
             return None
         return self._plan_helper_command(workspace, task)
+
+    def _scaffold_plan_helper_command(self, workspace: str, task: str) -> str:
+        command = [
+            "python3",
+            "codex/bin/mentor_codex_local.py",
+            "scaffold-plan",
+            workspace,
+            task,
+        ]
+        return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _natural_workspace_scaffold_plan_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        cue_needles = (
+            "scaffold plan",
+            "starter plan",
+            "bootstrap plan",
+            "plan scaffold",
+            "plan starteru",
+            "plan starter",
+            "priprav scaffold",
+            "připrav scaffold",
+            "priprav starter plan",
+            "připrav starter plan",
+            "jak scaffoldovat",
+            "jak bootstrapovat",
+        )
+        if not any(needle in lower for needle in cue_needles):
+            return None
+        task = self._extract_single_task(
+            text,
+            [
+                r"(?is)\b(?:scaffold\s+plan|starter\s+plan|bootstrap\s+plan)\b\s*(?:pro|for)?\s*:?\s*(.+?)\s*$",
+                r"(?is)\b(?:priprav|připrav)\b.+?\b(?:scaffold|starter|bootstrap)\b.*?\bpro\s+(.+?)\s*$",
+                r"(?is)\b(?:jak\s+scaffoldovat|jak\s+bootstrapovat)\b\s*(.+?)\s*$",
+            ],
+            cue_needles,
+        )
+        if not task:
+            return None
+        return self._scaffold_plan_helper_command(workspace, task)
 
     def _natural_workspace_fix_plan_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)

@@ -1618,6 +1618,30 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
     return f"repo: {workspace}\nAnalyzuj projekt a navrhni další krok. Nic needituj."
 
 
+def scaffold_plan_steps(decision: dict[str, str], task: str) -> list[tuple[str, str]]:
+    solution_profile = decision.get("solution_profile", "")
+    public_stack = decision.get("public_stack", "")
+    recipe = decision.get("scaffold_recipe", "")
+    files = decision.get("scaffold_files", "")
+    loop = decision.get("scaffold_loop", "")
+
+    steps: list[tuple[str, str]] = []
+    if solution_profile:
+        steps.append(("profile", f"target solution profile: {solution_profile}"))
+    if public_stack:
+        steps.append(("public-stack", f"prefer public stack: {public_stack}"))
+    if recipe:
+        steps.append(("bootstrap-command", recipe))
+    if files:
+        steps.append(("expected-files", files))
+    if loop:
+        for idx, part in enumerate([p.strip() for p in loop.split("->") if p.strip()], start=1):
+            steps.append((f"verify-{idx}", part))
+    if not steps:
+        steps.append(("fallback", "no scaffold recipe is known; inspect the task and choose the smallest established starter manually"))
+    return steps
+
+
 def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -> list[str]:
     workflow = decision["workflow"]
     lines = [
@@ -1859,6 +1883,25 @@ def run_report_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_scaffold_plan_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    steps = scaffold_plan_steps(decision, args.task)
+    print(f"MENTOR_SCAFFOLD_PLAN_WORKSPACE={args.workspace}")
+    print(f"MENTOR_SCAFFOLD_PLAN_TASK={args.task}")
+    print(f"MENTOR_SCAFFOLD_PLAN_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_SCAFFOLD_PLAN_SOLUTION_PROFILE={decision['solution_profile']}")
+    print(f"MENTOR_SCAFFOLD_PLAN_PUBLIC_STACK={decision['public_stack']}")
+    print(f"MENTOR_SCAFFOLD_PLAN_SCAFFOLD_RECIPE={decision['scaffold_recipe']}")
+    print(f"MENTOR_SCAFFOLD_PLAN_SCAFFOLD_FILES={decision['scaffold_files']}")
+    print(f"MENTOR_SCAFFOLD_PLAN_SCAFFOLD_LOOP={decision['scaffold_loop']}")
+    for idx, (label, value) in enumerate(steps, start=1):
+        print(f"SCAFFOLD_STEP_{idx}_LABEL={label}")
+        print(f"SCAFFOLD_STEP_{idx}_VALUE={value}")
+    print(f"SCAFFOLD_STEP_COUNT={len(steps)}")
+    print_execution_brief("MENTOR_SCAFFOLD_PLAN", decision, args.workspace, args.task)
+    return 0
+
+
 def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> list[tuple[str, str]]:
     workflow = decision["workflow"]
     capability_id = decision["capability_id"]
@@ -1890,6 +1933,7 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
         github_hint = " with GitHub remote" if decision.get("repo_github") == "yes" else ""
         profile_hint = f" using starter profile {decision.get('solution_profile')}" if decision.get("solution_profile") else ""
         steps.append(("bootstrap", f"create and register repository {repo_name or '(unspecified)'}{github_hint}{profile_hint}"))
+        steps.append(("scaffold-plan", f"python3 codex/bin/mentor_codex_local.py scaffold-plan {workspace} {shlex.quote(task)}"))
         steps.append(("improve", recommended_next_step(decision, workspace, task)))
         steps.append(("post-bootstrap-check", f"verify new workspace {repo_name or '(unspecified)'} status, then continue with install/test/build or a minimal patch"))
         return steps
@@ -2300,6 +2344,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_profile_sequence(args)
     if args.mode == "report":
         return run_report_sequence(args)
+    if args.mode == "scaffold-plan":
+        return run_scaffold_plan_sequence(args)
     if args.mode == "plan":
         return run_plan_sequence(args)
     if args.mode == "next-helper":
@@ -2439,6 +2485,11 @@ def parse_args() -> argparse.Namespace:
     report.add_argument("workspace")
     report.add_argument("task")
     report.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; report mode never calls OpenWebUI")
+
+    scaffold_plan = sub.add_parser("scaffold-plan", help="Produce a concrete starter/scaffold plan for a bootstrap-oriented task")
+    scaffold_plan.add_argument("workspace")
+    scaffold_plan.add_argument("task")
+    scaffold_plan.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; scaffold-plan mode never calls OpenWebUI")
 
     plan = sub.add_parser("plan", help="Produce a short sequenced mentor plan for a task: report plus the next 2-4 helper/capability steps")
     plan.add_argument("workspace")

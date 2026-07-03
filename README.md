@@ -318,6 +318,8 @@ K tomu se teď přidává i `public_stack` a `public_stack_rationale`: mentor pr
 
 Poslední vrstva jsou `scaffold_recipe`, `scaffold_files` a `scaffold_loop`. Tady už mentor pro známé stacky neposílá jen obecné doporučení, ale i konkrétní první bootstrap recipe, klíčové soubory a doporučený ověřovací sled. Například pro React vrátí `npm create vite@latest . -- --template react-ts`, očekávané soubory `package.json, src/main.tsx, src/App.tsx, vite.config.ts, tsconfig.json` a loop `install -> dev server smoke -> test or lint -> build`.
 
+Nad tím je teď i samostatný helper `scaffold-plan`, který z bootstrap-oriented zadání vytáhne právě tenhle konkrétní starter plán bez spuštění jakékoli akce. Je to levný mezikrok mezi čistým profilem a plným `bootstrap-improve`: nejdřív si můžeš nechat vypsat scaffold recipe, očekávané soubory a verifikační sled, a teprve potom pustit samotný bootstrap nebo improve workflow.
+
 Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs/codex-local-capability-roadmap.json`. Helper je používá pro `capability_id`, `capability_scope` a `capability_summary`, takže další rozšiřování už nemusí být jen volný text v promptu.
 
 `Codex Auto Tools Filter` teď navíc umí pro některé přirozené požadavky, které jsou širší než dnešní safe runtime scope, propsat do audit stopy i capability-roadmap doporučení. Typicky u GitHub/release nebo host-runtime úkolů zapíše `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`, místo aby jen mlčky selhal nebo přehnaně rozšířil runtime.
