@@ -17,6 +17,7 @@ Lokální AI stack pro OpenWebUI, Ollama a izolované Codex/OpenCode workspaces.
 - `docker-compose.yml`: definice OpenWebUI služby a persistentních volume.
 - `start_docker.bat`: Windows startovací skript volaný po startu systému nebo ručně.
 - `codex/bin/start_codex_stack.sh`: startuje Codex/OpenCode stack, gateway a workspaces ve WSL.
+- `codex/bin/wsl_boot_ai_stack.sh`: volitelný WSL boot wrapper, který po startu WSL zvedne Docker a Codex gateway stack.
 - `codex/bin/add_workspace.py`: registruje nový repozitářový workspace do `codex/workspaces.json`.
 - `codex/bin/watch_gateway.sh`: hlídá změny `codex/gateway/gateway.py`, validuje syntaxi a restartuje gateway.
 - `codex/bin/openwebui_codex_auto_tools_filter.py`: OpenWebUI filter pro automatické připojení toolsetů a úzké mapování bezpečných codex-local intentů.
@@ -399,6 +400,10 @@ Nově navíc `bootstrap-dispatch` nekončí jen u prvního scaffold commandu. Ze
 
 Vedle samotného provedení má teď `bootstrap-dispatch --execute` i uzavřený outcome summary. Do výstupu zapisuje `BOOTSTRAP_DISPATCH_FINAL_STATUS`, `BOOTSTRAP_DISPATCH_EXECUTED_SEQUENCE`, `BOOTSTRAP_DISPATCH_SUCCESSFUL_ACTIONS`, `BOOTSTRAP_DISPATCH_FAILED_ACTIONS`, `BOOTSTRAP_DISPATCH_STOP_REASON` a `BOOTSTRAP_DISPATCH_NEXT_RECOMMENDATION`. Díky tomu už další helper nebo improve flow nemusí jen hádat, co se v bootstrap sekvenci povedlo, ale dostane stručný auditovaný handoff.
 
+Na to teď navazuje i `improve`. Když dostane mentor context z bootstrap handoffu, umí si podle něj přeladit `allow-actions` pro autopilot: po `followup_completed` nezkouší znovu úspěšné kroky a soustředí se na další nejbližší bezpečný posun, zatímco po `followup_partial` začne od selhané capability akce a teprve potom pokračuje dál. Tím se improve fáze chová víc jako skutečný agentický follow-up a méně jako statická šablona.
+
+Stejnou sadu capability akcí teď důsledně používá i runtime gateway i mentor helpery: `install, verify, smoke, test, build, lint`. Není to už tak, že by `verify` nebo `smoke` byly jen doporučené v promptu, ale chyběly v nižší vrstvě. Praktický dopad je širší autonomie bez ručního rozšiřování whitelistu pro každou běžnou ověřovací akci zvlášť.
+
 Zároveň už `bootstrap-dispatch` nerozbíhá nesmyslné pseudo-commandy. Pokud je `scaffold_recipe` jen popisný plán a ne skutečně spustitelný shell command, helper to označí jako `SCAFFOLD_RECIPE_MODE=manual` a vrátí jasný blocker s dalším krokem místo toho, aby se snažil pustit text typu “use CMake scaffold plus glfw...”.
 
 První takhle dříve blokované profily už jsme rovnou posunuli do reálné capability vrstvy: `opengl-native`, `fastapi-service`, `node-service`, `react-app`, `threejs-app` a nově i `electron-app` mají dedikované audited scaffoldery v `codex/bin/`. `bootstrap-dispatch` je umí přeložit do skutečného guardrailed runneru přes `run_check.py`, takže tyhle startery už nejsou jen roadmap poznámka, ale opravdový první bootstrap krok.
@@ -542,6 +547,7 @@ Praktická pravidla pro zadávání úloh:
 
 - Start z Windows: `C:\Repositories\ai-stack\start_docker.bat`.
 - Ruční start Codex stacku ve WSL: `sudo /mnt/c/Repositories/ai-stack/codex/bin/start_codex_stack.sh`.
+- Volitelný autostart při každém startu WSL: v `/etc/wsl.conf` nastav `[boot] command = /mnt/c/Repositories/ai-stack/codex/bin/wsl_boot_ai_stack.sh --background`. Skript loguje do `codex/audit/wsl-boot-ai-stack.log`.
 - Přidání workspace: `python3 codex/bin/add_workspace.py <name> <path> --port <port>`.
 - Kontrola gateway: `curl http://127.0.0.1:9101/health` ve WSL nebo `curl http://192.168.0.48:9101/health` z LAN.
 - Smoke test gateway: `python3 codex/bin/codex_gateway_smoke.py --base-url http://192.168.0.48:9101 --workspace ai-stack`.

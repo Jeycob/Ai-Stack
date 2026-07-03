@@ -763,10 +763,10 @@ def workspace_autopilot_recommendation(workspace: str) -> dict:
             f"Expose the inferred command through a standard manifest/script entry: {candidate_commands[0]}",
         )
     return build_hint(
-        "No safe next capability was inferred; inspect manifests and add a standard lint, test or build entrypoint.",
+        "No safe next capability was inferred; inspect manifests and add a standard verify, smoke, lint, test or build entrypoint.",
         manifests[0] if manifests else "",
-        "Expose at least one standard lint, test, or build entrypoint in the project manifest.",
-        "Add at least one standard lint/test/build entrypoint to the project manifest.",
+        "Expose at least one standard verify, smoke, lint, test, or build entrypoint in the project manifest.",
+        "Add at least one standard verify/smoke/lint/test/build entrypoint to the project manifest.",
     )
 
 def admin_workspace_autopilot(payload):
@@ -774,7 +774,7 @@ def admin_workspace_autopilot(payload):
     timeout = int(payload.get("timeout") or 1800)
     env_map = payload.get("env") or {}
     recommend_only = bool(payload.get("recommend_only", False))
-    allow_actions = payload.get("allow_actions") or ["install", "test", "build", "lint"]
+    allow_actions = payload.get("allow_actions") or ["install", "verify", "smoke", "test", "build", "lint"]
     max_steps = int(payload.get("max_steps") or 1)
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
@@ -790,9 +790,9 @@ def admin_workspace_autopilot(payload):
     if not isinstance(allow_actions, list):
         raise ValueError("allow_actions must be a list or comma-separated string")
     allow_actions = [str(x).strip().lower() for x in allow_actions if str(x).strip()]
-    invalid = sorted(set(allow_actions) - {"install", "test", "build", "lint"})
+    invalid = sorted(set(allow_actions) - {"install", "verify", "smoke", "test", "build", "lint"})
     if invalid:
-        raise ValueError("allow_actions supports only install, test, build, lint")
+        raise ValueError("allow_actions supports only install, verify, smoke, test, build, lint")
     if not allow_actions:
         raise ValueError("allow_actions must not be empty")
 

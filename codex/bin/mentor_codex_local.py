@@ -263,6 +263,10 @@ def parse_key_values(text: str) -> dict[str, str]:
     return result
 
 
+def parse_csv_actions(text: str) -> list[str]:
+    return [item.strip() for item in text.split(",") if item.strip() and item.strip().lower() != "none"]
+
+
 def extract_diff_block(text: str) -> str:
     blocks = re.findall(r"```(?:diff|patch)?\s*\n(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if len(blocks) != 1:
@@ -1129,6 +1133,8 @@ def run_autopilot_sequence(args: argparse.Namespace) -> int:
 
     execute_template = {
         "install": "Na základě auditu teď proveď instalaci závislostí a vrať stručný výsledek.",
+        "verify": "Na základě auditu teď proveď ověření projektu a vrať stručný audit výsledků.",
+        "smoke": "Na základě auditu teď proveď krátký startup smoke check a vrať stručný výsledek.",
         "test": "Na základě auditu teď spusť testy a vrať stručný výsledek.",
         "build": "Na základě auditu teď spusť build a vrať stručný výsledek.",
         "lint": "Na základě auditu teď spusť lint a vrať stručný výsledek.",
@@ -1395,23 +1401,72 @@ def run_apply_safe_sequence(args: argparse.Namespace) -> int:
 
 
 def run_improve_sequence(args: argparse.Namespace) -> int:
+    incoming_context = parse_key_values(getattr(args, "mentor_technical_context", ""))
+    bootstrap_status = incoming_context.get("bootstrap_followup_status", "").strip().lower()
+    bootstrap_success = parse_csv_actions(incoming_context.get("bootstrap_followup_success", ""))
+    bootstrap_failed = parse_csv_actions(incoming_context.get("bootstrap_followup_failed", ""))
+    bootstrap_recommendation = incoming_context.get("bootstrap_followup_recommendation", "").strip()
+    base_allow_actions = parse_csv_actions(getattr(args, "allow_actions", "install,verify,smoke,test,build,lint"))
+
+    tuned_allow_actions = list(base_allow_actions)
+    improve_focus = "general"
+    if bootstrap_status == "followup_completed":
+        tuned_allow_actions = [action for action in base_allow_actions if action not in bootstrap_success]
+        if "verify" not in tuned_allow_actions:
+            tuned_allow_actions.insert(0, "verify")
+        improve_focus = "post-bootstrap-next-step"
+    elif bootstrap_status == "followup_partial":
+        tuned_allow_actions = []
+        for action in bootstrap_failed + base_allow_actions:
+            if action not in tuned_allow_actions:
+                tuned_allow_actions.append(action)
+        improve_focus = "bootstrap-blocker-recovery"
+    elif bootstrap_status == "bootstrap_only":
+        improve_focus = "bootstrap-followup"
+
+    allow_actions_value = ",".join(tuned_allow_actions or base_allow_actions)
     visible = (
         f"repo: {args.workspace}\n"
         "Nejdřív projekt agenticky ověř a proveď, co bezpečně dává smysl. "
         "Když capability kroky nestačí, přepni do malého bezpečného patch workflow a dotáhni to co nejdál."
     )
+    if bootstrap_status == "followup_completed":
+        visible += (
+            "\nBootstrap a první capability follow-up už doběhly. "
+            "Neopakuj úspěšné kroky bez důvodu a zaměř se na další nejbližší bezpečný posun."
+        )
+    elif bootstrap_status == "followup_partial":
+        visible += (
+            "\nBootstrap narazil při navazující capability akci. "
+            "Začni od toho blockeru a pokračuj jen tam, kde to auditovaný workflow dovolí."
+        )
+    elif bootstrap_status == "bootstrap_only":
+        visible += "\nStarter už existuje, takže navazuj přímo prvními smysluplnými capability kroky."
+    if bootstrap_recommendation:
+        visible += f"\nPředchozí doporučení: {bootstrap_recommendation}"
     technical = (
         f"{repo_prefix(args.repo)}\n"
         f"GATEWAY_ADMIN_WORKSPACE_AUTOPILOT {args.workspace} --timeout {args.timeout} "
-        f"--max-steps {args.max_steps} --allow-actions {args.allow_actions}"
+        f"--max-steps {args.max_steps} --allow-actions {allow_actions_value}"
     )
 
     if args.dry_run:
         print_prompt_preview(args, *apply_mentor_context(args, visible, technical))
         print()
+        print(f"IMPROVE_CONTEXT_BOOTSTRAP_STATUS={bootstrap_status or 'none'}")
+        print(f"IMPROVE_CONTEXT_BOOTSTRAP_SUCCESS={','.join(bootstrap_success) or 'none'}")
+        print(f"IMPROVE_CONTEXT_BOOTSTRAP_FAILED={','.join(bootstrap_failed) or 'none'}")
+        print(f"IMPROVE_FOCUS={improve_focus}")
+        print(f"IMPROVE_ALLOW_ACTIONS={allow_actions_value}")
         print("FOLLOW_UP")
         print("If autopilot returns read_command or patch guidance, the helper will continue into the apply-safe flow automatically.")
         return 0
+
+    print(f"IMPROVE_CONTEXT_BOOTSTRAP_STATUS={bootstrap_status or 'none'}")
+    print(f"IMPROVE_CONTEXT_BOOTSTRAP_SUCCESS={','.join(bootstrap_success) or 'none'}")
+    print(f"IMPROVE_CONTEXT_BOOTSTRAP_FAILED={','.join(bootstrap_failed) or 'none'}")
+    print(f"IMPROVE_FOCUS={improve_focus}")
+    print(f"IMPROVE_ALLOW_ACTIONS={allow_actions_value}")
 
     rc, autopilot_output = invoke_turn(args, visible, technical, send_history=False, capture_output=True)
     if rc != 0:
@@ -3106,6 +3161,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--status-interval", type=float, default=3.0)
     parser.add_argument("--no-live-status", action="store_true")
     parser.add_argument("--send-history", action="store_true")
+    parser.add_argument("--mentor-visible-context", default="", help="Optional visible mentor context prepended to the next chat turn")
+    parser.add_argument("--mentor-technical-context", default="", help="Optional technical mentor context prepended to the next chat turn")
 
     sub = parser.add_subparsers(dest="mode", required=True)
 

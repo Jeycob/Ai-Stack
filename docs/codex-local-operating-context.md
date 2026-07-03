@@ -16,6 +16,7 @@ Zakladni pravidlo: autonomie se pridava pres sirsi, auditovatelne capability sco
 - OpenCode workspaces bezi jako izolovane kontejnery nad registrovanymi repozitari.
 - `ai-stack` je verzovany zdroj pravdy pro konfigurace, helpery, dokumentaci a OpenWebUI admin filter.
 - Runtime stav, secrets, logy a private key material jsou ignorovane a nepatri do Gitu.
+- Po cistem startu WSL nestaci jen Docker service; gateway a OpenCode workspaces zveda `codex/bin/start_codex_stack.sh`. Pro automaticky WSL boot je pripraveny wrapper `codex/bin/wsl_boot_ai_stack.sh --background`, ktery nejdriv nastartuje Docker, pocka na socket a potom spusti Codex stack.
 
 ## Viditelny audit chat
 
@@ -408,6 +409,13 @@ Bootstrap vrstva navic uz nepredava jen syrovy stdout. Pri `bootstrap-dispatch
 `bootstrap-improve` si z toho umi vytahnout kompaktni handoff pro navazujici
 improve fazi, takze codex-local ma lepsi kontext o tom, co uz bootstrap udelal
 a kde se realne zastavil.
+
+Improve vrstva uz tenhle handoff nepouziva jen jako textovy komentar. Podle
+`bootstrap_followup_status` a seznamu uspesnych/failed akci umi preladit dalsi
+autopilot krok: po `followup_completed` odstrani uz hotove capability akce z
+prioritniho `allow-actions`, zatimco po `followup_partial` postavi dalsi pokus
+kolem prvni selhane akce. Prakticky to znamena mensi tokenovy odpad, mene
+zbytecneho opakovani a lepsi navaznost mezi bootstrap a improve fazi.
 
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
