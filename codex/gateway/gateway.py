@@ -698,15 +698,26 @@ def admin_workspace_action(payload):
     return result
 
 def workspace_autopilot_recommendation(workspace: str) -> dict:
+    def build_hint(text: str, patch_target: str, patch_hint: str, patch_summary: str) -> dict:
+        read_command = f"GATEWAY_ADMIN_READ_NUMBERED {patch_target} 1 200" if patch_target else ""
+        return {
+            "text": text,
+            "patch_target": patch_target,
+            "patch_hint": patch_hint,
+            "patch_summary": patch_summary,
+            "read_command": read_command,
+        }
+
     try:
         root = load_workspace(WORKSPACES_FILE, workspace)
         scan = collect(root, 60)
     except Exception as exc:
-        return {
-            "text": f"Workspace needs manual review because scan data is unavailable: {exc}",
-            "patch_target": "",
-            "patch_hint": "",
-        }
+        return build_hint(
+            f"Workspace needs manual review because scan data is unavailable: {exc}",
+            "",
+            "",
+            "",
+        )
 
     manifests = scan.get("manifests") or []
     languages = scan.get("languages") or []
@@ -715,42 +726,48 @@ def workspace_autopilot_recommendation(workspace: str) -> dict:
     manifest_names = {Path(rel).name for rel in manifests}
 
     if not manifests:
-        return {
-            "text": "Workspace has no recognized project manifest yet; first add build or package metadata for the detected stack.",
-            "patch_target": "",
-            "patch_hint": "Add a standard project manifest such as package.json, pyproject.toml, Cargo.toml, go.mod, pom.xml, or CMakeLists.txt.",
-        }
+        return build_hint(
+            "Workspace has no recognized project manifest yet; first add build or package metadata for the detected stack.",
+            "",
+            "Add a standard project manifest such as package.json, pyproject.toml, Cargo.toml, go.mod, pom.xml, or CMakeLists.txt.",
+            "Create the primary project manifest for the detected stack.",
+        )
     if "package.json" in manifest_names and not package_scripts:
-        return {
-            "text": "Node workspace has package.json but no scripts; add at least build, test or lint scripts so codex-local can continue automatically.",
-            "patch_target": "package.json",
-            "patch_hint": "Add scripts.test, scripts.build, or scripts.lint entries under package.json:scripts.",
-        }
+        return build_hint(
+            "Node workspace has package.json but no scripts; add at least build, test or lint scripts so codex-local can continue automatically.",
+            "package.json",
+            "Add scripts.test, scripts.build, or scripts.lint entries under package.json:scripts.",
+            "Extend package.json:scripts with standard test/build/lint commands.",
+        )
     if {"pyproject.toml", "requirements.txt"} & manifest_names and not any("pytest" in cmd for cmd in candidate_commands):
         target = "pyproject.toml" if "pyproject.toml" in manifest_names else "requirements.txt"
-        return {
-            "text": "Python workspace is missing an obvious test entrypoint; consider adding tests/ or a pytest-compatible setup.",
-            "patch_target": target,
-            "patch_hint": "Add a pytest-compatible test layout, or declare the test dependency/configuration in pyproject.toml or requirements.txt.",
-        }
+        return build_hint(
+            "Python workspace is missing an obvious test entrypoint; consider adding tests/ or a pytest-compatible setup.",
+            target,
+            "Add a pytest-compatible test layout, or declare the test dependency/configuration in pyproject.toml or requirements.txt.",
+            "Add a pytest-compatible test entrypoint and test dependency/configuration.",
+        )
     if any(lang in {"javascript/typescript", "python", "rust", "go", "jvm", "c/cpp"} for lang in languages) and not candidate_commands:
         target = manifests[0] if manifests else ""
-        return {
-            "text": "Project shape is recognized, but no runnable lint/test/build command was inferred; expose one through standard manifests or scripts.",
-            "patch_target": target,
-            "patch_hint": "Add a standard lint, test, or build entrypoint in the main project manifest so capability routing can infer it.",
-        }
+        return build_hint(
+            "Project shape is recognized, but no runnable lint/test/build command was inferred; expose one through standard manifests or scripts.",
+            target,
+            "Add a standard lint, test, or build entrypoint in the main project manifest so capability routing can infer it.",
+            "Expose at least one standard lint/test/build entrypoint in the main manifest.",
+        )
     if candidate_commands:
-        return {
-            "text": f"No safe next capability matched the current allowlist. The first inferred manual command to review is: {candidate_commands[0]}",
-            "patch_target": manifests[0] if manifests else "",
-            "patch_hint": f"Review whether this command should be exposed through a standard script or manifest entry: {candidate_commands[0]}",
-        }
-    return {
-        "text": "No safe next capability was inferred; inspect manifests and add a standard lint, test or build entrypoint.",
-        "patch_target": manifests[0] if manifests else "",
-        "patch_hint": "Expose at least one standard lint, test, or build entrypoint in the project manifest.",
-    }
+        return build_hint(
+            f"No safe next capability matched the current allowlist. The first inferred manual command to review is: {candidate_commands[0]}",
+            manifests[0] if manifests else "",
+            f"Review whether this command should be exposed through a standard script or manifest entry: {candidate_commands[0]}",
+            f"Expose the inferred command through a standard manifest/script entry: {candidate_commands[0]}",
+        )
+    return build_hint(
+        "No safe next capability was inferred; inspect manifests and add a standard lint, test or build entrypoint.",
+        manifests[0] if manifests else "",
+        "Expose at least one standard lint, test, or build entrypoint in the project manifest.",
+        "Add at least one standard lint/test/build entrypoint to the project manifest.",
+    )
 
 def admin_workspace_autopilot(payload):
     workspace = str(payload.get("workspace") or "").strip()
@@ -831,6 +848,8 @@ def admin_workspace_autopilot(payload):
             "recommendation": recommendation.get("text", ""),
             "patch_target": recommendation.get("patch_target", ""),
             "patch_hint": recommendation.get("patch_hint", ""),
+            "patch_summary": recommendation.get("patch_summary", ""),
+            "read_command": recommendation.get("read_command", ""),
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
@@ -852,6 +871,8 @@ def admin_workspace_autopilot(payload):
             "recommendation": "",
             "patch_target": "",
             "patch_hint": "",
+            "patch_summary": "",
+            "read_command": "",
             "duration_ms": verify.get("duration_ms", 0),
             "verify_steps": verify_steps,
             "install_probe": install_probe,
@@ -925,6 +946,8 @@ def admin_workspace_autopilot(payload):
         "recommendation": "",
         "patch_target": "",
         "patch_hint": "",
+        "patch_summary": "",
+        "read_command": "",
         "duration_ms": int((time.time() - total_started) * 1000),
         "verify_steps": current_verify_steps,
         "install_probe": current_install_probe,

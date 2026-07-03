@@ -1247,6 +1247,8 @@ class Filter:
             f"recommendation={result.get('recommendation', '')}\n"
             f"patch_target={result.get('patch_target', '')}\n"
             f"patch_hint={result.get('patch_hint', '')}\n"
+            f"patch_summary={result.get('patch_summary', '')}\n"
+            f"read_command={result.get('read_command', '')}\n"
             f"stop_reason={result.get('stop_reason', '')}\n"
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"
