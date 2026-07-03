@@ -370,7 +370,9 @@ Když chceš ještě levnější variantu jen pro “co je první a proč”, po
 
 I tohle už jde přirozeně z OpenWebUI chatu: když uživatel napíše více bodů a otázku typu `Co má dělat jako první?`, `Který úkol je první?`, `Jaký je top task?` nebo `Proč je to první?`, filter to přeloží na lehký `mentor_codex_local.py top`. Když místo toho napíše `Jen doporuč první krok bez spuštění`, stále se použije `dispatch --recommend-only`.
 
-Podobně i pro single-task otázky typu `Jaký helper mám spustit dál pro ...?`, `Co mám pustit dál pro ...?` nebo `next helper for ...` filter nově routuje na `mentor_codex_local.py next-helper`.
+Podobně i pro single-task otázky typu `Jaký helper mám spustit dál pro ...?`, `Co mám pustit dál pro ...?`, `Co opravit jako první pro ...?`, `Jaký je další safe patch krok pro ...?` nebo `next helper for ...` filter nově routuje na `mentor_codex_local.py next-helper`.
+
+U multi-task bug/patch prioritizace se route také rozšířil za čistě obecné “top task” fráze. Formulace jako `Který bug má nejvyšší prioritu?`, `Jaký bug je první?`, `Vyber další safe patch krok` nebo `Seřaď bugy podle priority` teď padají do stejných lehkých mentor vrstev `top`, `dispatch` nebo `backlog`, místo aby končily v neurčitém auditu.
 
 Stejně tak už jde přirozeně vyžádat i guardrail vysvětlení: formulace typu `Proč to nejde pro ...?`, `Jaké guardraily platí pro ...?`, `Jaká capability chybí pro ...?` nebo `Why can't it do this for ...?` filter přeloží na `mentor_codex_local.py boundary`.
 

@@ -350,7 +350,7 @@ Top navic vraci:
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 
-`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi ze single-task nebo vice-task promptu vyrobit `profile`, `report`, `plan`, `brief`, `next-helper`, `boundary`, `backlog`, `dispatch` nebo `top` helper call, takze codex-local dostane i lehkou prioritizacni a mentor vrstvu bez rucniho skladani admin markeru.
+`openwebui_codex_auto_tools_filter.py` uz umi nektere prirozene pozadavky, ktere jsou sirsi nez aktualni safe runtime scope, prelozit nejen na workflow, ale i na capability-roadmap stopu. Prakticky to znamena, ze u GitHub/release nebo host-runtime use-casu se v auditu objevi i `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`. Zaroven umi ze single-task nebo vice-task promptu vyrobit `profile`, `report`, `plan`, `brief`, `next-helper`, `boundary`, `backlog`, `dispatch` nebo `top` helper call, takze codex-local dostane i lehkou prioritizacni a mentor vrstvu bez rucniho skladani admin markeru. Nove se to vztahuje i na patch-priority formulace jako `Co opravit jako prvni?`, `Jaky je dalsi safe patch krok?`, `Ktery bug ma nejvyssi prioritu?` nebo `Serad bugy podle priority`.
 
 Aktualni runtime profily:
 
