@@ -128,6 +128,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_dispatch_command(text)
         if not command:
+            command = self._natural_workspace_release_boundary_command(text)
+        if not command:
             command = self._natural_capability_roadmap_command(text)
         if not command:
             command = self._natural_workspace_run_command(text)
@@ -804,6 +806,32 @@ class Filter:
             )
         return None
 
+    def _natural_workspace_release_boundary_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace:
+            return None
+        lower = text.lower()
+        if not any(
+            token in lower
+            for token in (
+                "release",
+                "publish package",
+                "publish",
+                "github actions",
+                "tag release",
+                "vytvor tag",
+                "vytvoř tag",
+                "vytvor release",
+                "vytvoř release",
+            )
+        ):
+            return None
+        lines = self._non_repo_lines(text)
+        task = " ".join(line.strip() for line in lines if line.strip())
+        if not task:
+            task = "Vytvoř release a pushni to na GitHub"
+        return self._boundary_helper_command(workspace, task)
+
     def _mentions_ai_stack(self, text: str) -> bool:
         return re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*ai-stack\s*$", text) is not None or "ai-stack" in text.lower()
 
@@ -835,12 +863,52 @@ class Filter:
             "log nasazeni",
             "log nasazení",
         ]
+        push_words = [
+            "pushni zmeny",
+            "pushni změny",
+            "commitni a pushni",
+            "commitni zmeny",
+            "commitni změny",
+            "commit a push",
+            "commit and push",
+            "git push",
+            "pushni ai-stack",
+            "pushni to do githubu",
+            "push changes",
+            "publish zmeny",
+            "publish změny",
+        ]
+        release_words = [
+            "release",
+            "publish package",
+            "github actions",
+            "tag release",
+            "vytvor release",
+            "vytvoř release",
+        ]
 
         if any(word in lower for word in status_words):
             return "GATEWAY_ADMIN_DEPLOY_STATUS"
         if any(word in lower for word in deploy_words):
             return "GATEWAY_ADMIN_DEPLOY_STACK"
+        if any(word in lower for word in push_words) and not any(word in lower for word in release_words):
+            message = self._extract_ai_stack_push_message(text)
+            return f"GATEWAY_ADMIN_GIT_PUSH main {message}"
         return None
+
+    def _extract_ai_stack_push_message(self, text: str) -> str:
+        patterns = [
+            r'(?im)^\s*(?:commit\s+message|message|msg|zprava|zpráva)\s*:\s*(.+?)\s*$',
+            r'(?is)\b(?:s\s+commitem|s\s+message)\s+"([^"]+)"',
+            r"(?is)\b(?:s\s+commitem|s\s+message)\s+'([^']+)'",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                candidate = " ".join(match.group(1).strip().split())
+                if candidate:
+                    return shlex.quote(candidate[:200])
+        return shlex.quote("Update ai-stack via codex-local")
 
     def _natural_create_repo_command(self, text: str) -> str | None:
         lower = text.lower()

@@ -42,6 +42,7 @@ UNSAFE_PATCH_SEGMENTS = (
 WORKFLOW_PRIORITY = {
     "improve": 95,
     "deploy": 90,
+    "push": 88,
     "autopilot": 85,
     "create-repo": 80,
     "apply-safe": 75,
@@ -154,6 +155,11 @@ def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
     if args.mode == "deploy-status":
         visible = "repo: ai-stack\nUkaž stručný stav posledního nasazení."
         technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_DEPLOY_STATUS"
+        return visible, technical
+
+    if args.mode == "push":
+        visible = "repo: ai-stack\nCommitni povolené změny a pushni je do GitHubu. Po dokončení napiš stručný stav."
+        technical = f"{repo_prefix(args.repo)}\nGATEWAY_ADMIN_GIT_PUSH {args.branch} {shlex.quote(args.message)}"
         return visible, technical
 
     if args.mode == "create-repo":
@@ -1105,6 +1111,8 @@ def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -
         return f"python3 codex/bin/mentor_codex_local.py create-repo {repo_name}{github_flag} --restart" if repo_name else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
     if workflow == "deploy":
         return "python3 codex/bin/mentor_codex_local.py deploy"
+    if workflow == "push":
+        return "python3 codex/bin/mentor_codex_local.py push"
     if workflow == "review":
         return f"python3 codex/bin/mentor_codex_local.py review {workspace}"
     if workflow == "apply-safe":
@@ -1137,6 +1145,8 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
             return f"repo: ai-stack\nVytvoř nové repository {repo_name}{suffix}"
     if workflow == "deploy":
         return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
+    if workflow == "push":
+        return "repo: ai-stack\nCommitni povolené změny a pushni je do GitHubu. Po dokončení napiš stručný stav."
     if workflow == "review":
         return f"repo: {workspace}\nProveď review, najdi hlavní rizika a navrhni další krok. Nic needituj."
     if workflow == "apply-safe":
@@ -1180,6 +1190,9 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
     elif workflow == "deploy":
         lines.append("goal=run the audited ai-stack deploy flow with pull, restart, and smoke checks")
         lines.append("guardrail=prefer named deploy flow over ad-hoc docker or root commands")
+    elif workflow == "push":
+        lines.append("goal=commit only allowed ai-stack source files and push them through the audited GitHub flow")
+        lines.append("guardrail=stop if blocked_paths or sensitive paths appear and prefer the named push capability over ad-hoc git commands")
     elif workflow == "review":
         lines.append("goal=perform a senior review pass and surface the highest-risk findings")
         lines.append("guardrail=stay read-only, prioritize regressions and missing tests, and recommend one next audited step")
@@ -1383,6 +1396,11 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
         steps.append(("deploy-status", "python3 codex/bin/mentor_codex_local.py deploy-status"))
         return steps
 
+    if workflow == "push":
+        steps.append(("push", "python3 codex/bin/mentor_codex_local.py push"))
+        steps.append(("post-push", "verify clean git status and remote head"))
+        return steps
+
     if workflow == "review":
         steps.append(("review", f"python3 codex/bin/mentor_codex_local.py review {workspace}"))
         steps.append(("report", f"python3 codex/bin/mentor_codex_local.py report {workspace} {shlex.quote(task)}"))
@@ -1559,6 +1577,10 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return rc
     if args.mode == "autopilot":
         return run_autopilot_sequence(args)
+    if args.mode == "push":
+        visible, technical = build_prompts(args)
+        rc, _ = invoke_turn(args, visible, technical)
+        return rc
     if args.mode == "patch-plan":
         return run_patch_plan_sequence(args)
     if args.mode == "apply-ready":
@@ -1636,6 +1658,12 @@ def parse_args() -> argparse.Namespace:
     deploy_status = sub.add_parser("deploy-status", help="Ask codex-local for deploy status")
     deploy_status.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
     deploy_status.set_defaults()
+
+    push = sub.add_parser("push", help="Ask codex-local to commit allowed ai-stack changes and push them to GitHub")
+    push.add_argument("--branch", default="main")
+    push.add_argument("--message", default="Update ai-stack via codex-local")
+    push.add_argument("--dry-run", action="store_true", help="Print prompts instead of calling OpenWebUI")
+    push.set_defaults()
 
     audit = sub.add_parser("audit", help="Run scan + verify plan + next-step recommendation for a workspace")
     audit.add_argument("workspace")
