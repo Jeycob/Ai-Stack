@@ -11,6 +11,9 @@ from typing import Optional
 import re
 import shlex
 
+WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
+FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
+
 try:
     from pydantic import BaseModel, Field
 except ModuleNotFoundError:  # pragma: no cover - used by lightweight local smoke tests
@@ -118,7 +121,9 @@ class Filter:
         if "GATEWAY_ADMIN_" in text:
             return None
 
-        command = self._natural_workspace_brief_command(text)
+        command = self._natural_file_context_command(text)
+        if not command:
+            command = self._natural_workspace_brief_command(text)
         if not command:
             command = self._natural_workspace_review_command(text)
         if not command:
@@ -180,7 +185,9 @@ class Filter:
             stripped = line.strip()
             if not stripped:
                 continue
-            if re.match(r"(?i)^(repo|workspace|project)\s*:\s*[A-Za-z0-9_.-]{1,80}\s*$", stripped):
+            if re.match(rf"(?i)^{WORKSPACE_LABEL_PATTERN}\s*:\s*[A-Za-z0-9_.-]{{1,80}}\s*$", stripped):
+                continue
+            if re.match(rf"(?i)^{FILE_LABEL_PATTERN}\s*:\s*.+$", stripped):
                 continue
             lines.append(stripped)
         return lines
@@ -251,6 +258,72 @@ class Filter:
             task,
         ]
         return f"GATEWAY_ADMIN_RUN_WORKSPACE {workspace} --timeout 120 -- {shlex.join(command)}"
+
+    def _line_value(self, text: str, label_pattern: str) -> str | None:
+        match = re.search(rf"(?im)^\s*{label_pattern}\s*:\s*(.+?)\s*$", text)
+        if not match:
+            return None
+        value = match.group(1).strip().strip("`").strip().strip("\"'")
+        return value or None
+
+    def _file_from_text(self, text: str) -> str | None:
+        explicit = self._line_value(text, FILE_LABEL_PATTERN)
+        if explicit:
+            return explicit
+        lower = text.lower()
+        known = [
+            ("docker compose", "docker-compose.yml"),
+            ("docker-compose", "docker-compose.yml"),
+            ("compose.yml", "compose.yml"),
+            ("compose.yaml", "compose.yaml"),
+            ("readme", "README.md"),
+            ("gateway.py", "codex/gateway/gateway.py"),
+            ("start_codex_stack.sh", "codex/bin/start_codex_stack.sh"),
+            ("workspaces.json", "codex/workspaces.json"),
+            ("opencode-default.json", "codex/opencode-default.json"),
+        ]
+        for needle, rel in known:
+            if needle in lower:
+                return rel
+        return None
+
+    def _looks_like_file_read_or_explain(self, text: str) -> bool:
+        lower = text.lower()
+        cues = (
+            "precti",
+            "přečti",
+            "cti ",
+            "čti ",
+            "read ",
+            "show ",
+            "ukaz",
+            "ukaž",
+            "vypis",
+            "vypiš",
+            "vysvetli",
+            "vysvětli",
+            "explain",
+            "popis",
+            "co dela",
+            "co dělá",
+            "radek po radku",
+            "řádek po řádku",
+            "line by line",
+        )
+        return any(cue in lower for cue in cues)
+
+    def _natural_file_context_command(self, text: str) -> str | None:
+        workspace = self._workspace_from_text(text)
+        if not workspace or not self._looks_like_file_read_or_explain(text):
+            return None
+        rel = self._file_from_text(text)
+        if not rel:
+            return None
+        question = " ".join(self._non_repo_lines(text)).strip() or "Přečti a vysvětli soubor."
+        return (
+            f"GATEWAY_ADMIN_EXPLAIN_FILE {shlex.quote(workspace)} {shlex.quote(rel)} "
+            f"1 400 -- {shlex.quote(question[:1200])}"
+        )
 
     def _natural_workspace_brief_command(self, text: str) -> str | None:
         workspace = self._workspace_from_text(text)
@@ -1171,7 +1244,7 @@ class Filter:
         return f"GATEWAY_ADMIN_WEB_FETCH {shlex.quote(url)} --max-bytes 300000"
 
     def _mentions_ai_stack(self, text: str) -> bool:
-        return re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*ai-stack\s*$", text) is not None or "ai-stack" in text.lower()
+        return re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*ai-stack\s*$", text) is not None or "ai-stack" in text.lower()
 
     def _natural_ai_stack_command(self, text: str) -> str | None:
         lower = text.lower()
@@ -1585,7 +1658,7 @@ class Filter:
         return None
 
     def _workspace_from_text(self, text: str) -> str | None:
-        match = re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*([A-Za-z0-9_.-]{1,80})\s*$", text)
+        match = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*([A-Za-z0-9_.-]{{1,80}})\s*$", text)
         if match:
             return match.group(1)
         return None

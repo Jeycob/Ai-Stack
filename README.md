@@ -20,7 +20,7 @@ Lokální AI stack pro OpenWebUI, Ollama a izolované Codex/OpenCode workspaces.
 - `codex/bin/wsl_boot_ai_stack.sh`: volitelný WSL boot wrapper, který po startu WSL zvedne Docker a Codex gateway stack.
 - `codex/bin/add_workspace.py`: registruje nový repozitářový workspace do `codex/workspaces.json`.
 - `codex/bin/watch_gateway.sh`: hlídá změny `codex/gateway/gateway.py`, validuje syntaxi a restartuje gateway.
-- `codex/bin/openwebui_codex_auto_tools_filter.py`: OpenWebUI filter pro automatické připojení toolsetů a úzké mapování bezpečných codex-local intentů.
+- `codex/bin/openwebui_codex_auto_tools_filter.py`: OpenWebUI filter pro automatické připojení toolsetů a normalizaci bezpečných codex-local intentů z běžného jazyka.
 - `codex/gateway/gateway.py`: OpenAI-compatible gateway pro modely a workspace snapshoty.
 - `codex/workspaces.json`: registr workspaces, portů a resource limitů.
 - `codex/opencode-default.json`: výchozí OpenCode konfigurace pro nové workspaces.
@@ -55,11 +55,20 @@ Na RTX 4080 16 GB je 14B praktičtější výchozí volba, protože se vejde do 
 ## Příklady práce s codex-local agentem
 
 Primární způsob práce je přes viditelný OpenWebUI audit chat. Instrukce mají být konkrétní, ideálně s prvním řádkem `repo: <workspace>`, aby gateway věděla, nad kterým repozitářem má agent pracovat.
+Agent rozumí i běžným aliasům jako `repository:`, `repozitář:`, `repozitar:`, `projekt:` nebo `workspace:`. Pro soubory můžeš použít `soubor:`, `file:`, `path:` nebo `cesta:`.
 
 Příklad rychlé analýzy bez editace:
 
     repo: ai-stack
     Prohlédni strukturu projektu a stručně řekni, jak je zapojená gateway. Nic needituj.
+
+Příklad čtení a vysvětlení konkrétního souboru bez ručního admin markeru:
+
+    repozitar: ai-stack
+    soubor: docker-compose.yml
+    Přečti docker compose a vysvětli, co dělá řádek po řádku.
+
+Auto-tools filter to přeloží na auditované vysvětlení souboru přes gateway. Gateway soubor načte přímo z registrovaného workspace, blokuje runtime/secrets cesty jako `.env`, `codex/state/` a `codex/audit/`, a lokální model pak odpoví z reálného očíslovaného obsahu souboru.
 
 Příklad práce nad jiným registrovaným repozitářem:
 
@@ -120,6 +129,8 @@ Auto-tools filter to přeloží na:
     repo: ai-stack
     GATEWAY_ADMIN_RUN_WORKSPACE Test2 --timeout 300 -- git status --short --branch
 
+Workspace runner nyní ve výchozím stavu používá `runner=container`, tedy spouští příkaz přes `docker exec --workdir /workspace codex-opencode-<workspace> ...`. Starší host režim existuje jen jako explicitní diagnostika přes `--runner host`; běžné run/install/test/build/smoke workflow nemá tiše padat zpět na WSL host. Pokud gateway nemá přístup k Docker socketu, vrátí auditovatelnou chybu místo toho, aby příkaz spustila mimo kontejner.
+
 U nejběžnějších read-only repo akcí není nutné psát ani `spusť příkaz:`. Například `repo: Test2` a “zkontroluj git status” se přeloží na stejný workspace runner s `git status --short --branch`; “ukaž git remote” na `git remote -v`; “ukaž poslední commity” na `git log -5 --oneline`.
 
 Podobně existuje širší workflow i pro běžné developerské akce. Například:
@@ -143,6 +154,7 @@ nebo:
     GATEWAY_ADMIN_WORKSPACE_ACTION Test2 test --timeout 1800
 
 Resolver se dívá na manifesty workspace a volí přirozený příkaz pro daný stack, například `npm install`, `python -m pip install -r requirements.txt`, `cargo test`, `go test ./...` nebo `./gradlew test`. Když vhodný příkaz nenašel, vrátí auditovatelný `unsupported` výsledek místo předstírání úspěchu.
+Při `runner=container` resolver nevyžaduje, aby byly nástroje jako `npm`, `go` nebo `cargo` nainstalované ve WSL hostu; rozhoduje podle manifestů a skutečný úspěch ověří až v OpenCode kontejneru.
 
 Stejný runner nově umí i `smoke`, tedy auditované startup ověření. Hodí se pro zadání typu “zkus to rozběhnout a vrať výsledek”, ale bez neomezeného shellu. Nejprve se pokusí najít standardní smoke entrypoint, například `package.json` script `smoke`/`dev`/`start`, Django `manage.py runserver`, nebo zjevný FastAPI/Flask app entrypoint. Proces pustí jen v krátkém okně přes `timeout`, sleduje readiness logy typu `http://127.0.0.1`, `ready on` nebo `Uvicorn running on`, a úspěch vrátí jen když startup opravdu detekoval. Příklad:
 
@@ -173,6 +185,11 @@ Příklad čtení whitelisted souboru s reálnými čísly řádků pro přesně
 
     repo: ai-stack
     GATEWAY_ADMIN_READ_NUMBERED README.md 68 84
+
+Příklad vysvětlení souboru přes gateway:
+
+    repo: ai-stack
+    GATEWAY_ADMIN_EXPLAIN_FILE ai-stack docker-compose.yml 1 400 -- vysvětli co dělá řádek po řádku
 
 Příklad vestavěného smoke testu gateway:
 

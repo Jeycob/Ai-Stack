@@ -45,6 +45,8 @@ def command_available(command: list[str], root: Path) -> bool:
     head = command[0]
     if head.startswith("./"):
         return (root / head[2:]).exists()
+    if os.getenv("CODEX_ASSUME_WORKSPACE_TOOLS") == "1":
+        return True
     return shutil.which(head) is not None
 
 
@@ -181,6 +183,53 @@ def normalize_output(value: object) -> str:
         return value.decode("utf-8", errors="replace")
     return str(value)
 
+def container_name(workspace: str) -> str:
+    return f"codex-opencode-{workspace}"
+
+
+def docker_exec_command(workspace: str, command: list[str], env: dict[str, str]) -> list[str]:
+    cmd = ["docker", "exec", "--workdir", "/workspace"]
+    for key, value in sorted(env.items()):
+        cmd.extend(["-e", f"{key}={value}"])
+    cmd.append(container_name(workspace))
+    cmd.extend(command)
+    return cmd
+
+
+def run_dev_command(
+    command: list[str],
+    root: Path,
+    timeout: int,
+    env: dict[str, str],
+    runner: str,
+    workspace: str | None,
+) -> tuple[subprocess.CompletedProcess[str], list[str], str, str]:
+    if runner == "host":
+        proc = subprocess.run(
+            command,
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            env={**os.environ.copy(), **env},
+        )
+        return proc, command, str(root), ""
+    if runner == "container":
+        if not workspace:
+            raise ActionError("Container runner requires --workspace, not --root.")
+        executed = docker_exec_command(workspace, command, env)
+        proc = subprocess.run(
+            executed,
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+        return proc, executed, "/workspace", container_name(workspace)
+    raise ActionError(f"Unsupported runner: {runner}")
+
 
 def resolve_action(root: Path, action: str) -> tuple[list[str], str]:
     result = collect(root, 80)
@@ -261,7 +310,14 @@ def verify_plan(root: Path) -> list[dict[str, object]]:
     return steps
 
 
-def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> dict[str, object]:
+def run_verify(
+    root: Path,
+    timeout: int,
+    env: dict[str, str],
+    dry_run: bool,
+    runner: str,
+    workspace: str | None,
+) -> dict[str, object]:
     started = time.time()
     steps = verify_plan(root)
     runnable = [step for step in steps if step.get("supported")]
@@ -271,6 +327,8 @@ def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> 
             "planned_only": True,
             "action": "verify",
             "root": str(root),
+            "runner": runner,
+            "container": container_name(workspace) if runner == "container" and workspace else "",
             "duration_ms": int((time.time() - started) * 1000),
             "error": "unsupported",
             "verify_steps": steps,
@@ -283,6 +341,8 @@ def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> 
             "planned_only": True,
             "action": "verify",
             "root": str(root),
+            "runner": runner,
+            "container": container_name(workspace) if runner == "container" and workspace else "",
             "duration_ms": int((time.time() - started) * 1000),
             "verify_steps": steps,
             "output": "",
@@ -309,18 +369,21 @@ def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> 
             ok = False
             break
         try:
-            proc = subprocess.run(
+            proc, executed_command, cwd, container = run_dev_command(
                 step["command"],
-                cwd=root,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=remaining,
-                env=env,
+                root,
+                remaining,
+                env,
+                runner,
+                workspace,
             )
             step_result = {
                 **step,
                 "ok": proc.returncode == 0,
+                "runner": runner,
+                "container": container,
+                "cwd": cwd,
+                "executed_command": executed_command,
                 "exit_code": proc.returncode,
                 "output": proc.stdout,
             }
@@ -333,6 +396,10 @@ def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> 
                 {
                     **step,
                     "ok": False,
+                    "runner": runner,
+                    "container": container_name(workspace) if runner == "container" and workspace else "",
+                    "cwd": "/workspace" if runner == "container" else str(root),
+                    "executed_command": exc.cmd if isinstance(exc.cmd, list) else [str(exc.cmd)],
                     "exit_code": None,
                     "error": "timeout",
                     "output": (exc.stdout or "") + (exc.stderr or ""),
@@ -356,13 +423,22 @@ def run_verify(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> 
         "planned_only": False,
         "action": "verify",
         "root": str(root),
+        "runner": runner,
+        "container": container_name(workspace) if runner == "container" and workspace else "",
         "duration_ms": int((time.time() - started) * 1000),
         "verify_steps": executed_steps,
         "output": "\n".join(summary_lines),
     }
 
 
-def run_smoke(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> dict[str, object]:
+def run_smoke(
+    root: Path,
+    timeout: int,
+    env: dict[str, str],
+    dry_run: bool,
+    runner: str,
+    workspace: str | None,
+) -> dict[str, object]:
     started = time.time()
     result = collect(root, 80)
     manifest_set = {Path(rel).name for rel in result["manifests"]}
@@ -376,6 +452,8 @@ def run_smoke(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> d
             "planned_only": True,
             "action": "smoke",
             "root": str(root),
+            "runner": runner,
+            "container": container_name(workspace) if runner == "container" and workspace else "",
             "command": command,
             "resolved_from": resolved_from,
             "smoke_window_s": smoke_window,
@@ -389,14 +467,13 @@ def run_smoke(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> d
     smoke_env.setdefault("PYTHONUNBUFFERED", "1")
 
     wrapped_command = ["timeout", "--signal=TERM", f"{smoke_window}s", *command]
-    proc = subprocess.run(
+    proc, executed_command, cwd, container = run_dev_command(
         wrapped_command,
-        cwd=root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=max(timeout + 5, smoke_window + 5),
-        env=smoke_env,
+        root,
+        max(timeout + 5, smoke_window + 5),
+        smoke_env,
+        runner,
+        workspace,
     )
     output = normalize_output(proc.stdout)
     startup_detected = smoke_ready(output)
@@ -407,7 +484,11 @@ def run_smoke(root: Path, timeout: int, env: dict[str, str], dry_run: bool) -> d
         "planned_only": False,
         "action": "smoke",
         "root": str(root),
+        "runner": runner,
+        "container": container,
+        "cwd": cwd,
         "command": command,
+        "executed_command": executed_command,
         "resolved_from": resolved_from,
         "wrapped_command": wrapped_command,
         "smoke_window_s": smoke_window,
@@ -429,13 +510,23 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--env", action="append", default=[])
+    parser.add_argument(
+        "--runner",
+        choices=["container", "host"],
+        default=os.getenv("CODEX_WORKSPACE_RUNNER", "container"),
+        help="Execution boundary. Default is container so actions run inside codex-opencode-<workspace>.",
+    )
     args = parser.parse_args()
 
     if bool(args.root) == bool(args.workspace):
         raise SystemExit("Use exactly one of --root or --workspace")
+    if args.runner == "container" and not args.workspace:
+        raise SystemExit("Container runner requires --workspace, not --root")
+    if args.runner == "container":
+        os.environ.setdefault("CODEX_ASSUME_WORKSPACE_TOOLS", "1")
 
     root = Path(args.root) if args.root else load_workspace(Path(args.workspaces_file), args.workspace)
-    env = os.environ.copy()
+    env: dict[str, str] = {}
     for item in args.env:
         if "=" not in item:
             raise SystemExit(f"Invalid --env value: {item!r}")
@@ -445,9 +536,9 @@ def main() -> int:
     started = time.time()
     try:
         if args.action == "verify":
-            result = run_verify(root, args.timeout, env, args.dry_run)
+            result = run_verify(root, args.timeout, env, args.dry_run, args.runner, args.workspace)
         elif args.action == "smoke":
-            result = run_smoke(root, args.timeout, env, args.dry_run)
+            result = run_smoke(root, args.timeout, env, args.dry_run, args.runner, args.workspace)
         else:
             command, resolved_from = resolve_action(root, args.action)
             if args.dry_run:
@@ -456,27 +547,32 @@ def main() -> int:
                     "planned_only": True,
                     "action": args.action,
                     "root": str(root),
+                    "runner": args.runner,
+                    "container": container_name(args.workspace) if args.runner == "container" and args.workspace else "",
                     "command": command,
                     "resolved_from": resolved_from,
                     "duration_ms": int((time.time() - started) * 1000),
                     "output": "",
                 }
             else:
-                proc = subprocess.run(
+                proc, executed_command, cwd, container = run_dev_command(
                     command,
-                    cwd=root,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=args.timeout,
-                    env=env,
+                    root,
+                    args.timeout,
+                    env,
+                    args.runner,
+                    args.workspace,
                 )
                 result = {
                     "ok": proc.returncode == 0,
                     "planned_only": False,
                     "action": args.action,
                     "root": str(root),
+                    "runner": args.runner,
+                    "container": container,
+                    "cwd": cwd,
                     "command": command,
+                    "executed_command": executed_command,
                     "resolved_from": resolved_from,
                     "duration_ms": int((time.time() - started) * 1000),
                     "exit_code": proc.returncode,
@@ -488,6 +584,9 @@ def main() -> int:
             "planned_only": False,
             "action": args.action,
             "root": str(root),
+            "runner": args.runner,
+            "container": container_name(args.workspace) if args.runner == "container" and args.workspace else "",
+            "cwd": "/workspace" if args.runner == "container" else str(root),
             "command": exc.cmd if isinstance(exc.cmd, list) else [str(exc.cmd)],
             "duration_ms": int((time.time() - started) * 1000),
             "timeout": args.timeout,
@@ -500,6 +599,8 @@ def main() -> int:
             "planned_only": True,
             "action": args.action,
             "root": str(root),
+            "runner": args.runner,
+            "container": container_name(args.workspace) if args.runner == "container" and args.workspace else "",
             "duration_ms": int((time.time() - started) * 1000),
             "error": "unsupported",
             "output": str(exc),
@@ -512,10 +613,17 @@ def main() -> int:
         print(status)
         print(f"action={result['action']}")
         print(f"root={result['root']}")
+        print(f"runner={result.get('runner', '')}")
+        if result.get("container"):
+            print(f"container={result['container']}")
+        if result.get("cwd"):
+            print(f"cwd={result['cwd']}")
         if "resolved_from" in result:
             print(f"resolved_from={result['resolved_from']}")
         if "command" in result:
             print(f"command={' '.join(result['command'])}")
+        if "executed_command" in result:
+            print(f"executed_command={' '.join(result['executed_command'])}")
         if "wrapped_command" in result:
             print(f"wrapped_command={' '.join(result['wrapped_command'])}")
         if "verify_steps" in result:

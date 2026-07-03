@@ -21,6 +21,8 @@ import time
 import urllib.error
 import urllib.request
 
+WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
+
 
 class Filter:
     class Valves(BaseModel):
@@ -93,6 +95,8 @@ class Filter:
             return self._direct_response(body, self._read_numbered_requested_file(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_READ"):
             return self._direct_response(body, self._read_requested_file(latest_user))
+        if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_EXPLAIN_FILE"):
+            return self._direct_response(body, self._explain_file_admin(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_SSH_KEYGEN"):
             return self._direct_response(body, self._ssh_keygen(latest_user))
         if self._admin_command_requested(latest_user, "GATEWAY_ADMIN_INSTALL_SSH_CLIENT"):
@@ -195,7 +199,10 @@ class Filter:
     def _is_ai_stack_request(self, body: dict) -> bool:
         model = str(body.get("model") or "")
         text = "\n".join(self._message_texts(body)[-8:]).lower()
-        return "codex-local-" in model and "repo: ai-stack" in text
+        return "codex-local-" in model and (
+            re.search(rf"(?im)^\s*{WORKSPACE_LABEL_PATTERN}\s*:\s*ai-stack\s*$", text) is not None
+            or "ai-stack" in text
+        )
 
     def _message_texts(self, body: dict) -> list[str]:
         out = []
@@ -459,6 +466,56 @@ class Filter:
         width = max(4, len(str(end)))
         body = "\n".join(f"{idx:0{width}d}: {lines[idx - 1]}" for idx in range(start, end + 1))
         return f"FILE {rel} lines={start}-{end} total={len(lines)}\n--- BEGIN NUMBERED ---\n{body}\n--- END NUMBERED ---"
+
+    def _explain_file_admin(self, text: str) -> str:
+        m = re.search(r"(?im)^\s*GATEWAY_ADMIN_EXPLAIN_FILE\s+(.+?)\s*$", text)
+        if not m:
+            raise ValueError("Usage: GATEWAY_ADMIN_EXPLAIN_FILE <workspace> <relative-path> [start-line] [end-line] [-- question]")
+        parts = shlex.split(m.group(1))
+        if len(parts) < 2:
+            raise ValueError("Usage: GATEWAY_ADMIN_EXPLAIN_FILE <workspace> <relative-path> [start-line] [end-line] [-- question]")
+        workspace = parts[0]
+        rel = parts[1]
+        start = 1
+        end = None
+        question_parts: list[str] = []
+        rest = parts[2:]
+        if "--" in rest:
+            idx = rest.index("--")
+            numeric = rest[:idx]
+            question_parts = rest[idx + 1 :]
+        else:
+            numeric = rest
+        if numeric:
+            start = int(numeric[0])
+        if len(numeric) > 1:
+            end = int(numeric[1])
+        if len(numeric) > 2:
+            raise ValueError("GATEWAY_ADMIN_EXPLAIN_FILE accepts at most start and end before --")
+
+        payload: dict[str, object] = {
+            "workspace": workspace,
+            "path": rel,
+            "start": start,
+        }
+        if end is not None:
+            payload["end"] = end
+        if question_parts:
+            payload["question"] = " ".join(question_parts)
+
+        result = self._gateway_admin_request("/v1/admin/file/explain", payload, timeout=360)
+        status = "FILE_EXPLAIN_OK" if result.get("ok") else "FILE_EXPLAIN_FAILED"
+        answer = str(result.get("answer", "")).strip()
+        return (
+            f"{status}\n"
+            f"workspace={result.get('workspace') or workspace}\n"
+            f"path={result.get('path') or rel}\n"
+            f"lines={result.get('start')}-{result.get('end')} total={result.get('total_lines')}\n"
+            f"truncated={result.get('truncated')}\n"
+            "answer:\n"
+            f"{answer}"
+            + self._details("source_numbered", self._trim(str(result.get("numbered", "")), 12000))
+        ).rstrip()
 
     def _ssh_keygen(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_SSH_KEYGEN(?:\s+([A-Za-z0-9_.-]+))?(?:\s+(.+?))?\s*$", text)
@@ -1015,10 +1072,10 @@ class Filter:
     def _run_workspace_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_RUN_WORKSPACE\s+(.+?)\s*$", text)
         if not m:
-            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE <workspace> [--timeout seconds] [--env KEY=VALUE] -- <command> [args...]")
+            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE <workspace> [--timeout seconds] [--runner container|host] [--env KEY=VALUE] -- <command> [args...]")
         parts = shlex.split(m.group(1))
         if not parts:
-            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE <workspace> [--timeout seconds] [--env KEY=VALUE] -- <command> [args...]")
+            raise ValueError("Usage: GATEWAY_ADMIN_RUN_WORKSPACE <workspace> [--timeout seconds] [--runner container|host] [--env KEY=VALUE] -- <command> [args...]")
 
         workspace = parts.pop(0)
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
@@ -1026,10 +1083,16 @@ class Filter:
 
         timeout = 300
         env_map = {}
+        runner = "container"
         while parts and parts[0] != "--":
             opt = parts.pop(0)
             if opt == "--timeout" and parts:
                 timeout = int(parts.pop(0))
+                continue
+            if opt == "--runner" and parts:
+                runner = parts.pop(0)
+                if runner not in {"container", "host"}:
+                    raise ValueError("--runner must be container or host")
                 continue
             if opt == "--env" and parts:
                 item = parts.pop(0)
@@ -1050,7 +1113,7 @@ class Filter:
         if timeout < 1 or timeout > 1800:
             raise ValueError("Timeout must be between 1 and 1800 seconds")
 
-        payload = {"workspace": workspace, "timeout": timeout, "command": command}
+        payload = {"workspace": workspace, "timeout": timeout, "runner": runner, "command": command}
         if env_map:
             payload["env"] = env_map
         result = self._gateway_admin_request("/v1/admin/workspace/run", payload, timeout=max(timeout + 45, 90))
@@ -1060,8 +1123,11 @@ class Filter:
         return (
             f"{status}\n"
             f"workspace={result.get('workspace', workspace)}\n"
+            f"runner={result.get('runner', runner)}\n"
+            f"container={result.get('container', '')}\n"
             f"cwd={result.get('cwd', '(unknown)')}\n"
             f"command={self._shell_join(result.get('command', command))}\n"
+            f"executed_command={self._shell_join(result.get('executed_command', []))}\n"
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"
             f"duration_ms={result.get('duration_ms', '(unknown)')}\n"
@@ -1071,10 +1137,10 @@ class Filter:
     def _workspace_action_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_ACTION\s+(.+?)\s*$", text)
         if not m:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--runner container|host] [--env KEY=VALUE] [--dry-run]")
         parts = shlex.split(m.group(1))
         if len(parts) < 2:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--runner container|host] [--env KEY=VALUE] [--dry-run]")
 
         workspace = parts.pop(0)
         action = parts.pop(0)
@@ -1086,10 +1152,16 @@ class Filter:
         timeout = 900
         env_map = {}
         dry_run = False
+        runner = "container"
         while parts:
             opt = parts.pop(0)
             if opt == "--timeout" and parts:
                 timeout = int(parts.pop(0))
+                continue
+            if opt == "--runner" and parts:
+                runner = parts.pop(0)
+                if runner not in {"container", "host"}:
+                    raise ValueError("--runner must be container or host")
                 continue
             if opt == "--env" and parts:
                 item = parts.pop(0)
@@ -1108,7 +1180,7 @@ class Filter:
         if timeout < 1 or timeout > 3600:
             raise ValueError("Timeout must be between 1 and 3600 seconds")
 
-        payload = {"workspace": workspace, "action": action, "timeout": timeout, "dry_run": dry_run}
+        payload = {"workspace": workspace, "action": action, "timeout": timeout, "dry_run": dry_run, "runner": runner}
         if env_map:
             payload["env"] = env_map
         result = self._gateway_admin_request("/v1/admin/workspace/action", payload, timeout=max(timeout + 45, 90))
@@ -1140,8 +1212,11 @@ class Filter:
             f"{status}\n"
             f"workspace={result.get('workspace', workspace)}\n"
             f"action={result.get('action', action)}\n"
+            f"runner={result.get('runner', runner)}\n"
+            f"container={result.get('container', '')}\n"
             f"resolved_from={result.get('resolved_from', '(unknown)')}\n"
             f"command={self._shell_join(result.get('command', []))}\n"
+            f"executed_command={self._shell_join(result.get('executed_command', []))}\n"
             f"planned_only={result.get('planned_only', False)}\n"
             f"exit_code={result.get('exit_code')}\n"
             f"runner_exit_code={result.get('runner_exit_code')}\n"

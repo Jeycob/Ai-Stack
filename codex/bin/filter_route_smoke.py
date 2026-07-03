@@ -102,6 +102,18 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         expected=("GATEWAY_ADMIN_WEB_FETCH https://example.com", "--max-bytes 300000"),
         unexpected=("GATEWAY_ADMIN_WEB_ANSWER",),
     ),
+    RouteScenario(
+        name="czech-file-explain-docker-compose",
+        prompt="repozitar: ai-stack\nsoubor : docker-compose.yml\n\nprecti docker compose a vysvetli co dela radek po radku",
+        expected=("GATEWAY_ADMIN_EXPLAIN_FILE ai-stack docker-compose.yml 1 400", "vysvetli co dela radek po radku"),
+        unexpected=("GATEWAY_ADMIN_WORKSPACE_SCAN", "nemohl najít", "read-only"),
+    ),
+    RouteScenario(
+        name="project-file-readme-explain",
+        prompt="projekt: ai-stack\nfile: README.md\nVysvětli stručně tento soubor.",
+        expected=("GATEWAY_ADMIN_EXPLAIN_FILE ai-stack README.md 1 400",),
+        unexpected=("GATEWAY_ADMIN_READ_NUMBERED", "nemohl najít"),
+    ),
 )
 
 

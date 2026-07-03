@@ -7,6 +7,7 @@ Tento dokument je startovni kontext pro budouci codex-local agenty v OpenWebUI. 
 Codex-local ma byt lokalni coding agent a domaci AI operator pro tento stack. Ma umet analyzovat repozitare, delat zmeny v registrovanych workspacech, spoustet testy, instalovat projektove zavislosti, zakladat lokalni repozitare, volitelne zakladat GitHub repozitare, dokumentovat provoz a po kontrole pushovat zmeny do GitHubu.
 
 Zakladni pravidlo: autonomie se pridava pres sirsi, auditovatelne capability scopes, ne pres novy marker pro kazdou drobnost. Workspace-run muze mit vetsi pravomoci uvnitr registrovaneho workspace, ale porad musi mit timeouty, logy, omezeni na workspace cestu a nesmi vypisovat secrets. Nepridavat neomezene Docker/Git pravo mimo spravovane runtime flow.
+Run/install/test/build/smoke akce maji ve vychozim stavu bezet v OpenCode kontejneru `codex-opencode-<workspace>` pres `/workspace`, ne primo na WSL hostu. Pokud gateway nema pristup k Docker socketu, ma vratit jasnou auditovatelnou chybu a nepadat potichu do host runneru. Host runner je jen explicitni diagnosticky fallback.
 
 ## Architektura
 
@@ -201,6 +202,13 @@ kazdou drobnost; cilem jsou sirsi capability workflow: deploy/status,
 workspace-run, workspace-action, workspace-autopilot, create-repo recipe, bootstrap-improve recipe a pozdeji dalsi
 profile-based schopnosti.
 
+Pri vyberu workspace nemusi uzivatel psat presne `repo:`. Normalni aliasy jsou
+`repo:`, `repository:`, `repozitar:`, `repozitář:`, `projekt:` a `workspace:`.
+Stejne tak pro soubor funguje `soubor:`, `file:`, `path:` a `cesta:`. Zadani
+typu `repozitar: ai-stack`, `soubor: docker-compose.yml`, `precti a vysvetli
+radek po radku` se ma routovat na file-explain capability, ne do obecneho
+snapshot chatu, aby model neodpovedel, ze soubor nevidi.
+
 Jednoduche "vytvor repository Test2 a vygeneruj ssh klic" znamena lokalni
 repo + deploy public key + workspace registraci. Samo o sobe neznamena GitHub,
 restart stacku, commit nad ai-stackem ani push. `--github`, `--restart` a
@@ -232,11 +240,13 @@ Admin prikazy se posilaji pres technicky prompt, ne jako bezny viditelny text pr
 - `GATEWAY_ADMIN_GIT_DIFF [path]`: ukaze diff jen pro whitelisted commitovatelne soubory. Bezpecne pred pushem.
 - `GATEWAY_ADMIN_REPO_GUARD [workspace] [branch]`: read-only kontrola registrovaneho workspace, branch, dirty stavu a suspicious/sensitive cest bez vypisu obsahu souboru.
 - `GATEWAY_ADMIN_WORKSPACE_SCAN [workspace]`: read-only scan manifestu, jazyku, package script names a navrzenych build/test prikazu bez spousteni prikazu.
-- `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--env KEY=VALUE] [--dry-run]`: capability-based provedeni beznych developerskych akci nad registrovanym workspace. Resolver vybere prikaz z manifestu a scriptu projektu a spusti ho auditovane pres gateway. `verify` se snazi projekt overit agenticky jako sekvenci `lint -> test -> build` s preskakovanim nepodporovanych kroku. `smoke` zkusi najit standardni startup entrypoint a pusti ho jen v kratkem auditovanem okne, aby slo bezpecne odpovedet i na use-case "zkus to rozbehnout a vrat vysledek".
+- `GATEWAY_ADMIN_RUN_WORKSPACE <workspace> [--timeout seconds] [--runner container|host] [--env KEY=VALUE] -- <command> [args...]`: explicitni prikaz v registrovanem workspace. Defaultni runner je `container`.
+- `GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--runner container|host] [--env KEY=VALUE] [--dry-run]`: capability-based provedeni beznych developerskych akci nad registrovanym workspace. Resolver vybere prikaz z manifestu a scriptu projektu a spusti ho auditovane pres gateway. `verify` se snazi projekt overit agenticky jako sekvenci `lint -> test -> build` s preskakovanim nepodporovanych kroku. `smoke` zkusi najit standardni startup entrypoint a pusti ho jen v kratkem auditovanem okne, aby slo bezpecne odpovedet i na use-case "zkus to rozbehnout a vrat vysledek". Defaultni runner je `container`, takze skutecne prikazy bezi pres `docker exec --workdir /workspace codex-opencode-<workspace> ...`. `--runner host` existuje jen pro explicitni diagnostiku. Pri container runneru resolver nemusi mit `npm`, `go`, `cargo` apod. dostupne ve WSL hostu; podle manifestu vybere standardni prikaz a uspech nebo chybu overi az uvnitr kontejneru.
 - `GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]`: vyssi capability nad workspace. Nejdriv si pripravi `verify --dry-run`, z povolenych kroku vybere dalsi bezpecne capability kroky a bud je jen doporuci, nebo je rovnou provede. Po kazdem uspesnem kroku si plan prepocita a vraci `stop_reason`, aby bylo jasne, jestli skoncil kvuli limitu kroku, chybe nebo tomu, ze uz neni co delat. Pokud nenajde nic spustitelneho, vraci i `recommendation` odvozenou ze scanneru projektu, plus `patch_target`, `patch_hint`, `patch_summary` a `read_command`, aby agent neskoncil jen prazdnym "nic nejde", ale mel i smer k dalsimu patche a pripraveny dalsi read-only krok. Pro prirozene pozadavky typu "over projekt a pokracuj sam" je to preferovana cesta; bezny guardrail je ted spis `max_steps=3` a defaultni safe sada `install,verify,smoke,test,build,lint`.
 - Aktualni doporuceny default pro sirsi autonomni beh je `--allow-actions install,verify,smoke,test,build,lint`; `verify` a `smoke` nejsou "special case", ale bezna auditovana capability vrstva pro use-case typu "zkus to rozbehnout" nebo "over a pokracuj sam".
 - `GATEWAY_ADMIN_READ <path>`: precte whitelisted soubor bez cisel radku.
 - `GATEWAY_ADMIN_READ_NUMBERED <path> [start] [end]`: precte whitelisted soubor s realnymi cisly radku. Pouzivat pred presnymi patchemi.
+- `GATEWAY_ADMIN_EXPLAIN_FILE <workspace> <path> [start] [end] [-- dotaz]`: pres gateway bezpecne precte soubor z registrovaneho workspace, odmitne secrets/runtime cesty a necha lokalni model vysvetlit obsah z realneho ocislovaneho textu. Je to preferovana cesta pro prirozene dotazy typu `soubor: docker-compose.yml / vysvetli radek po radku`.
 - `GATEWAY_ADMIN_APPLY_NOW`: aplikuje prilozeny unified diff na whitelisted soubory a provede validaci Python souboru.
 - `GATEWAY_ADMIN_CHECK_STACK [workspace] [model]`: spusti celkovy healthcheck stacku a gateway smoke test.
 - `GATEWAY_ADMIN_SMOKE [workspace]`: spusti gateway smoke test.

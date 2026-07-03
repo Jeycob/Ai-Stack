@@ -40,6 +40,21 @@ IMPORTANT = {
     "Cargo.toml", "go.mod", "pom.xml", "build.gradle", "settings.gradle",
     "CMakeLists.txt", "Makefile", "Dockerfile", "docker-compose.yml"
 }
+WORKSPACE_LABEL_RE = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
+SENSITIVE_FILE_PREFIXES = (
+    ".git/",
+    "codex/state/",
+    "codex/audit/",
+    "logs/",
+    "node_modules/",
+    "__pycache__/",
+    ".venv/",
+    "venv/",
+    "dist/",
+    "build/",
+    ".next/",
+)
+SENSITIVE_FILE_NAMES = {".env"}
 
 def load_registry():
     with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
@@ -54,14 +69,14 @@ def content_to_text(content):
 def select_workspace(messages):
     default, workspaces = load_registry()
     full = "\n".join(content_to_text(m.get("content", "")) for m in messages)
-    m = re.search(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*([A-Za-z0-9_.-]+)\s*$", full)
+    m = re.search(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:\s*([A-Za-z0-9_.-]+)\s*$", full)
     name = m.group(1) if m else default
     if name not in workspaces:
         raise ValueError(f"Unknown workspace '{name}'. Allowed: {', '.join(sorted(workspaces))}")
     return name, workspaces[name]
 
 def strip_routing(text):
-    return re.sub(r"(?im)^\s*(?:repo|workspace|project)\s*:\s*[A-Za-z0-9_.-]+\s*$", "", text).strip()
+    return re.sub(rf"(?im)^\s*{WORKSPACE_LABEL_RE}\s*:\s*[A-Za-z0-9_.-]+\s*$", "", text).strip()
 
 def run_ro(args, cwd, timeout=8):
     try:
@@ -564,6 +579,108 @@ def safe_child_path(base_root, path):
         raise ValueError(f"Path must stay under {base}") from exc
     return target
 
+def workspace_root(workspace_name):
+    _, workspaces = load_registry()
+    if workspace_name not in workspaces:
+        raise ValueError(f"Unknown workspace '{workspace_name}'. Allowed: {', '.join(sorted(workspaces))}")
+    root = Path(workspaces[workspace_name]["path"])
+    if not root.exists():
+        raise ValueError(f"Workspace path does not exist: {root}")
+    return root
+
+def safe_workspace_file(workspace_name, rel_path):
+    if not isinstance(rel_path, str):
+        raise ValueError("path must be a string")
+    rel = rel_path.strip().strip('"').strip("'").lstrip("/")
+    if not rel:
+        raise ValueError("path is required")
+    root = workspace_root(workspace_name)
+    target = safe_child_path(root, rel)
+    rel_norm = target.relative_to(root.resolve(strict=False)).as_posix()
+    if Path(rel_norm).name in SENSITIVE_FILE_NAMES:
+        raise PermissionError(f"Refusing to read sensitive file: {rel_norm}")
+    if any(rel_norm.startswith(prefix) for prefix in SENSITIVE_FILE_PREFIXES):
+        raise PermissionError(f"Refusing to read ignored/runtime path: {rel_norm}")
+    if not target.is_file():
+        raise FileNotFoundError(f"File does not exist in workspace {workspace_name}: {rel_norm}")
+    if target.stat().st_size > 512_000:
+        raise ValueError(f"File is too large for inline explanation: {rel_norm}")
+    return root, target, rel_norm
+
+def read_numbered_workspace_file(workspace_name, rel_path, start=1, end=None, max_lines=400):
+    _, target, rel_norm = safe_workspace_file(workspace_name, rel_path)
+    lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    total = len(lines)
+    start = max(1, int(start or 1))
+    default_end = start + max_lines - 1
+    end = int(end or default_end)
+    end = min(max(start, end), total)
+    if end - start + 1 > max_lines:
+        end = start + max_lines - 1
+    width = max(4, len(str(max(end, total, 1))))
+    numbered = "\n".join(f"{idx:0{width}d}: {lines[idx - 1]}" for idx in range(start, end + 1))
+    return {
+        "path": rel_norm,
+        "start": start,
+        "end": end,
+        "total_lines": total,
+        "numbered": numbered,
+        "truncated": end < total,
+    }
+
+def admin_explain_file(payload):
+    workspace = str(payload.get("workspace") or "").strip()
+    path = str(payload.get("path") or "").strip()
+    start = int(payload.get("start") or 1)
+    end = payload.get("end")
+    question = str(payload.get("question") or "").strip()
+    model = str(payload.get("model") or "qwen2.5-coder:14b")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
+        raise ValueError("Unsafe workspace name")
+    if model not in {"qwen2.5-coder:14b", "qwen2.5-coder:32b"}:
+        raise ValueError("Unsupported explain model")
+
+    data = read_numbered_workspace_file(workspace, path, start=start, end=end, max_lines=400)
+    prompt_question = question or "Přečti tento soubor a vysvětli ho řádek po řádku."
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Jsi lokální senior coding agent. Vysvětli poskytnutý očíslovaný soubor. "
+                "Odpovídej česky, věcně a neopisuj celý soubor. Používej odkazy na čísla řádků. "
+                "Když jsou sousední řádky jedna logická část, spoj je do jedné stručné položky. "
+                "Neříkej, že soubor nemáš; soubor je níže ve zprávě."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Workspace: {workspace}\n"
+                f"Soubor: {data['path']}\n"
+                f"Rozsah: {data['start']}-{data['end']} z {data['total_lines']} řádků\n"
+                f"Úkol: {prompt_question}\n\n"
+                "Očíslovaný obsah:\n"
+                f"```text\n{data['numbered']}\n```"
+            ),
+        },
+    ]
+    resp = ollama_chat(model, messages, timeout=300)
+    answer = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    return {
+        "ok": bool(answer),
+        "action": "file_explain",
+        "workspace": workspace,
+        "path": data["path"],
+        "start": data["start"],
+        "end": data["end"],
+        "total_lines": data["total_lines"],
+        "truncated": data["truncated"],
+        "question": prompt_question,
+        "answer": answer or "Model nevrátil odpověď.",
+        "numbered": data["numbered"],
+        "usage": resp.get("usage", {}),
+    }
+
 def run_text(cmd, cwd, timeout=60):
     proc = subprocess.run(
         cmd,
@@ -865,18 +982,21 @@ def admin_run_workspace(payload):
     command = payload.get("command") or []
     timeout = int(payload.get("timeout", 300))
     env_map = payload.get("env") or {}
+    runner = str(payload.get("runner") or os.getenv("CODEX_GATEWAY_WORKSPACE_RUNNER", "container")).strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("Unsafe workspace name")
     if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
         raise ValueError("command must be a non-empty string list")
     if not isinstance(env_map, dict):
         raise ValueError("env must be an object")
+    if runner not in {"container", "host"}:
+        raise ValueError("runner must be container or host")
 
     script = REPO_ROOT / "codex/bin/run_check.py"
     if not script.is_file():
         raise FileNotFoundError("codex/bin/run_check.py is missing")
 
-    cmd = [os.environ.get("PYTHON", "python3"), str(script), "--timeout", str(timeout), "--json"]
+    cmd = [os.environ.get("PYTHON", "python3"), str(script), "--timeout", str(timeout), "--runner", runner, "--json"]
     for key, value in env_map.items():
         if not isinstance(key, str) or not isinstance(value, str):
             raise ValueError("env keys and values must be strings")
@@ -911,6 +1031,7 @@ def admin_workspace_action(payload):
     timeout = int(payload.get("timeout") or 900)
     env_map = payload.get("env") or {}
     dry_run = bool(payload.get("dry_run", False))
+    runner = str(payload.get("runner") or os.getenv("CODEX_GATEWAY_WORKSPACE_RUNNER", "container")).strip()
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
@@ -920,12 +1041,14 @@ def admin_workspace_action(payload):
         raise ValueError("timeout must be between 1 and 3600")
     if not isinstance(env_map, dict):
         raise ValueError("env must be an object")
+    if runner not in {"container", "host"}:
+        raise ValueError("runner must be container or host")
 
     script = REPO_ROOT / "codex/bin/workspace_action.py"
     if not script.is_file():
         raise FileNotFoundError("codex/bin/workspace_action.py is missing")
 
-    cmd = [os.environ.get("PYTHON", "python3"), str(script), action, "--timeout", str(timeout), "--json"]
+    cmd = [os.environ.get("PYTHON", "python3"), str(script), action, "--timeout", str(timeout), "--runner", runner, "--json"]
     if dry_run:
         cmd.append("--dry-run")
     for key, value in env_map.items():
@@ -1541,6 +1664,12 @@ class H(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(n).decode() or "{}")
                 return self.sendj(admin_web_answer(payload))
+            if self.path == "/v1/admin/file/explain":
+                if not admin_ok(self):
+                    return self.sendj({"error": "forbidden"}, 403)
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(n).decode() or "{}")
+                return self.sendj(admin_explain_file(payload))
             if self.path == "/v1/admin/workspace/add":
                 if not admin_ok(self):
                     return self.sendj({"error": "forbidden"}, 403)
