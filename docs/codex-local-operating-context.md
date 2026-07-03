@@ -144,7 +144,10 @@ Pro opakovane mentor workflow nad auditem pouzivej helper
 tebe a vola `owui_chat_turn.py` pod kapotou. Je vhodny pro bezne operace typu
 scan workspace, install/test/build/lint/verify, explicitni run command nebo
 deploy. Rezim `audit` umi orchestrace po vice turnech: scan, verify dry-run a
-nasledne reasoning navrh dalsiho kroku pres `--send-history`. Rezim
+nasledne reasoning navrh dalsiho kroku pres `--send-history`. Samotny
+`owui_chat_turn.py` ale uz pro follow-up viditelne tahy umi auto-history i bez
+explicitniho flagu, takze kratke navazujici prompty neztraci workspace context.
+Rezim
 `autopilot` jde o krok dal: po `scan -> verify` necha codex-local vybrat prave
 jeden dalsi bezpecny capability krok z povolene mnoziny a muze ho rovnou
 spustit.

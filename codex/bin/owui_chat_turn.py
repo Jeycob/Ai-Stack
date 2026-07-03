@@ -57,7 +57,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", help="Write assistant response text to file")
     parser.add_argument("--response-json-out", help="Write raw completion JSON to file")
     parser.add_argument("--turn-key", help="Stable idempotency key for reusing an already running visible turn")
-    parser.add_argument("--send-history", action="store_true", help="Send the visible chat chain to the model")
+    parser.add_argument(
+        "--send-history",
+        dest="send_history",
+        action="store_true",
+        default=None,
+        help="Send the visible chat chain to the model. Default is auto for visible-chat follow-ups.",
+    )
+    parser.add_argument(
+        "--no-send-history",
+        dest="send_history",
+        action="store_false",
+        help="Force one-shot mode and send only the current technical prompt to the model.",
+    )
     parser.add_argument("--timeout", type=float, default=30.0, help="Per-attempt timeout")
     parser.add_argument("--attempts", type=int, default=12)
     parser.add_argument("--initial-delay", type=float, default=0.5)
@@ -584,6 +596,14 @@ def messages_for_model(messages: dict, user_id: str, technical_prompt: str, send
     return chain
 
 
+def auto_send_history(messages: dict, user_id: str) -> bool:
+    chain = chain_messages(messages, user_id)
+    if not chain:
+        return False
+    prior_messages = chain[:-1]
+    return any(msg.get("role") in {"user", "assistant"} for msg in prior_messages)
+
+
 def response_text(completion: dict | list | str) -> str:
     if not isinstance(completion, dict):
         return str(completion)
@@ -856,7 +876,8 @@ def main() -> int:
         if live_message_id is not None:
             live_stop, live_thread = start_live_status(args, live_message_id, started)
 
-    model_messages = messages_for_model(messages, user_id, technical_prompt, args.send_history)
+    send_history = args.send_history if args.send_history is not None else auto_send_history(messages, user_id)
+    model_messages = messages_for_model(messages, user_id, technical_prompt, send_history)
     completion_payload = {"model": args.model, "messages": model_messages, "stream": False}
     try:
         completion_status, completion = http_request(args, "POST", "/api/chat/completions", completion_payload, allow_error=True)

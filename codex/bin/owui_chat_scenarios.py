@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -115,7 +116,7 @@ SCENARIOS: dict[str, Scenario] = {
             ),
             ScenarioTurn(
                 prompt_template="vrat mi public key",
-                expected_substrings=("AGENT_LOOP", "workflow=ssh_key_show_public", "ssh-ed25519"),
+                expected_substrings=("AGENT_LOOP", "workflow=ssh_key_show_public", "github-TestCode_ed25519.pub", "TestCode@local"),
             ),
         ),
     ),
@@ -317,9 +318,10 @@ def run_scenario(args: argparse.Namespace, scenario: Scenario) -> dict[str, obje
         step_results: list[dict[str, object]] = []
         ok = True
         started = time.time()
+        run_id = uuid.uuid4().hex[:12]
         for index, turn_spec in enumerate(scenario.turns, start=1):
             prompt = turn_prompt(turn_spec, args.workspace)
-            turn_key = f"scenario:{scenario.name}:{args.workspace}:turn-{index}"
+            turn_key = f"scenario:{scenario.name}:{args.workspace}:run-{run_id}:turn-{index}"
             step = run_single_turn(
                 args,
                 scenario,
@@ -339,6 +341,7 @@ def run_scenario(args: argparse.Namespace, scenario: Scenario) -> dict[str, obje
             "description": scenario.description,
             "multi_turn": True,
             "duration_ms": int((time.time() - started) * 1000),
+            "run_id": run_id,
             "steps": step_results,
         }
 

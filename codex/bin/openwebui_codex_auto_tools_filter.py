@@ -80,6 +80,14 @@ class Filter:
             default=-10,
             description="Run early so Codex tool_ids or admin intents are prepared before later filters/model calls.",
         )
+        repo_root: str = Field(
+            default="auto",
+            description="ai-stack path inside the Open WebUI container, or auto.",
+        )
+        candidate_roots: str = Field(
+            default="/data/repositories/ai-stack,/app/backend/data/repositories/ai-stack,/Repositories/ai-stack,/mnt/c/Repositories/ai-stack",
+            description="Comma-separated fallback ai-stack paths.",
+        )
         enable_codex_local_intent_router: bool = Field(
             default=True,
             description="Translate narrow natural-language codex-local ai-stack admin intents into explicit gateway admin commands.",
@@ -1063,11 +1071,42 @@ class Filter:
         )
         return self._mentor_tasks_helper_command("dispatch", workspace, tasks, recommend_only=recommend_only)
 
-    def _roadmap_path(self) -> Path:
+    def _repo_root(self) -> Path:
+        candidates = []
+        if self.valves.repo_root and self.valves.repo_root != "auto":
+            candidates.append(self.valves.repo_root)
+        workspace_context_file = getattr(_workspace_context, "__file__", "")
+        if workspace_context_file:
+            try:
+                candidates.append(str(Path(workspace_context_file).resolve().parents[2]))
+            except Exception:
+                pass
         module_file = globals().get("__file__")
         if module_file:
-            return Path(module_file).resolve().parents[2] / "docs" / "codex-local-capability-roadmap.json"
-        return Path.cwd() / "docs" / "codex-local-capability-roadmap.json"
+            try:
+                candidates.append(str(Path(module_file).resolve().parents[2]))
+            except Exception:
+                pass
+        candidates.extend(x.strip() for x in self.valves.candidate_roots.split(",") if x.strip())
+
+        checked = []
+        seen = set()
+        for candidate in candidates:
+            try:
+                root = Path(candidate).resolve()
+            except Exception:
+                root = Path(candidate)
+            key = str(root)
+            if key in seen:
+                continue
+            seen.add(key)
+            checked.append(key)
+            if (root / "codex/gateway/gateway.py").is_file():
+                return root
+        raise FileNotFoundError("ai-stack repo root not found; checked: " + ", ".join(checked))
+
+    def _roadmap_path(self) -> Path:
+        return self._repo_root() / "docs" / "codex-local-capability-roadmap.json"
 
     def _load_capability_roadmap_payload(self) -> dict:
         if isinstance(EMBEDDED_CAPABILITY_ROADMAP, dict):
@@ -1839,7 +1878,10 @@ class Filter:
         return None
 
     def _workspaces_file(self) -> Path:
-        return MODULE_DIR.parent / "workspaces.json"
+        env_path = os.getenv("CODEX_WORKSPACES_FILE", "").strip()
+        if env_path:
+            return Path(env_path)
+        return self._repo_root() / "codex/workspaces.json"
 
     def _workspaces(self) -> dict[str, dict]:
         try:
