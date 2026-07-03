@@ -385,6 +385,14 @@ ktery vytvori maly Vite/React/TypeScript baseline vcetne `src/App.test.tsx`,
 autonomii, protoze `bootstrap-dispatch` pak umi rovnou navazat na `install`,
 `test`, `smoke` a `build` bez dalsiho improvizovaneho scaffold kroku.
 
+Stejny princip ted plati i pro `threejs-app`: audited starter
+`codex/bin/scaffold_threejs_app.py` vytvori malou Three.js scenu nad Vite +
+TypeScript baseline, vcetne `src/main.ts`, `src/styles.css`, `vite.config.ts`
+a smoke-friendly dev server skriptu. Prakticky to znamena, ze codex-local uz
+pro 3D web use-case nevraci jen obecne “pouzij three + vite”, ale rovnou
+vykonatelny bootstrap krok, na ktery jde prirozene navazat pres `install`,
+`smoke` a `build`.
+
 Kvuli cene promptu je vhodne rozlisovat plny a compact mentor brief. Plny
 execution brief je porad dobry pro debugging, roadmap vysvetleni a hlubsi audit.
 Compact brief je vhodny pro dalsi orchestration handoff mezi helpery: drzi jen

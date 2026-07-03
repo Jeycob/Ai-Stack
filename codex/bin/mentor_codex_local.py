@@ -621,8 +621,8 @@ def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
             "install -> typecheck or test -> run smoke",
         ),
         "threejs-app": (
-            "npm create vite@latest . -- --template vanilla-ts && npm install three",
-            "package.json, src/main.ts, index.html, vite.config.ts",
+            "codex_scaffold_threejs_app",
+            "package.json, src/main.ts, src/styles.css, index.html, vite.config.ts, tsconfig.json",
             "install -> dev server smoke -> build",
         ),
         "opengl-native": (
@@ -1677,6 +1677,19 @@ def bootstrap_runner_command(repo_name: str, recipe: str, timeout: int = 1800) -
         ]
     if recipe == "codex_scaffold_node_service":
         script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_node_service.py"
+        return [
+            sys.executable,
+            "codex/bin/run_check.py",
+            repo_name,
+            "--timeout",
+            str(timeout),
+            "--",
+            sys.executable,
+            str(script),
+            ".",
+        ]
+    if recipe == "codex_scaffold_threejs_app":
+        script = Path(__file__).resolve().parents[2] / "codex/bin/scaffold_threejs_app.py"
         return [
             sys.executable,
             "codex/bin/run_check.py",
@@ -2746,6 +2759,8 @@ def run_self_check_sequence(args: argparse.Namespace) -> int:
             "mentor-brief-bootstrap",
             "--scenario",
             "mentor-brief-react-scaffold",
+            "--scenario",
+            "mentor-brief-threejs-scaffold",
             "--scenario",
             "mentor-brief-fastapi-scaffold",
         ],
