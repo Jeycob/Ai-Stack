@@ -267,6 +267,8 @@ Praktický dopad je hlavně u Git/GitHub úloh. Prompt typu:
 
 už nemá spadnout do bootstrapu nového repa jen proto, že obsahuje slova `repo`, `git` nebo `ssh`. Pokud workspace `TestCode` existuje, `TaskSpec` to má pochopit jako práci uvnitř existujícího workspace a zvolit capability `workspace_git_publish`: případně `git init`, nastavení `origin`, commit změn, push branch `main` přes workspace SSH key a při auth blockerech vrácení `MANUAL_STEP_REQUIRED` s public key a přesným dalším krokem místo generic rady.
 
+TaskSpec také prochází validací capability. Když model požádá o neznámou nebo zatím neimplementovanou capability, gateway vrátí `AGENT_LOOP_NEEDS_ATTENTION` s `missing_capabilities` a recovery odkazem na `docs/codex-local-capability-roadmap.json`. Nesmí si vybrat “něco podobného”, protože to je přesně cesta k tomu, že agent udělá jinou věc než uživatel chtěl.
+
 Novější vrstva nad tím je `GATEWAY_ADMIN_AGENT_LOOP`: intent-first orchestrace pro běžný codex-local chat. Tady už router nemá být „hlavní mozek“. Tenká OpenWebUI vrstva pouze předá workspace a původní task do gateway, a samotný loop udělá sled `intent/plán -> policy check -> capability execution -> observation -> recovery/verify -> report`.
 
 Prakticky to znamená:

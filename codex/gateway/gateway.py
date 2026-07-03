@@ -703,6 +703,31 @@ AGENT_LOOP_WORKFLOWS = {
     "clarify",
 }
 AGENT_LOOP_ACTIONS = {"install", "verify", "smoke", "test", "build", "lint"}
+AGENT_CAPABILITY_TO_WORKFLOW = {
+    "review": "review",
+    "workspace_review": "review",
+    "read_only_review": "review",
+    "workspace_edit": "edit",
+    "edit": "edit",
+    "workspace_run": "run",
+    "run": "run",
+    "workspace_autopilot": "autopilot",
+    "autopilot": "autopilot",
+    "workspace_repo_bootstrap": "bootstrap",
+    "bootstrap": "bootstrap",
+    "workspace_git_publish": "workspace_git_publish",
+    "workspace_ssh_key_create": "ssh_key_create",
+    "ssh_key_create": "ssh_key_create",
+    "workspace_ssh_key_show_public": "ssh_key_show_public",
+    "ssh_key_show_public": "ssh_key_show_public",
+    "public_web_access": "web_answer",
+    "web_answer": "web_answer",
+    "web_fetch": "web_fetch",
+    "stack_deploy": "deploy",
+    "deploy": "deploy",
+    "clarify_or_infer_capability": "clarify",
+    "clarify": "clarify",
+}
 
 
 def extract_json_object(text):
@@ -1438,6 +1463,27 @@ def agent_capability_hints_from_task(task, workspace_exists):
     return capabilities
 
 
+def split_agent_capabilities(capabilities):
+    implemented = []
+    missing = []
+    for raw in capabilities or []:
+        capability = str(raw or "").strip()
+        if not capability:
+            continue
+        if capability.startswith("workspace_action:"):
+            action = capability.split(":", 1)[1].strip().lower()
+            if action in AGENT_LOOP_ACTIONS:
+                implemented.append(capability)
+            else:
+                missing.append(capability)
+            continue
+        if capability in AGENT_CAPABILITY_TO_WORKFLOW:
+            implemented.append(capability)
+        else:
+            missing.append(capability)
+    return implemented, missing
+
+
 def agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
     registry = load_registry()[1]
     workspace_list = ", ".join(sorted(registry))
@@ -1601,6 +1647,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         "remote_url": remote_url,
         "desired_end_state": desired_end_state,
         "required_capabilities": required_capabilities,
+        "missing_capabilities": split_agent_capabilities(required_capabilities)[1],
         "missing_inputs": _string_list(missing_inputs),
         "risk_level": risk_level,
         "recovery_plan": recovery_plan,
@@ -1617,7 +1664,9 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
 
 
 def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, workspace_exists, task):
-    capabilities = set(spec.get("required_capabilities") or [])
+    required_capabilities = _string_list(spec.get("required_capabilities"))
+    implemented_capabilities, missing_capabilities = split_agent_capabilities(required_capabilities)
+    capabilities = set(implemented_capabilities)
     read_only = bool(spec.get("read_only"))
     workflow = "clarify"
     action = ""
@@ -1627,7 +1676,9 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     repo_name = ""
     remote_url = str(spec.get("remote_url") or "").strip()
 
-    if read_only:
+    if missing_capabilities:
+        workflow = "clarify"
+    elif read_only:
         workflow = "review"
     elif spec.get("missing_inputs"):
         workflow = "clarify"
@@ -1675,6 +1726,9 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         "github": "github" in remote_url.lower() or "github" in str(task or "").lower(),
         "remote_url": remote_url,
         "desired_end_state": str(spec.get("desired_end_state") or "").strip(),
+        "required_capabilities": required_capabilities,
+        "missing_capabilities": missing_capabilities,
+        "missing_inputs": _string_list(spec.get("missing_inputs")),
         "url": str(spec.get("url") or "").strip(),
         "question": str(spec.get("question") or "").strip(),
         "ssh_comment": str(spec.get("ssh_comment") or "").strip(),
@@ -1922,12 +1976,38 @@ def admin_agent_loop(payload):
 
     workflow = plan["workflow"]
     if workflow == "clarify":
-        result["ok"] = True
-        result["summary"] = "Potřebuju upřesnit zadání nebo chybějící cílový workspace."
-        result["answer"] = (
-            "Nejsem si ještě jistý správným workflow. Upřesni prosím cílový workspace nebo konkrétní akci "
-            "(např. review, edit, install, verify, bootstrap repo)."
-        )
+        missing_capabilities = _string_list(plan.get("missing_capabilities") or taskspec.get("missing_capabilities"))
+        missing_inputs = _string_list(plan.get("missing_inputs") or taskspec.get("missing_inputs"))
+        result["ok"] = False
+        if missing_capabilities:
+            result["summary"] = "NEEDS_ATTENTION: TaskSpec requested unsupported capability."
+            result["recovery"] = {
+                "text": "Doplň nebo implementuj pojmenovanou capability, pak task zopakuj. Gateway nebude provádět jinou akci jako náhradu.",
+                "missing_capabilities": missing_capabilities,
+                "capability_registry": "docs/codex-local-capability-roadmap.json",
+            }
+            result["answer"] = (
+                "NEEDS_ATTENTION: chybí podporovaná capability "
+                + ", ".join(missing_capabilities)
+                + ". Neprovedu náhradní workflow, aby se nestalo něco jiného než uživatel chtěl."
+            )
+        elif missing_inputs:
+            result["summary"] = "NEEDS_ATTENTION: TaskSpec is missing required inputs."
+            result["recovery"] = {
+                "text": "Doplň chybějící vstupy a zopakuj task; bez nich by agent musel hádat cílový stav.",
+                "missing_inputs": missing_inputs,
+            }
+            result["answer"] = "NEEDS_ATTENTION: chybí vstupy " + ", ".join(missing_inputs) + "."
+        else:
+            result["summary"] = "NEEDS_ATTENTION: Agent could not map TaskSpec to an executable capability."
+            result["recovery"] = {
+                "text": str(taskspec.get("recovery_plan") or "Zpřesni cíl nebo přidej capability do registry."),
+                "required_capabilities": _string_list(taskspec.get("required_capabilities")),
+            }
+            result["answer"] = (
+                "NEEDS_ATTENTION: nerozpoznal jsem bezpečný capability krok. "
+                "Neprovedu náhradní akci, která by mohla mířit jinam než zadání."
+            )
         return result
 
     if workflow == "review":

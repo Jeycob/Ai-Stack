@@ -229,6 +229,57 @@ def assert_workspace_git_publish_manual_recovery() -> None:
     print("WORKSPACE_GIT_PUBLISH_MANUAL_RECOVERY_OK")
 
 
+def assert_unknown_capability_needs_attention() -> None:
+    task = "Synchronizuj produkční databázi přes neexistující remote capability."
+    taskspec = gateway.normalize_agent_taskspec(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "sync production database",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "production_database_synced",
+            "required_capabilities": ["remote_database_write"],
+            "missing_inputs": [],
+            "risk_level": "high",
+            "recovery_plan": "Add an audited remote_database_write capability before executing.",
+            "read_only": False,
+        },
+        "ai-stack",
+        "ai-stack",
+        True,
+        task,
+    )
+    plan = gateway.agent_taskspec_to_plan(taskspec, "ai-stack", "ai-stack", True, task)
+    if plan.get("workflow") != "clarify":
+        raise SystemExit(f"expected clarify workflow for unknown capability, got {plan!r}")
+    if plan.get("missing_capabilities") != ["remote_database_write"]:
+        raise SystemExit(f"expected missing_capabilities to carry unknown capability, got {plan!r}")
+
+    with patch.object(
+        gateway,
+        "agent_controller_workspace",
+        return_value=("ai-stack", True, {"ai-stack": {"path": str(ROOT)}}),
+    ), patch.object(
+        gateway,
+        "agent_plan",
+        return_value=(plan, taskspec, '{"required_capabilities":["remote_database_write"]}'),
+    ):
+        result = gateway.admin_agent_loop({"workspace": "ai-stack", "task": task})
+    if result.get("ok"):
+        raise SystemExit(f"unknown capability must not be ok, got {result!r}")
+    if result.get("workflow") != "clarify":
+        raise SystemExit(f"expected clarify workflow in agent result, got {result!r}")
+    recovery = result.get("recovery") or {}
+    if recovery.get("missing_capabilities") != ["remote_database_write"]:
+        raise SystemExit(f"expected recovery to list missing capability, got {result!r}")
+    text = gateway.agent_loop_response_text(result)
+    if "AGENT_LOOP_NEEDS_ATTENTION" not in text or "remote_database_write" not in text:
+        raise SystemExit(f"expected visible NEEDS_ATTENTION with missing capability, got {text!r}")
+    print("UNKNOWN_CAPABILITY_NEEDS_ATTENTION_OK")
+
+
 def assert_agent_loop_prefers_llm_plan() -> None:
     llm_plan = {
         "workflow": "review",
@@ -676,6 +727,7 @@ def main() -> int:
     assert_verify_prefers_action_over_run_without_explicit_command()
     assert_explicit_command_stays_run()
     assert_workspace_git_publish_manual_recovery()
+    assert_unknown_capability_needs_attention()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()
     assert_codex_local_payload_routing()
