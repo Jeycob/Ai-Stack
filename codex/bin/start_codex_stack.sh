@@ -60,6 +60,13 @@ if data.get("codex_local_ready") is not True:
     issues.append("codex_local_ready")
 if not str(data.get("runtime_fingerprint") or "").strip():
     issues.append("runtime_fingerprint")
+model = data.get("model_runtime") or {}
+if model.get("default_alias") != "codex-local":
+    issues.append("model_runtime.default_alias")
+if "structured_attempt_timeout" not in model:
+    issues.append("model_runtime.structured_attempt_timeout")
+if "structured_backend_usable" not in model:
+    issues.append("model_runtime.structured_backend_usable")
 if issues:
     print("CODEX_GATEWAY_CONTRACT_FAILED")
     print("issues=" + ",".join(issues))
@@ -74,6 +81,75 @@ PY
     echo "--- end gateway /health ---" >&2
     return 1
   fi
+}
+
+kill_gateway_port_owner() {
+  python3 - <<'PY'
+import os
+import signal
+import time
+
+PORT_HEX = format(9101, "04X")
+
+
+def socket_inodes_for_port():
+    inodes = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = open(table, encoding="ascii").read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 10:
+                continue
+            try:
+                _addr, port = parts[1].rsplit(":", 1)
+            except ValueError:
+                continue
+            if port.upper() == PORT_HEX:
+                inodes.add(parts[9])
+    return inodes
+
+
+def pids_for_inodes(inodes):
+    pids = set()
+    if not inodes:
+        return pids
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(f"{fd_dir}/{fd}")
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target[8:-1] in inodes:
+                pids.add(int(pid))
+                break
+    return pids
+
+
+pids = pids_for_inodes(socket_inodes_for_port())
+for sig in (signal.SIGTERM, signal.SIGKILL):
+    signaled = False
+    for pid in sorted(pids):
+        try:
+            os.kill(pid, sig)
+            signaled = True
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            print(f"gateway_port_kill_permission_denied pid={pid}", flush=True)
+    if not signaled:
+        break
+    time.sleep(0.5)
+PY
 }
 
 mkdir -p "$STATE_ROOT" "$AUDIT_ROOT"
@@ -187,6 +263,7 @@ if [ -f "$STATE_ROOT/codex-gateway.pid" ]; then
   kill "$(cat "$STATE_ROOT/codex-gateway.pid")" >/dev/null 2>&1 || true
 fi
 pkill -f "$GATEWAY" >/dev/null 2>&1 || true
+kill_gateway_port_owner || true
 
 runuser -u "$AI_USER" -- bash -lc "PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
 
