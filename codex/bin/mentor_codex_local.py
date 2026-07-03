@@ -908,6 +908,54 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
     return 0
 
 
+def recommended_next_step(decision: dict[str, str], workspace: str, task: str) -> str:
+    workflow = decision["workflow"]
+    task = task.strip()
+    if workflow == "run":
+        command = extract_run_command(task)
+        return f"python3 codex/bin/mentor_codex_local.py delegate {workspace} $'repo: {workspace}\\nspusť příkaz: {command}'" if command else f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+    if workflow == "apply-safe":
+        return f"python3 codex/bin/mentor_codex_local.py apply-safe {workspace}"
+    if workflow == "improve":
+        return f"python3 codex/bin/mentor_codex_local.py improve {workspace}"
+    if workflow == "autopilot":
+        return f"python3 codex/bin/mentor_codex_local.py autopilot {workspace}"
+    return f"python3 codex/bin/mentor_codex_local.py audit {workspace}"
+
+
+def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task: str) -> str:
+    workflow = decision["workflow"]
+    if workflow == "run":
+        return task if task.lower().startswith("repo: ") else f"repo: {workspace}\n{task}"
+    if workflow == "apply-safe":
+        return f"repo: {workspace}\nUprav malý bezpečný patch a auditovaně ho aplikuj."
+    if workflow == "improve":
+        return f"repo: {workspace}\nFixni to a dotáhni co zvládneš."
+    if workflow == "autopilot":
+        return f"repo: {workspace}\nOvěř projekt a pokračuj sám."
+    return f"repo: {workspace}\nAnalyzuj projekt a navrhni další krok. Nic needituj."
+
+
+def run_report_sequence(args: argparse.Namespace) -> int:
+    decision = classify_task(args.task)
+    print(f"MENTOR_REPORT_WORKSPACE={args.workspace}")
+    print(f"MENTOR_REPORT_TASK={args.task}")
+    print(f"MENTOR_REPORT_RUNTIME_PROFILE={decision['runtime_profile']}")
+    print(f"MENTOR_REPORT_WORKFLOW={decision['workflow']}")
+    print(f"MENTOR_REPORT_CONFIDENCE={decision['confidence']}")
+    print(f"MENTOR_REPORT_REASON={decision['reason']}")
+    print(f"MENTOR_REPORT_GUARDRAIL_SUMMARY={decision['guardrail_summary']}")
+    print(f"MENTOR_REPORT_CAPABILITY_ID={decision['capability_id']}")
+    print(f"MENTOR_REPORT_CAPABILITY_SCOPE={decision['capability_scope']}")
+    print(f"MENTOR_REPORT_CAPABILITY_SUMMARY={decision['capability_summary']}")
+    print(f"MENTOR_REPORT_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+    print(f"MENTOR_REPORT_NEXT_HELPER={recommended_next_step(decision, args.workspace, args.task)}")
+    print("MENTOR_REPORT_AUDIT_CHAT_PROMPT<<EOF")
+    print(audit_chat_prompt_suggestion(decision, args.workspace, args.task))
+    print("EOF")
+    return 0
+
+
 def build_and_invoke_mode(args: argparse.Namespace) -> int:
     if args.mode == "audit":
         return run_audit_sequence(args)
@@ -925,6 +973,8 @@ def build_and_invoke_mode(args: argparse.Namespace) -> int:
         return run_delegate_sequence(args)
     if args.mode == "profile":
         return run_profile_sequence(args)
+    if args.mode == "report":
+        return run_report_sequence(args)
 
     visible, technical = build_prompts(args)
     rc, _ = invoke_turn(args, visible, technical)
@@ -1021,6 +1071,11 @@ def parse_args() -> argparse.Namespace:
     profile.add_argument("workspace")
     profile.add_argument("task")
     profile.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; profile mode never calls OpenWebUI")
+
+    report = sub.add_parser("report", help="Produce a compact mentor report for a task: workflow, runtime profile, capability metadata, guardrails, and recommended next step")
+    report.add_argument("workspace")
+    report.add_argument("task")
+    report.add_argument("--dry-run", action="store_true", help="Accepted for CLI symmetry; report mode never calls OpenWebUI")
 
     create_repo = sub.add_parser("create-repo", help="Ask codex-local to create a repository/workspace")
     create_repo.add_argument("name")

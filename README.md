@@ -302,6 +302,10 @@ Stabilní capability ID a jejich stručný roadmap popis jsou verzované v `docs
 
 `Codex Auto Tools Filter` teď navíc umí pro některé přirozené požadavky, které jsou širší než dnešní safe runtime scope, propsat do audit stopy i capability-roadmap doporučení. Typicky u GitHub/release nebo host-runtime úkolů zapíše `CAPABILITY_ROADMAP_ID`, `CAPABILITY_ROADMAP_SCOPE` a `CAPABILITY_ROADMAP_SUMMARY`, místo aby jen mlčky selhal nebo přehnaně rozšířil runtime.
 
+Pro levné mentoring rozhodnutí nad jedním úkolem je tam i `report`: vrátí workflow, runtime profile, capability metadata, guardrail summary, missing capability hint, doporučený další helper command a rovnou i návrh viditelného audit chat promptu:
+
+    python3 codex/bin/mentor_codex_local.py report ai-stack "Fixni to a dotáhni co zvládneš."
+
 OpenWebUI helpery čtou API key nejdřív z `OWUI_API_KEY` a potom z ignorovaného souboru `codex/state/openwebui-api.key` nebo z cesty v `OWUI_API_KEY_FILE`. Preferovaný způsob uložení bez vypsání klíče do shell historie je:
 
     codex/bin/store_openwebui_api_key.sh

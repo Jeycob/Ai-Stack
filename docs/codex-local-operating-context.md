@@ -137,6 +137,7 @@ auditovanych capabilities. Prakticky to znamena:
 - pro sirsi "dotahni to co nejdal" workflow pouzivat `mentor_codex_local.py improve`,
 - pro bezne mentor orchestracni volani bez rucni volby modu pouzivat `mentor_codex_local.py delegate`,
 - pro rychle rozhodnuti o sirce pravomoci pouzivat `mentor_codex_local.py profile`,
+- pro kompaktní mentoring souhrn nad jednim taskem pouzivat `mentor_codex_local.py report`,
 - capability rozsirovat po profilech use-casu, ne po jednotlivych vetach.
 
 Priklad doporucovaciho autopilota:
@@ -191,6 +192,12 @@ Priklad profilove klasifikace bez spousteni jakychkoli akci:
 python3 codex/bin/mentor_codex_local.py profile ai-stack "Uprav README a aplikuj maly patch"
 ```
 
+Priklad mentor reportu, ktery vrati workflow, capability metadata, guardraily i doporuceny dalsi helper krok:
+
+```bash
+python3 codex/bin/mentor_codex_local.py report ai-stack "Fixni to a dotahni co zvladnes."
+```
+
 Profilove rozhodnuti vraci i:
 
 - `confidence`: jak silne helper veri, ze zvoleny workflow odpovida zadani.
@@ -199,6 +206,11 @@ Profilove rozhodnuti vraci i:
 - `capability_scope`: hruby scope capability, napriklad `remote_repo`, `host_runtime`, `workspace_runtime`, `workspace_capability` nebo `mentoring`.
 - `capability_summary`: kratky verzovany popis capability z roadmap registry.
 - `missing_capability_hint`: nejuzsi dalsi capability scope, ktery by daval smysl pridat nebo explicitne pouzit, pokud je ukol sirsi nez stavajici guardraily.
+
+Report navic vraci:
+
+- `MENTOR_REPORT_NEXT_HELPER`: doporuceny dalsi helper command.
+- `MENTOR_REPORT_AUDIT_CHAT_PROMPT`: navrh viditelneho promptu pro OpenWebUI audit chat.
 
 Capability registry je verzovany v `docs/codex-local-capability-roadmap.json` a slouzi jako maly zdroj pravdy pro budouci helpery, prompt tuning i OpenWebUI routovani.
 
