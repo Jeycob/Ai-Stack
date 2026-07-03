@@ -523,6 +523,7 @@ def admin_add_workspace(payload):
     )
     result = {
         "ok": proc.returncode == 0,
+        "workspace_registered": proc.returncode == 0,
         "action": "add_workspace",
         "name": name,
         "path": path,
@@ -541,7 +542,14 @@ def admin_add_workspace(payload):
         )
         result["restart_exit_code"] = bash.returncode
         result["restart_output"] = bash.stdout.strip()
-        result["ok"] = result["ok"] and bash.returncode == 0
+        result["restart_ok"] = bash.returncode == 0
+        result["ok"] = result["ok"] and result["restart_ok"]
+        if not result["restart_ok"]:
+            result["next_step"] = "Run the ai-stack deploy/restart capability after reviewing the created workspace."
+    elif restart:
+        result["restart_ok"] = False
+    else:
+        result["restart_ok"] = None
     return result
 
 def safe_child_path(base_root, path):
@@ -823,9 +831,21 @@ def admin_create_local_repo(payload):
     workspace_result = admin_add_workspace(workspace_payload)
 
     rc, status_out = run_text(["git", "status", "--short", "--branch"], repo_path, 30)
-    ok = bool(workspace_result.get("ok")) and rc == 0 and (not github or bool(github_result.get("ok")))
+    workspace_registered = bool(workspace_result.get("workspace_registered")) or workspace_result.get("exit_code") == 0
+    restart_ok = workspace_result.get("restart_ok")
+    restart_blocked = restart and restart_ok is False and workspace_registered
+    github_ok = (not github) or bool(github_result.get("ok"))
+    repo_ok = rc == 0 and workspace_registered and github_ok
+    ok = repo_ok and not restart_blocked
+    partial_ok = repo_ok and restart_blocked
+    next_step = ""
+    if partial_ok:
+        next_step = "Repository, SSH key, and workspace registration are ready; run GATEWAY_ADMIN_DEPLOY_STACK or start_codex_stack.sh as root to start the new OpenCode container."
+    elif ok and not restart:
+        next_step = "Repository and workspace are ready. Restart/deploy only if you need the OpenCode container for this workspace immediately."
     return {
         "ok": ok,
+        "partial_ok": partial_ok,
         "action": "create_local_repo",
         "name": name,
         "path": str(repo_path),
@@ -836,6 +856,7 @@ def admin_create_local_repo(payload):
         "github_repo_created": bool(github_result.get("created", False)),
         "github_note": github_result.get("note") or github_result.get("reason", ""),
         "git_status": status_out,
+        "next_step": next_step,
         "commands": commands,
     }
 

@@ -1375,13 +1375,23 @@ class Filter:
         workspace = result.get("workspace") or {}
         key = result.get("ssh_key") or {}
         github = result.get("github") or {}
-        status = "LOCAL_REPO_CREATE_OK" if result.get("ok") else "LOCAL_REPO_CREATE_FAILED"
+        if result.get("ok"):
+            status = "LOCAL_REPO_CREATE_OK"
+        elif result.get("partial_ok"):
+            status = "LOCAL_REPO_CREATE_PARTIAL"
+        else:
+            status = "LOCAL_REPO_CREATE_FAILED"
         lines = [
             status,
             f"name={result.get('name', name)}",
             f"path={result.get('path', '(unknown)')}",
+            f"intent=local_repo_workspace_bootstrap",
+            f"requested_scope={'local+github' if result.get('github_requested', False) else 'local'}",
+            f"push_requested=False",
             f"workspace_exit_code={workspace.get('exit_code')}",
+            f"workspace_registered={workspace.get('workspace_registered', workspace.get('exit_code') == 0)}",
             f"workspace_restart_exit_code={workspace.get('restart_exit_code', '(not requested)')}",
+            f"restart_ok={workspace.get('restart_ok', '(not requested)')}",
             f"ssh_key_status={key.get('status', '(unknown)')}",
             f"private_key_path={key.get('private_key_path', '(unknown)')}",
             f"public_key_path={key.get('public_key_path', '(unknown)')}",
@@ -1393,6 +1403,7 @@ class Filter:
             f"github_ssh_url={github.get('ssh_url', '(none)')}",
             f"github_deploy_key_added={github.get('deploy_key_added', False)}",
             f"github_deploy_key_reason={github.get('deploy_key_reason', '')}",
+            f"next_step={result.get('next_step', '')}",
             self._details("public_key", str(key.get("public_key", ""))),
             self._details("git_status", str(result.get("git_status", ""))),
             self._details("workspace_output", self._trim(str(workspace.get("output", "")), 12000)),

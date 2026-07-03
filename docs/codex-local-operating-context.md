@@ -200,6 +200,11 @@ explicitni "repo: X / spust prikaz: ...". Nemel by vyrabet novy marker pro
 kazdou drobnost; cilem jsou sirsi capability workflow: deploy/status,
 workspace-run, workspace-action, workspace-autopilot, create-repo recipe, bootstrap-improve recipe a pozdeji dalsi
 profile-based schopnosti.
+
+Jednoduche "vytvor repository Test2 a vygeneruj ssh klic" znamena lokalni
+repo + deploy public key + workspace registraci. Samo o sobe neznamena GitHub,
+restart stacku, commit nad ai-stackem ani push. `--github`, `--restart` a
+`GATEWAY_ADMIN_GIT_PUSH` jsou opt-in jen kdyz je uzivatel rekne explicitne.
 Cilem je, aby uzivatel nemusel znat interni `GATEWAY_ADMIN_*` markery.
 
 Zaroven ma umet rozlisit `publish-plan`, `release-prep`, `push-check`, jednoduchy audited push a sirsi release automation

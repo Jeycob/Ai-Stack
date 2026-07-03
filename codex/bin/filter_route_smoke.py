@@ -52,8 +52,32 @@ SCENARIOS: tuple[RouteScenario, ...] = (
     RouteScenario(
         name="simple-create-repo",
         prompt="Vytvor nove repository Test2 a vygeneruj ssh klic.",
+        expected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2",),
+        unexpected=("bootstrap-improve", "--restart", "GATEWAY_ADMIN_GIT_PUSH"),
+    ),
+    RouteScenario(
+        name="simple-create-repo-explicit-restart",
+        prompt="Vytvor nove repository Test2 a vygeneruj ssh klic. Pak restartni workspace.",
         expected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --restart",),
-        unexpected=("bootstrap-improve",),
+        unexpected=("bootstrap-improve", "GATEWAY_ADMIN_GIT_PUSH"),
+    ),
+    RouteScenario(
+        name="github-create-is-not-push",
+        prompt="Vytvor GitHub repository Test2 a vygeneruj ssh klic.",
+        expected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2 --github",),
+        unexpected=("GATEWAY_ADMIN_GIT_PUSH", "commit"),
+    ),
+    RouteScenario(
+        name="create-repo-negated-github-restart",
+        prompt="Vytvor nove repository Test2 a vygeneruj ssh klic, bez GitHubu a bez restartu.",
+        expected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2",),
+        unexpected=("--github", "--restart", "GATEWAY_ADMIN_GIT_PUSH"),
+    ),
+    RouteScenario(
+        name="github-word-in-negation-is-not-github-request",
+        prompt="Vytvor nove repository Test2, ale zatim bez github remote.",
+        expected=("GATEWAY_ADMIN_CREATE_LOCAL_REPO Test2",),
+        unexpected=("--github", "GATEWAY_ADMIN_GIT_PUSH"),
     ),
     RouteScenario(
         name="bootstrap-improve",

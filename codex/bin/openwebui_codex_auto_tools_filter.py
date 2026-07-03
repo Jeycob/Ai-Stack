@@ -150,6 +150,8 @@ class Filter:
         if not command:
             command = self._natural_workspace_release_boundary_command(text)
         if not command:
+            command = self._natural_create_repo_command(text)
+        if not command:
             command = self._natural_capability_roadmap_command(text)
         if not command:
             command = self._natural_web_command(text)
@@ -163,8 +165,6 @@ class Filter:
             command = self._natural_workspace_autopilot_command(text)
         if not command:
             command = self._natural_workspace_action_command(text)
-        if not command:
-            command = self._natural_create_repo_command(text)
         if not command and self._mentions_ai_stack(text):
             command = self._natural_ai_stack_command(text)
         if not command:
@@ -1275,6 +1275,52 @@ class Filter:
         ]
         return f"GATEWAY_ADMIN_RUN_WORKSPACE ai-stack --timeout 240 -- {shlex.join(command)}"
 
+    def _negated_near(self, lower: str, word: str) -> bool:
+        return re.search(rf"\b(?:bez|bez\s+toho\s+aby|without|no)\s+{re.escape(word)}\b", lower) is not None
+
+    def _github_requested_for_bootstrap(self, lower: str) -> bool:
+        if self._negated_near(lower, "github") or "bez githubu" in lower or "bez github" in lower:
+            return False
+        return any(
+            phrase in lower
+            for phrase in (
+                "github repository",
+                "github repo",
+                "github repozitar",
+                "github repozitář",
+                "na githubu",
+                "na github",
+                "do githubu",
+                "do github",
+                "github remote",
+            )
+        )
+
+    def _restart_requested_for_bootstrap(self, lower: str) -> bool:
+        if (
+            "bez restartu" in lower
+            or "bez restart" in lower
+            or "nerestartuj" in lower
+            or "nerestartovat" in lower
+            or "without restart" in lower
+            or "no restart" in lower
+        ):
+            return False
+        restart_words = (
+            "restartni stack",
+            "restartuj stack",
+            "restartni gateway",
+            "restartuj gateway",
+            "restartni workspace",
+            "restartuj workspace",
+            "nastartuj workspace",
+            "spust workspace",
+            "spusť workspace",
+            "zaregistruj a spust",
+            "zaregistruj a spusť",
+        )
+        return any(word in lower for word in restart_words)
+
     def _natural_create_repo_command(self, text: str) -> str | None:
         lower = text.lower()
         create_words = ["vytvor", "vytvoř", "zaloz", "založ", "create", "bootstrap", "priprav", "připrav"]
@@ -1340,7 +1386,7 @@ class Filter:
             return None
 
         patterns = [
-            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
+            r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:(?:github|gitlab|remote)\s+)?(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
             r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create|bootstrap|priprav|připrav)\b\s+(?:mi\s+)?(?:(?:novy|nový|nove|nové|new)\s+)?(?:projekt|workspace)\s+([A-Za-z0-9_.-]{1,80})\b",
             r"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create)\b\s+([A-Za-z0-9_.-]{1,80})\b\s+(?:repository|repo|repozitar|repozitář|projekt|workspace)\b",
             r"(?i)\b(?:repository|repo|repozitar|repozitář)\s+([A-Za-z0-9_.-]{1,80})\b",
@@ -1351,13 +1397,14 @@ class Filter:
             if not match:
                 continue
             name = match.group(1)
-            if name.lower() in {"ai-stack", "smoke"}:
-                return None
+            if name.lower() in {"ai-stack", "smoke", "github", "gitlab", "remote", "new", "novy", "nový", "nove", "nové"}:
+                continue
             if any(word in lower for word in followthrough_words):
                 task = " ".join(self._non_repo_lines(text)).strip() or text.strip()
                 return self._bootstrap_improve_helper_command(task)
-            github = " --github" if "github" in lower else ""
-            return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {name}{github} --restart"
+            github = " --github" if self._github_requested_for_bootstrap(lower) else ""
+            restart = " --restart" if self._restart_requested_for_bootstrap(lower) else ""
+            return f"GATEWAY_ADMIN_CREATE_LOCAL_REPO {name}{github}{restart}"
         return None
 
     def _natural_workspace_run_command(self, text: str) -> str | None:

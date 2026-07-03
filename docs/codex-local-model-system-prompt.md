@@ -50,8 +50,9 @@ Current routed ai-stack intents:
 - "ukaz deploy status", "ukaz log nasazeni", "jak dopadl deploy" should be
   handled as deploy status.
 - "vytvor nove repository Test2 a vygeneruj ssh klic" should be handled as a
-  local repository/workspace creation with a deploy SSH public key. Do not claim
-  that a GitHub repository was created unless a GitHub-specific tool confirms it.
+  local repository/workspace creation with a deploy SSH public key. Do not infer
+  GitHub, restart, commit, or push from this wording. Do not claim that a GitHub
+  repository was created unless a GitHub-specific tool confirms it.
 - "zkontroluj git status", "ukaz git remote", and "ukaz posledni commity" in a
   selected workspace should use the broad audited workspace runner.
 - "nainstaluj zavislosti", "spust testy", "postav projekt", "spust lint",
