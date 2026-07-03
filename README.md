@@ -584,6 +584,7 @@ Praktická pravidla pro zadávání úloh:
 - Přímý fallback pro deploy přes gateway admin endpoint: `python3 codex/bin/gateway_admin.py --base-url http://127.0.0.1:9101 deploy` na runtime hostu, nebo z jiné stanice s `CODEX_GATEWAY_ADMIN_TOKEN` / `codex/state/codex-gateway-admin.token`. Stav zjistíš přes `python3 codex/bin/gateway_admin.py --base-url http://127.0.0.1:9101 deploy-status`.
 - Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `python3 codex/bin/sync_openwebui_function.py --dry-run`.
 - Aplikace synchronizace OpenWebUI funkce po review: `python3 codex/bin/sync_openwebui_function.py`.
+- Synchronizace OpenWebUI funkcí záměrně nevynucuje jen shodu obsahu, ale i `is_active=true` a `is_global=true`; tím deploy odhalí i stav, kdy je nový filtr v repozitáři, ale OpenWebUI ho v model pipeline reálně nepoužívá.
 - Uložení GitHub API tokenu pro volitelné zakládání GitHub repozitářů: `codex/bin/store_runtime_secret.sh github-api`.
 - Bezpečné mapování OpenWebUI endpointů bez mutačních metod: `OWUI_API_KEY_FILE=codex/state/openwebui-api.key python3 codex/bin/discover_openwebui_endpoints.py --path /api/config --path /api/v1/functions/list`.
 - Seznam modelů: `curl http://192.168.0.48:9101/v1/models`.

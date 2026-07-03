@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-key-file", default=os.getenv("OWUI_API_KEY_FILE", "codex/state/openwebui-api.key"))
     parser.add_argument("--function-id", default="codex_gateway_admin_filter")
     parser.add_argument("--source", default="codex/bin/openwebui_gateway_admin_filter.py")
+    parser.add_argument("--no-activate", action="store_true", help="Do not force the OpenWebUI function active.")
+    parser.add_argument("--no-global", action="store_true", help="Do not force the OpenWebUI function global.")
     parser.add_argument("--dry-run", action="store_true", help="Only report whether an update is needed.")
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--attempts", type=int, default=8)
@@ -86,9 +88,19 @@ def request_json(args: argparse.Namespace, method: str, path: str, body: dict | 
     raise RuntimeError(f"Request failed after retries: {type(last_error).__name__}: {last_error}")
 
 
-def sanitized_payload(remote: dict, content: str) -> dict:
+def target_active(args: argparse.Namespace) -> bool:
+    return not args.no_activate
+
+
+def target_global(args: argparse.Namespace) -> bool:
+    return not args.no_global
+
+
+def sanitized_payload(args: argparse.Namespace, remote: dict, content: str) -> dict:
     payload = {k: v for k, v in remote.items() if k not in DROP_FIELDS}
     payload["content"] = content
+    payload["is_active"] = target_active(args)
+    payload["is_global"] = target_global(args)
     return payload
 
 
@@ -103,24 +115,34 @@ def main() -> int:
     remote = request_json(args, "GET", f"/api/v1/functions/id/{args.function_id}")
     remote_content = remote.get("content") or ""
     remote_hash = sha256(remote_content)
-    changed = local_hash != remote_hash
+    active_changed = bool(remote.get("is_active")) != target_active(args)
+    global_changed = bool(remote.get("is_global")) != target_global(args)
+    changed = local_hash != remote_hash or active_changed or global_changed
 
     print(f"function_id={args.function_id}")
     print(f"source={source}")
     print(f"remote_active={remote.get('is_active')}")
     print(f"remote_global={remote.get('is_global')}")
+    print(f"target_active={target_active(args)}")
+    print(f"target_global={target_global(args)}")
     print(f"local_sha256={local_hash}")
     print(f"remote_sha256={remote_hash}")
+    print(f"active_changed={str(active_changed).lower()}")
+    print(f"global_changed={str(global_changed).lower()}")
     print(f"changed={str(changed).lower()}")
 
     if args.dry_run or not changed:
         print("action=dry-run" if args.dry_run else "action=no-op")
         return 0
 
-    updated = request_json(args, "POST", f"/api/v1/functions/id/{args.function_id}/update", sanitized_payload(remote, content))
+    updated = request_json(args, "POST", f"/api/v1/functions/id/{args.function_id}/update", sanitized_payload(args, remote, content))
     updated_hash = sha256(updated.get("content") or "")
     if updated_hash != local_hash:
         raise RuntimeError("update verification failed: remote content hash does not match local source")
+    if bool(updated.get("is_active")) != target_active(args):
+        raise RuntimeError("update verification failed: active state does not match target")
+    if bool(updated.get("is_global")) != target_global(args):
+        raise RuntimeError("update verification failed: global state does not match target")
     print("action=updated")
     print(f"updated_active={updated.get('is_active')}")
     print(f"updated_global={updated.get('is_global')}")
