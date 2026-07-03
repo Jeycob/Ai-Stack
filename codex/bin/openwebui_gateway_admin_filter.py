@@ -8,7 +8,6 @@ description: Applies explicitly marked, guarded ai-stack gateway patches from Op
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional
-import html
 import json
 import os
 import py_compile
@@ -981,6 +980,7 @@ class Filter:
             "OLLAMA_URL": os.getenv("OLLAMA_BASE_URL", "http://192.168.0.48:11434"),
             "WORKSPACE": workspace,
             "MODEL": model,
+            "CHECK_AI_STACK_SUMMARY_ONLY": "1",
             "SKIP_OPENWEBUI": "1",
         })
         proc = subprocess.run(
@@ -993,13 +993,19 @@ class Filter:
             env=env,
         )
         status = "AI_STACK_CHECK_OK" if proc.returncode == 0 else "AI_STACK_CHECK_FAILED"
+        parsed = self._parse_key_value_block(proc.stdout)
+        summary_text = self._normalize_summary_lines(parsed.get("summary", ""))
         return (
             f"{status}\n"
-            f"workspace={workspace}\n"
-            f"model={model}\n"
+            f"workspace={parsed.get('workspace', workspace)}\n"
+            f"model={parsed.get('model', model)}\n"
+            f"status={parsed.get('status', 'UNKNOWN')}\n"
+            f"checks_total={parsed.get('checks_total', '(unknown)')}\n"
+            f"checks_passed={parsed.get('checks_passed', '(unknown)')}\n"
+            f"checks_failed={parsed.get('checks_failed', '(unknown)')}\n"
+            f"checks_skipped={parsed.get('checks_skipped', '(unknown)')}\n"
             f"exit_code={proc.returncode}\n"
-            "output:\n"
-            + proc.stdout.strip()
+            + self._details("summary", summary_text)
         )
 
     def _run_workspace_admin(self, text: str) -> str:
@@ -1061,17 +1067,17 @@ class Filter:
     def _workspace_action_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_ACTION\s+(.+?)\s*$", text)
         if not m:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
         parts = shlex.split(m.group(1))
         if len(parts) < 2:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_ACTION <workspace> <install|test|build|lint|verify|smoke> [--timeout seconds] [--env KEY=VALUE] [--dry-run]")
 
         workspace = parts.pop(0)
         action = parts.pop(0)
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
             raise ValueError("Unsafe workspace name")
-        if action not in {"install", "test", "build", "lint", "verify"}:
-            raise ValueError("Action must be one of install, test, build, lint, verify")
+        if action not in {"install", "test", "build", "lint", "verify", "smoke"}:
+            raise ValueError("Action must be one of install, test, build, lint, verify, smoke")
 
         timeout = 900
         env_map = {}
@@ -1143,10 +1149,10 @@ class Filter:
     def _workspace_autopilot_admin(self, text: str) -> str:
         m = re.search(r"(?im)^\s*GATEWAY_ADMIN_WORKSPACE_AUTOPILOT\s+(.+?)\s*$", text)
         if not m:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,verify,smoke,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]")
         parts = shlex.split(m.group(1))
         if not parts:
-            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]")
+            raise ValueError("Usage: GATEWAY_ADMIN_WORKSPACE_AUTOPILOT <workspace> [--timeout seconds] [--allow-actions install,verify,smoke,test,build,lint] [--max-steps N] [--recommend-only] [--env KEY=VALUE]")
 
         workspace = parts.pop(0)
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
@@ -1506,15 +1512,62 @@ class Filter:
 
     def _details(self, title: str, text: str) -> str:
         body = text.rstrip() or "(empty)"
-        escaped_title = html.escape(title, quote=True)
-        escaped_body = html.escape(body, quote=False)
         lines = body.count("\n") + 1 if body else 0
         chars = len(body)
+        preview_limit_lines = 18
+        preview_limit_chars = 1800
+        body_lines = body.splitlines()
+        if lines <= preview_limit_lines and chars <= preview_limit_chars:
+            preview = body
+        else:
+            preview = "\n".join(body_lines[:preview_limit_lines])
+            if len(preview) > preview_limit_chars:
+                preview = preview[:preview_limit_chars].rstrip()
+            omitted_lines = max(0, lines - preview.count("\n") - 1)
+            omitted_chars = max(0, chars - len(preview))
+            preview = (
+                preview.rstrip()
+                + f"\n[preview only: omitted {omitted_lines} lines, {omitted_chars} chars]"
+            )
         return (
-            f"\n<details><summary>{escaped_title} ({lines} lines, {chars} chars)</summary>\n\n"
-            f"<pre><code>{escaped_body}</code></pre>\n"
-            "</details>"
+            f"\n{title} ({lines} lines, {chars} chars):\n"
+            f"```text\n{preview}\n```"
         )
+
+    def _parse_key_value_block(self, text: str) -> dict[str, str]:
+        result: dict[str, str] = {}
+        current_key: str | None = None
+        current_lines: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip("\n")
+            if current_key == "summary":
+                current_lines.append(line)
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if re.fullmatch(r"[A-Za-z0-9_:-]{1,80}", key):
+                    result[key] = value
+                    current_key = None
+                    continue
+            if line.strip() == "summary:":
+                current_key = "summary"
+                current_lines = []
+        if current_key == "summary":
+            result["summary"] = "\n".join(current_lines).strip()
+        return result
+
+    def _normalize_summary_lines(self, text: str) -> str:
+        lines = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                lines.append(f"- {key}: {value}")
+            else:
+                lines.append(f"- {line}")
+        return "\n".join(lines) or "(empty)"
 
     def _shell_join(self, command) -> str:
         if isinstance(command, list):

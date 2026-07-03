@@ -27,6 +27,8 @@ Prace s repozitari ma jit pres `codex/bin/owui_chat_turn.py`. Helper zapise lids
 
 `owui_chat_turn.py` ma byt idempotentni pro bezne retry. Pro stejny viditelny i technicky prompt si dopocita stabilni turn key a kdyz v chatu najde uz rozbehnutou nedokoncenou assistant zpravu pro ten samy turn, znovu ji pouzije misto toho, aby appendnul dalsi duplicitni user prompt. To je dulezite pro levnejsi mentor workflow i cistsi audit trail.
 
+Admin helper vystupy v OpenWebUI maji byt kratke a lidsky citelne. Kde driv filter vracel raw HTML `<details>...</details>`, ma dnes radeji vracet kratky preview blok a zbytek orezat s informaci o poctu schovanych radku/znaku. Na beznem chatu je to spolehlivejsi nez spolehat na HTML rendering.
+
 Doporuceny vzor:
 
 ```bash

@@ -478,6 +478,7 @@ Praktická pravidla pro zadávání úloh:
 - Kontrola gateway: `curl http://127.0.0.1:9101/health` ve WSL nebo `curl http://192.168.0.48:9101/health` z LAN.
 - Smoke test gateway: `python3 codex/bin/codex_gateway_smoke.py --base-url http://192.168.0.48:9101 --workspace ai-stack`.
 - Celkový healthcheck lokálního stacku ve WSL: `bash codex/bin/check_ai_stack.sh`; pro LAN kontrolu nastav `OPENWEBUI_URL=http://192.168.0.48:9090 CODEX_GATEWAY_URL=http://192.168.0.48:9101`. Pokud je dostupný OpenWebUI API key, skript nově zahrne i audit-chat smoke přes `owui_chat_smoke.py`.
+- `GATEWAY_ADMIN_CHECK_STACK` už v OpenWebUI nevrací celý syrový healthcheck log. Gateway filter pouští `check_ai_stack.sh` v `CHECK_AI_STACK_SUMMARY_ONLY=1` režimu a vrací stručný verdict se souhrnem checků. Dlouhé admin výstupy jako deploy tail, workspace output nebo smoke logy se nově vrací jako kompaktní preview bloky místo doslovného HTML `<details>`, protože tenhle renderer je v běžném OpenWebUI chatu nevykresloval spolehlivě.
 - Spuštění kontrolního příkazu v registrovaném workspace přes gateway: `curl -sS http://127.0.0.1:9101/v1/admin/workspace/run -H "Content-Type: application/json" -d '{"workspace":"ai-stack","timeout":30,"command":["git","status","--short","--branch"]}'`.
 - Dry-run synchronizace OpenWebUI funkce z verzovaného zdroje: `python3 codex/bin/sync_openwebui_function.py --dry-run`.
 - Aplikace synchronizace OpenWebUI funkce po review: `python3 codex/bin/sync_openwebui_function.py`.
