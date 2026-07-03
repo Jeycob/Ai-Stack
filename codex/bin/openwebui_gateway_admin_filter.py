@@ -82,6 +82,8 @@ class Filter:
             "start_docker.bat",
             "docker-compose.yml",
         }
+        roadmap = self._load_capability_roadmap_payload()
+        self.workspace_actions = self._extract_workspace_actions(roadmap)
 
     def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
         if self.valves.inject_instructions and self._is_ai_stack_request(body):
@@ -337,18 +339,34 @@ class Filter:
 
     def _looks_like_workspace_action(self, text: str) -> str | None:
         lower = text.lower()
-        action_cues = {
-            "install": ("install", "nainstaluj", "doinstaluj", "dependencies", "zavislosti", "závislosti"),
-            "test": ("test", "testy", "otestuj"),
-            "build": ("build", "sestav", "zbuild"),
-            "lint": ("lint",),
-            "verify": ("verify", "over", "ověř", "zkontroluj"),
-            "smoke": ("smoke", "rozbehni", "rozběhni", "spust", "spusť"),
-        }
-        for action, cues in action_cues.items():
-            if any(cue in lower for cue in cues):
+        for action, spec in self.workspace_actions.items():
+            if not isinstance(spec, dict):
+                continue
+            cues = spec.get("cues") or []
+            if any(isinstance(cue, str) and cue.lower() in lower for cue in cues):
                 return action
         return None
+
+    def _roadmap_path(self) -> Path:
+        module_file = globals().get("__file__")
+        if module_file:
+            return Path(module_file).resolve().parents[2] / "docs" / "codex-local-capability-roadmap.json"
+        return Path.cwd() / "docs" / "codex-local-capability-roadmap.json"
+
+    def _load_capability_roadmap_payload(self) -> dict:
+        try:
+            payload = json.loads(self._roadmap_path().read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _extract_workspace_actions(self, payload: dict) -> dict[str, dict]:
+        actions = payload.get("workspace_actions")
+        return actions if isinstance(actions, dict) else {}
+
+    def _workspace_action_spec(self, action: str) -> dict:
+        spec = self.workspace_actions.get(action)
+        return spec if isinstance(spec, dict) else {}
 
     def _looks_like_edit_request(self, text: str) -> bool:
         lower = text.lower()
@@ -438,7 +456,13 @@ class Filter:
                 return f"GATEWAY_ADMIN_WORKSPACE_EDIT {shlex.quote(workspace)} --timeout 900{run_after} -- {shlex.quote(task_text[:1800])}"
             action = self._looks_like_workspace_action(task_text)
             if action:
-                return f"GATEWAY_ADMIN_WORKSPACE_ACTION {shlex.quote(workspace)} {action} --runner container --timeout 900"
+                spec = self._workspace_action_spec(action)
+                timeout = int(spec.get("timeout", 900))
+                runner = str(spec.get("runner", "container"))
+                return (
+                    f"GATEWAY_ADMIN_WORKSPACE_ACTION {shlex.quote(workspace)} {action} "
+                    f"--runner {runner} --timeout {timeout}"
+                )
 
         url = self._natural_web_url(text)
         if url and any(cue in lower for cue in ("stahni", "stáhni", "nacti", "načti", "precti", "přečti", "podivej", "podívej", "svatek", "svátek", "?")):
@@ -1544,13 +1568,15 @@ class Filter:
         action = parts.pop(0)
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
             raise ValueError("Unsafe workspace name")
-        if action not in {"install", "test", "build", "lint", "verify", "smoke"}:
-            raise ValueError("Action must be one of install, test, build, lint, verify, smoke")
+        spec = self._workspace_action_spec(action)
+        if not spec:
+            allowed = ", ".join(sorted(self.workspace_actions)) or "install, test, build, lint, verify, smoke"
+            raise ValueError(f"Action must be one of {allowed}")
 
-        timeout = 900
+        timeout = int(spec.get("timeout", 900))
         env_map = {}
         dry_run = False
-        runner = "container"
+        runner = str(spec.get("runner", "container"))
         while parts:
             opt = parts.pop(0)
             if opt == "--timeout" and parts:

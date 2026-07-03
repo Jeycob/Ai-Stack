@@ -111,15 +111,26 @@ def print_prompt_preview(args: argparse.Namespace, visible: str, technical: str)
     print(technical)
 
 
-def load_capability_roadmap() -> dict[str, dict[str, str]]:
+def load_capability_roadmap_payload() -> dict:
     try:
         payload = json.loads(CAPABILITY_ROADMAP.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError:
         return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_capability_roadmap() -> dict[str, dict[str, str]]:
+    payload = load_capability_roadmap_payload()
     capabilities = payload.get("capabilities")
     return capabilities if isinstance(capabilities, dict) else {}
+
+
+def load_workspace_action_registry() -> dict[str, dict]:
+    payload = load_capability_roadmap_payload()
+    actions = payload.get("workspace_actions")
+    return actions if isinstance(actions, dict) else {}
 
 
 def build_prompts(args: argparse.Namespace) -> tuple[str, str]:
@@ -688,16 +699,9 @@ def scaffold_recipe_for_profile(solution_profile: str) -> tuple[str, str, str]:
 
 def infer_workspace_action(task: str) -> str:
     lower = task.lower()
-    action_map = [
-        ("install", ("nainstaluj zavislosti", "nainstaluj závislosti", "install dependencies", "prepare environment")),
-        ("test", ("spust testy", "spusť testy", "run tests", "otestuj projekt")),
-        ("build", ("postav projekt", "build project", "udělej build", "udelej build", "spust build", "spusť build")),
-        ("lint", ("spust lint", "spusť lint", "run lint", "zkontroluj lint", "lint projekt")),
-        ("verify", ("over projekt", "ověř projekt", "zkontroluj projekt", "verify project", "proveď ověření", "proveď overeni")),
-        ("smoke", ("zkus to rozbehnout", "zkus to rozběhnout", "rozbehni projekt", "rozběhni projekt", "run smoke", "smoke test", "startup smoke", "ověř startup", "over startup")),
-    ]
-    for action, needles in action_map:
-        if any(needle in lower for needle in needles):
+    for action, spec in load_workspace_action_registry().items():
+        cues = spec.get("cues") or []
+        if any(isinstance(needle, str) and needle.lower() in lower for needle in cues):
             return action
     return ""
 

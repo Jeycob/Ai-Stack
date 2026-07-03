@@ -5,11 +5,11 @@ version: 0.1.9
 description: Dynamically attaches Codex toolsets and routes broader codex-local natural-language admin intents with wider autonomous capability mapping.
 """
 
+import re
+import shlex
 import json
 from pathlib import Path
 from typing import Optional
-import re
-import shlex
 
 WORKSPACE_LABEL_PATTERN = r"(?:repo|repository|repositar|repozitar|repozitář|projekt|project|workspace)"
 FILE_LABEL_PATTERN = r"(?:soubor|file|path|cesta)"
@@ -46,7 +46,9 @@ class Filter:
         self.extra = ["codex_extra_workspace_tools"]
         self.ssh = ["codex_ssh_key_tools"]
         self.aider = ["aider_container_access"]
-        self.capability_roadmap = self._load_capability_roadmap()
+        roadmap = self._load_capability_roadmap_payload()
+        self.capability_roadmap = self._extract_capabilities(roadmap)
+        self.workspace_actions = self._extract_workspace_actions(roadmap)
 
     def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
         model = body.get("model")
@@ -1002,18 +1004,36 @@ class Filter:
         )
         return self._mentor_tasks_helper_command("dispatch", workspace, tasks, recommend_only=recommend_only)
 
-    def _load_capability_roadmap(self) -> dict[str, dict]:
+    def _roadmap_path(self) -> Path:
         module_file = globals().get("__file__")
         if module_file:
-            path = Path(module_file).resolve().parents[2] / "docs" / "codex-local-capability-roadmap.json"
-        else:
-            path = Path.cwd() / "docs" / "codex-local-capability-roadmap.json"
+            return Path(module_file).resolve().parents[2] / "docs" / "codex-local-capability-roadmap.json"
+        return Path.cwd() / "docs" / "codex-local-capability-roadmap.json"
+
+    def _load_capability_roadmap_payload(self) -> dict:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(self._roadmap_path().read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _extract_capabilities(self, payload: dict) -> dict[str, dict]:
         capabilities = payload.get("capabilities")
         return capabilities if isinstance(capabilities, dict) else {}
+
+    def _extract_workspace_actions(self, payload: dict) -> dict[str, dict]:
+        actions = payload.get("workspace_actions")
+        return actions if isinstance(actions, dict) else {}
+
+    def _match_workspace_action(self, text: str) -> tuple[str, dict] | tuple[None, None]:
+        lower = text.lower()
+        for action, spec in self.workspace_actions.items():
+            if not isinstance(spec, dict):
+                continue
+            cues = spec.get("cues") or []
+            if any(isinstance(cue, str) and cue.lower() in lower for cue in cues):
+                return action, spec
+        return None, None
 
     def _capability_block(self, capability_id: str) -> str:
         item = self.capability_roadmap.get(capability_id) or {}
@@ -1608,18 +1628,12 @@ class Filter:
         workspace = self._workspace_from_text(text)
         if not workspace:
             return None
-        lower = text.lower()
-        actions = [
-            (["nainstaluj zavislosti", "nainstaluj závislosti", "install dependencies", "prepare environment"], "install", 1800),
-            (["spust testy", "spusť testy", "run tests", "otestuj projekt"], "test", 1800),
-            (["postav projekt", "build project", "udělej build", "udelej build", "spust build", "spusť build"], "build", 1800),
-            (["spust lint", "spusť lint", "run lint", "zkontroluj lint", "lint projekt"], "lint", 1200),
-            (["over projekt", "ověř projekt", "zkontroluj projekt", "verify project", "proveď ověření", "proveď overeni"], "verify", 2400),
-            (["zkus to rozbehnout", "zkus to rozběhnout", "rozbehni projekt", "rozběhni projekt", "run smoke", "smoke test", "startup smoke", "ověř startup", "over startup"], "smoke", 900),
-        ]
-        for needles, action, timeout in actions:
-            if any(needle in lower for needle in needles):
-                return f"GATEWAY_ADMIN_WORKSPACE_ACTION {workspace} {action} --timeout {timeout}"
+        action, spec = self._match_workspace_action(text)
+        if action and spec:
+            timeout = int(spec.get("timeout", 900))
+            runner = str(spec.get("runner", "container"))
+            runner_arg = f" --runner {runner}" if runner else ""
+            return f"GATEWAY_ADMIN_WORKSPACE_ACTION {workspace} {action}{runner_arg} --timeout {timeout}"
         return None
 
     def _delegate_helper_command(self, workspace: str, task: str) -> str:

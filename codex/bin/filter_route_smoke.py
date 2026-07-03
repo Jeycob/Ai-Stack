@@ -138,6 +138,16 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         expected=("GATEWAY_ADMIN_WORKSPACE_EDIT Test2 --timeout 900 --run-after smoke", "webgl soubor s kouli"),
         unexpected=("mentor_codex_local.py delegate", "GATEWAY_ADMIN_WORKSPACE_ACTION Test2 smoke"),
     ),
+    RouteScenario(
+        name="workspace-install-natural",
+        prompt="repo: Test2\nstahni co je potreba a priprav prostredi",
+        expected=("GATEWAY_ADMIN_WORKSPACE_ACTION Test2 install --runner container --timeout 1800",),
+    ),
+    RouteScenario(
+        name="workspace-smoke-natural",
+        prompt="repo: Test2\npusť to a zkus to rozběhnout",
+        expected=("GATEWAY_ADMIN_WORKSPACE_ACTION Test2 smoke --runner container --timeout 900",),
+    ),
 )
 
 

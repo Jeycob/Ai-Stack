@@ -29,5 +29,96 @@
       "scope": "mentoring",
       "summary": "Nejužší mentoring krok pro nejednoznacne zadani: nejdriv audit, upresneni nebo inference dalsi capability, az pak rozsirovani scope."
     }
+  },
+  "workspace_actions": {
+    "install": {
+      "timeout": 1800,
+      "runner": "container",
+      "summary": "Pripravi workspace runtime a zavislosti uvnitr izolovaneho kontejneru.",
+      "cues": [
+        "nainstaluj zavislosti",
+        "nainstaluj závislosti",
+        "doinstaluj",
+        "install dependencies",
+        "prepare environment",
+        "stahni co je potreba",
+        "stáhni co je potřeba",
+        "doinstaluj co chybi",
+        "doinstaluj co chybí",
+        "download what is needed"
+      ]
+    },
+    "test": {
+      "timeout": 1800,
+      "runner": "container",
+      "summary": "Spusti projektove testy nebo nejblizsi auditovany test runner.",
+      "cues": [
+        "spust testy",
+        "spusť testy",
+        "run tests",
+        "otestuj projekt",
+        "otestuj to"
+      ]
+    },
+    "build": {
+      "timeout": 1800,
+      "runner": "container",
+      "summary": "Sestavi projekt nebo artefakty bez sirokeho host shell pristupu.",
+      "cues": [
+        "postav projekt",
+        "build project",
+        "udělej build",
+        "udelej build",
+        "spust build",
+        "spusť build",
+        "sestav projekt"
+      ]
+    },
+    "lint": {
+      "timeout": 1200,
+      "runner": "container",
+      "summary": "Spusti lint nebo obdobnou statickou kontrolu.",
+      "cues": [
+        "spust lint",
+        "spusť lint",
+        "run lint",
+        "zkontroluj lint",
+        "lint projekt"
+      ]
+    },
+    "verify": {
+      "timeout": 2400,
+      "runner": "container",
+      "summary": "Provede sirsi auditovane overeni pripravenosti projektu.",
+      "cues": [
+        "over projekt",
+        "ověř projekt",
+        "zkontroluj projekt",
+        "verify project",
+        "proveď ověření",
+        "proveď overeni",
+        "over to",
+        "ověř to"
+      ]
+    },
+    "smoke": {
+      "timeout": 900,
+      "runner": "container",
+      "summary": "Zkusi projekt rozbehnout nebo udelat startup smoke bez plneho nasazeni.",
+      "cues": [
+        "zkus to rozbehnout",
+        "zkus to rozběhnout",
+        "rozbehni projekt",
+        "rozběhni projekt",
+        "run smoke",
+        "smoke test",
+        "startup smoke",
+        "ověř startup",
+        "over startup",
+        "spust to",
+        "spusť to",
+        "pusť to"
+      ]
+    }
   }
 }
