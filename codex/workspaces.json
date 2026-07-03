@@ -18,6 +18,12 @@
       "port": 4098,
       "cpus": 8,
       "memory": "16g"
+    },
+    "Test2": {
+      "path": "/mnt/c/Repositories/Test2",
+      "port": 4102,
+      "cpus": 8,
+      "memory": "16g"
     }
   }
 }
