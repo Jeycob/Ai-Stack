@@ -421,8 +421,112 @@ def wants_repo_followthrough(task: str) -> bool:
         "dotáhni",
         "co je treba",
         "co je třeba",
+        "react",
+        "next.js",
+        "nextjs",
+        "vue",
+        "svelte",
+        "fastapi",
+        "flask",
+        "django",
+        "express",
+        "nestjs",
+        "three.js",
+        "threejs",
+        "opengl",
+        "webgl",
+        "electron",
     )
     return any(cue in lower for cue in cues)
+
+
+def infer_solution_profile(task: str) -> tuple[str, str]:
+    lower = task.lower()
+    profiles = [
+        (
+            "nextjs-app",
+            (
+                "next.js",
+                "nextjs",
+                "next app",
+            ),
+            "Prefer a modern Next.js app scaffold with a small production-ready baseline.",
+        ),
+        (
+            "react-app",
+            (
+                "react",
+                "vite",
+                "spa",
+            ),
+            "Prefer a lightweight React app scaffold, likely Vite-based unless the repo context suggests otherwise.",
+        ),
+        (
+            "fastapi-service",
+            (
+                "fastapi",
+                "python api",
+                "rest api v pythonu",
+                "rest api v python",
+            ),
+            "Prefer a small FastAPI service scaffold with straightforward local run and test commands.",
+        ),
+        (
+            "flask-service",
+            (
+                "flask",
+            ),
+            "Prefer a minimal Flask service baseline only if FastAPI is not explicitly requested.",
+        ),
+        (
+            "django-app",
+            (
+                "django",
+            ),
+            "Prefer a conventional Django project layout with explicit app/runtime commands.",
+        ),
+        (
+            "node-service",
+            (
+                "express",
+                "node api",
+                "node service",
+                "nestjs",
+            ),
+            "Prefer a simple Node service baseline with explicit scripts and minimal runtime wiring.",
+        ),
+        (
+            "threejs-app",
+            (
+                "three.js",
+                "threejs",
+                "3d web",
+                "webgl",
+            ),
+            "Prefer a browser 3D scaffold using Three.js and a small dev/build loop.",
+        ),
+        (
+            "opengl-native",
+            (
+                "opengl",
+            ),
+            "Prefer a native OpenGL starter with clear build instructions and a tiny runnable example.",
+        ),
+        (
+            "electron-app",
+            (
+                "electron",
+                "desktop app",
+                "desktop aplikaci",
+                "desktop aplikaci",
+            ),
+            "Prefer a minimal Electron starter with explicit run/build commands.",
+        ),
+    ]
+    for profile_id, needles, hint in profiles:
+        if any(needle in lower for needle in needles):
+            return profile_id, hint
+    return "", ""
 
 
 def infer_workspace_action(task: str) -> str:
@@ -455,6 +559,8 @@ def classify_task(task: str) -> dict[str, str]:
         action_name: str = "",
         repo_name: str = "",
         repo_github: str = "",
+        solution_profile: str = "",
+        starter_hint: str = "",
     ) -> dict[str, str]:
         capability = roadmap.get(capability_id, {}) if capability_id else {}
         return {
@@ -470,9 +576,12 @@ def classify_task(task: str) -> dict[str, str]:
             "action_name": action_name,
             "repo_name": repo_name,
             "repo_github": repo_github,
+            "solution_profile": solution_profile,
+            "starter_hint": starter_hint,
         }
 
     repo_name = extract_create_repo_name(task)
+    solution_profile, starter_hint = infer_solution_profile(task)
     if repo_name and wants_repo_followthrough(task):
         return result(
             "capability",
@@ -484,6 +593,8 @@ def classify_task(task: str) -> dict[str, str]:
             "If bootstrap plus improve still cannot finish the task, add the next named workspace capability instead of widening shell access blindly.",
             repo_name=repo_name,
             repo_github="yes" if wants_github_repo(task) else "no",
+            solution_profile=solution_profile,
+            starter_hint=starter_hint,
         )
     if repo_name:
         return result(
@@ -496,6 +607,8 @@ def classify_task(task: str) -> dict[str, str]:
             "If repo bootstrap later grows into package install, service wiring, or GitHub release automation, split that into the next audited capability instead of widening create-repo.",
             repo_name=repo_name,
             repo_github="yes" if wants_github_repo(task) else "no",
+            solution_profile=solution_profile,
+            starter_hint=starter_hint,
         )
     if any(
         token in lower
@@ -1298,6 +1411,8 @@ def run_profile_sequence(args: argparse.Namespace) -> int:
     print(f"CAPABILITY_SCOPE={decision['capability_scope']}")
     print(f"CAPABILITY_SUMMARY={decision['capability_summary']}")
     print(f"MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+    print(f"SOLUTION_PROFILE={decision['solution_profile']}")
+    print(f"STARTER_HINT={decision['starter_hint']}")
     return 0
 
 
@@ -1359,7 +1474,9 @@ def audit_chat_prompt_suggestion(decision: dict[str, str], workspace: str, task:
     if workflow == "bootstrap-improve":
         repo_name = decision.get("repo_name", "")
         if repo_name:
-            return f"repo: ai-stack\nVytvoř repository {repo_name}, připrav workspace a pokračuj s bootstrapem co nejdál."
+            profile = decision.get("solution_profile", "")
+            suffix = f" se starter profilem {profile}" if profile else ""
+            return f"repo: ai-stack\nVytvoř repository {repo_name}{suffix}, připrav workspace a pokračuj s bootstrapem co nejdál."
     if workflow == "deploy":
         return "repo: ai-stack\nPullni ai-stack a nasaď poslední změny. Po dokončení napiš stručný stav."
     if workflow == "publish-plan":
@@ -1396,6 +1513,10 @@ def execution_brief_lines(decision: dict[str, str], workspace: str, task: str) -
     capability_scope = decision.get("capability_scope", "")
     if capability_scope:
         lines.append(f"capability_scope={capability_scope}")
+    if decision.get("solution_profile"):
+        lines.append(f"solution_profile={decision['solution_profile']}")
+    if decision.get("starter_hint"):
+        lines.append(f"starter_hint={decision['starter_hint']}")
 
     if workflow == "run":
         command = extract_run_command(task)
@@ -1593,6 +1714,8 @@ def run_report_sequence(args: argparse.Namespace) -> int:
     print(f"MENTOR_REPORT_CAPABILITY_SCOPE={decision['capability_scope']}")
     print(f"MENTOR_REPORT_CAPABILITY_SUMMARY={decision['capability_summary']}")
     print(f"MENTOR_REPORT_MISSING_CAPABILITY_HINT={decision['missing_capability_hint']}")
+    print(f"MENTOR_REPORT_SOLUTION_PROFILE={decision['solution_profile']}")
+    print(f"MENTOR_REPORT_STARTER_HINT={decision['starter_hint']}")
     print(f"MENTOR_REPORT_NEXT_HELPER={recommended_next_step(decision, args.workspace, args.task)}")
     print("MENTOR_REPORT_AUDIT_CHAT_PROMPT<<EOF")
     print(audit_chat_prompt_suggestion(decision, args.workspace, args.task))
@@ -1630,7 +1753,8 @@ def mentor_plan_steps(decision: dict[str, str], workspace: str, task: str) -> li
     if workflow == "bootstrap-improve":
         repo_name = decision.get("repo_name", "")
         github_hint = " with GitHub remote" if decision.get("repo_github") == "yes" else ""
-        steps.append(("bootstrap", f"create and register repository {repo_name or '(unspecified)'}{github_hint}"))
+        profile_hint = f" using starter profile {decision.get('solution_profile')}" if decision.get("solution_profile") else ""
+        steps.append(("bootstrap", f"create and register repository {repo_name or '(unspecified)'}{github_hint}{profile_hint}"))
         steps.append(("improve", recommended_next_step(decision, workspace, task)))
         steps.append(("post-bootstrap-check", f"verify new workspace {repo_name or '(unspecified)'} status, then continue with install/test/build or a minimal patch"))
         return steps
@@ -1945,6 +2069,9 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
         (
             f"- bootstrap source task: {args.task}\n"
             f"- bootstrap repo: {repo_name}\n"
+            + (f"- starter profile: {decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
+            + (f"- starter hint: {decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
+            +
             "- follow-through: continue with audited workspace setup and improvement after repository creation"
         ),
     )
@@ -1954,6 +2081,9 @@ def run_bootstrap_improve_sequence(args: argparse.Namespace) -> int:
             f"workspace={repo_name}\n"
             f"bootstrap_source_task={args.task}\n"
             "workflow=bootstrap-improve\n"
+            + (f"solution_profile={decision.get('solution_profile')}\n" if decision.get("solution_profile") else "")
+            + (f"starter_hint={decision.get('starter_hint')}\n" if decision.get("starter_hint") else "")
+            +
             "goal=continue from repository bootstrap into audited install/test/build or safe patch progression"
         ),
     )

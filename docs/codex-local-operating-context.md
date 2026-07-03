@@ -208,6 +208,12 @@ nad nim rovnou pokracuje pres `improve`:
 python3 codex/bin/mentor_codex_local.py bootstrap-improve ai-stack "Vytvor nove repository Test2, doinstaluj co chybi a zkus to rozbehnout."
 ```
 
+Kdyz je v zadani rovnou i technologicky zamer, napriklad React, Next.js,
+FastAPI, Three.js nebo OpenGL, helper si ho ulozi jako `solution_profile` a
+`starter_hint` do execution briefu. Tim se dalsi improve krok neodpojuje od
+puvodniho stackoveho zameru a codex-local nemusi po bootstrapu improvizovat
+uplne od nuly.
+
 Priklad profilove klasifikace bez spousteni jakychkoli akci:
 
 ```bash
