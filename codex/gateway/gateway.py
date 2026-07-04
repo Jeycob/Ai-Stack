@@ -201,10 +201,68 @@ def load_dynamic_capability_aliases():
                 aliases[key] = canonical
     return aliases
 
+
 def content_to_text(content):
     if isinstance(content, list):
-        return "\n".join(str(x.get("text", x)) for x in content)
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or item))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        return str(content.get("text") or content.get("content") or "")
     return str(content)
+
+
+def parse_agent_loop_request_text(text):
+    match = re.search(r"(?im)^\s*GATEWAY_ADMIN_AGENT_LOOP\s+(.+?)\s*$", str(text or ""))
+    if not match:
+        return None
+    try:
+        parts = shlex.split(match.group(1))
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    workspace = parts.pop(0)
+    if "--" not in parts:
+        return None
+    marker = parts.index("--")
+    task = " ".join(parts[marker + 1 :]).strip()
+    if not workspace or not task:
+        return None
+    return workspace, task
+
+
+def clean_conversation_text_for_taskspec(role, text):
+    text = str(text or "")
+    parsed_agent_loop = parse_agent_loop_request_text(text)
+    if role == "user" and parsed_agent_loop:
+        _, task = parsed_agent_loop
+        text = task
+    text = re.sub(r"<!--\s*CODEX_DEBUG.*?-->", "", text, flags=re.S | re.I)
+    text = re.sub(r"-----BEGIN OPENSSH PRIVATE KEY-----.*?-----END OPENSSH PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]", text, flags=re.S)
+    text = re.sub(r"(?im)^.*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)\s*[:=].*?$", "[REDACTED_SECRET_LINE]", text)
+    kept_lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        lowered = line.lower()
+        if not line:
+            continue
+        if lowered.startswith("gateway_admin_") or lowered.startswith("agent_loop_"):
+            continue
+        if lowered.startswith("requested_workspace=") or lowered.startswith("controller_workspace="):
+            continue
+        if lowered.startswith("planner_source=") or lowered.startswith("routing_provenance="):
+            continue
+        if lowered.startswith("workflow=") or lowered.startswith("read_only="):
+            continue
+        if lowered.startswith("model_runtime") or lowered.startswith("execution="):
+            continue
+        kept_lines.append(line)
+    return "\n".join(kept_lines).strip()
 
 
 def recent_conversation_context(messages, max_messages=8, max_chars=3000):
@@ -218,8 +276,9 @@ def recent_conversation_context(messages, max_messages=8, max_chars=3000):
         text = content_to_text(message.get("content", "")).strip()
         if not text:
             continue
-        text = re.sub(r"-----BEGIN OPENSSH PRIVATE KEY-----.*?-----END OPENSSH PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]", text, flags=re.S)
-        text = re.sub(r"(?im)^.*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)\s*[:=].*?$", "[REDACTED_SECRET_LINE]", text)
+        text = clean_conversation_text_for_taskspec(role, text)
+        if not text:
+            continue
         context.append(f"{role}: {preview_text(text, 700)}")
     rendered = "\n".join(context)
     if len(rendered) > max_chars:
@@ -6722,22 +6781,10 @@ def agent_loop_response_text(result):
 
 
 def explicit_agent_loop_request(text):
-    match = re.search(r"(?im)^\s*GATEWAY_ADMIN_AGENT_LOOP\s+(.+?)\s*$", str(text or ""))
-    if not match:
+    parsed = parse_agent_loop_request_text(text)
+    if not parsed:
         return None
-    try:
-        parts = shlex.split(match.group(1))
-    except ValueError:
-        return None
-    if not parts:
-        return None
-    workspace = parts.pop(0)
-    if "--" not in parts:
-        return None
-    idx = parts.index("--")
-    task = " ".join(parts[idx + 1 :]).strip()
-    if not task:
-        return None
+    workspace, task = parsed
     return {"workspace": workspace, "task": task}
 
 def codex_local_model_requested(payload):

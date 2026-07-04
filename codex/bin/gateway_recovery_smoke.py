@@ -2077,6 +2077,38 @@ def assert_agent_loop_passes_conversation_context() -> None:
     print("AGENT_LOOP_CONVERSATION_CONTEXT_OK")
 
 
+def assert_conversation_context_sanitizes_runtime_wrappers() -> None:
+    context = gateway.recent_conversation_context(
+        [
+            {
+                "role": "user",
+                "content": "repo: ai-stack\nGATEWAY_ADMIN_AGENT_LOOP ai-stack -- 'vyhledej známé osobnosti narozené dnes'",
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "Našel jsem výsledky.\n\n"
+                    "<!-- CODEX_DEBUG\n"
+                    "requested_workspace=ai-stack\n"
+                    "workflow=web_search\n"
+                    "{\"model_runtime\": {\"default_model\": \"qwen\"}}\n"
+                    "-->"
+                ),
+            },
+            {"role": "user", "content": "vypiš výsledky"},
+        ]
+    )
+    forbidden = ("GATEWAY_ADMIN_AGENT_LOOP", "CODEX_DEBUG", "workflow=", "model_runtime", "requested_workspace=")
+    found = [item for item in forbidden if item in context]
+    if found:
+        raise SystemExit(f"conversation context leaked runtime wrappers {found!r}: {context!r}")
+    required = ("vyhledej známé osobnosti narozené dnes", "Našel jsem výsledky.", "vypiš výsledky")
+    missing = [item for item in required if item not in context]
+    if missing:
+        raise SystemExit(f"conversation context lost semantic messages {missing!r}: {context!r}")
+    print("CONVERSATION_CONTEXT_SANITIZER_OK")
+
+
 def main() -> int:
     assert_no_hardcoded_direct_answer_router()
     assert_agent_loop_parse()
@@ -2117,6 +2149,7 @@ def main() -> int:
     assert_host_runner_requires_explicit_capability()
     assert_deploy_status_diagnostics()
     assert_deploy_status_runtime_gate_blocks_stale_process()
+    assert_conversation_context_sanitizes_runtime_wrappers()
     assert_agent_loop_passes_conversation_context()
     assert_case(
         "test",
