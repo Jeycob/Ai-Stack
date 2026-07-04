@@ -161,6 +161,13 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(redact(text), encoding="utf-8")
 
 
+def truncated_text(value: Any, limit: int = 2000) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
+
+
 def openwebui_api_key(args: argparse.Namespace) -> str:
     token = os.getenv(args.openwebui_api_key_env, "").strip()
     if token:
@@ -483,6 +490,7 @@ def reasoning_task_spec(transcript: dict[str, Any], diagnosis: dict[str, Any], r
         "missing_inputs": missing_inputs,
         "risk_level": "medium" if args.mode in {"patch", "deploy", "full", "capability_develop"} else "low",
         "recovery_plan": diagnosis.get("recovery"),
+        "repair_context": diagnosis.get("previous_cycle_failure") or {},
         "acceptance_criteria": [
             "A regression artifact exists before any patch is applied.",
             "Patch paths stay inside audited ai-stack runtime/code/doc paths.",
@@ -2197,6 +2205,58 @@ def verify(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
     return {"ok": ok, "commands": results}
 
 
+def phase_failure_detail(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "phase": name,
+        "reason": payload.get("reason") or "",
+        "message": payload.get("message") or "",
+    }
+    if payload.get("marker"):
+        detail["marker"] = payload.get("marker")
+    task_spec = payload.get("task_spec") or {}
+    if isinstance(task_spec, dict) and task_spec:
+        if task_spec.get("missing_inputs"):
+            detail["missing_inputs"] = list(task_spec.get("missing_inputs") or [])
+        if task_spec.get("required_capabilities"):
+            detail["required_capabilities"] = list(task_spec.get("required_capabilities") or [])
+        if task_spec.get("target_capability_name"):
+            detail["target_capability_name"] = task_spec.get("target_capability_name")
+    if payload.get("patch_file"):
+        detail["patch_file"] = payload.get("patch_file")
+    if payload.get("paths"):
+        detail["paths"] = list(payload.get("paths") or [])[:20]
+    if payload.get("blocked_paths"):
+        detail["blocked_paths"] = list(payload.get("blocked_paths") or [])[:20]
+    if payload.get("git_apply_check_exit_code") is not None:
+        detail["git_apply_check_exit_code"] = payload.get("git_apply_check_exit_code")
+    if payload.get("git_apply_check_output"):
+        detail["git_apply_check_output_tail"] = truncated_text(payload.get("git_apply_check_output"), 2000)
+    if payload.get("git_apply_exit_code") is not None:
+        detail["git_apply_exit_code"] = payload.get("git_apply_exit_code")
+    if payload.get("git_apply_output"):
+        detail["git_apply_output_tail"] = truncated_text(payload.get("git_apply_output"), 2000)
+    commands = payload.get("commands") or []
+    if commands:
+        detail["failing_commands"] = [
+            {
+                "command": item.get("command") or [],
+                "exit_code": item.get("exit_code"),
+                "output_tail": truncated_text(item.get("output"), 1200),
+            }
+            for item in commands
+            if isinstance(item, dict) and item.get("exit_code") not in {0, None}
+        ]
+    fingerprint = payload.get("fingerprint_check") or {}
+    if isinstance(fingerprint, dict) and fingerprint:
+        detail["fingerprint_check"] = {
+            "marker": fingerprint.get("marker") or "",
+            "runtime_commit": fingerprint.get("runtime_commit") or "",
+            "runtime_fingerprint": fingerprint.get("runtime_fingerprint") or "",
+            "gateway_source_epoch": fingerprint.get("gateway_source_epoch") or "",
+        }
+    return detail
+
+
 def summary_phase_payload(summary: dict[str, Any], phase_name: str) -> dict[str, Any]:
     cycles = summary.get("cycles") or []
     if cycles and isinstance(cycles[-1], dict):
@@ -2877,10 +2937,17 @@ def main() -> int:
         write_json(cycle_dir / "cycle-summary.json", cycle_record)
         if cycle_record["ok"]:
             break
+        failed_phase_names = [
+            name
+            for name, payload in cycle_record.get("phases", {}).items()
+            if isinstance(payload, dict) and not payload.get("ok")
+        ]
         previous_cycle_context = {
             "failed_cycle": cycle,
-            "failed_phases": [
-                name
+            "cycle_dir": str(cycle_dir),
+            "failed_phases": failed_phase_names,
+            "failed_phase_details": [
+                phase_failure_detail(name, payload)
                 for name, payload in cycle_record.get("phases", {}).items()
                 if isinstance(payload, dict) and not payload.get("ok")
             ],

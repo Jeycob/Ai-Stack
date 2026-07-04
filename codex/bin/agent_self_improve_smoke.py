@@ -443,6 +443,24 @@ def run_max_cycles_mode() -> None:
         )
         if payload.get("cycles_completed") != 2:
             raise SystemExit(f"expected two cycles on persistent blocker, got {payload!r}")
+        artifact_dir = Path(payload["artifact_dir"])
+        cycle1 = json.loads((artifact_dir / "cycle-01/cycle-summary.json").read_text(encoding="utf-8"))
+        cycle2 = json.loads((artifact_dir / "cycle-02/cycle-summary.json").read_text(encoding="utf-8"))
+        previous = cycle2.get("previous_cycle_context") or {}
+        if previous.get("failed_cycle") != 1:
+            raise SystemExit(f"expected cycle-02 to reference failed cycle 1, got {cycle2!r}")
+        repair_context = ((cycle2.get("phases", {}).get("reason", {}) or {}).get("task_spec") or {}).get("repair_context") or {}
+        if repair_context.get("failed_cycle") != 1:
+            raise SystemExit(f"expected repair_context to carry failed cycle info, got {cycle2!r}")
+        details = repair_context.get("failed_phase_details") or []
+        if not details:
+            raise SystemExit(f"expected failed phase details in repair_context, got {cycle2!r}")
+        if not any(item.get("phase") == "reason" for item in details if isinstance(item, dict)):
+            raise SystemExit(f"expected failed reason phase detail in repair_context, got {cycle2!r}")
+        if not any(item.get("phase") == "reason" and item.get("missing_inputs") == ["feature_request_or_capability_name"] for item in details if isinstance(item, dict)):
+            raise SystemExit(f"expected reason phase missing_inputs in repair_context, got {cycle2!r}")
+        if not repair_context.get("cycle_dir"):
+            raise SystemExit(f"expected repair_context cycle_dir, got {cycle2!r}")
         print("AGENT_SELF_IMPROVE_MAX_CYCLES_OK")
 
 
