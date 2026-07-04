@@ -5689,6 +5689,13 @@ def admin_workspace_autopilot(payload):
         return verify_result, verify_steps_local, candidates, probes
 
     verify, verify_steps, candidate_actions, action_probes = plan_candidates(set())
+    wants_preview = (
+        "workspace_expose_preview" in canonicalize_agent_capabilities(payload.get("required_capabilities") or [])
+        or "preview" in desired_end_state.lower()
+        or "preview" in task.lower()
+        or "expose" in desired_end_state.lower()
+        or "expose" in task.lower()
+    )
 
     chosen, planner_source, planner_reason = workspace_autopilot_choose_candidate(
         workspace,
@@ -5778,6 +5785,7 @@ def admin_workspace_autopilot(payload):
         "retry_runner": "",
         "retry_timeout": "",
     }
+    preview_urls = []
     for idx in range(max_steps):
         remaining_names = {step["action"] for step in executed_actions if step.get("action")}
         if idx == 0:
@@ -5823,6 +5831,12 @@ def admin_workspace_autopilot(payload):
             "planner_source": step_planner_source,
             "planner_reason": step_planner_reason,
         })
+        for url in _string_list(last_result.get("preview_urls")):
+            if url not in preview_urls:
+                preview_urls.append(url)
+        first_preview_url = str(last_result.get("preview_url") or "").strip()
+        if first_preview_url and first_preview_url not in preview_urls:
+            preview_urls.append(first_preview_url)
         if not last_result.get("ok"):
             stop_reason = "step_failed"
             recommendation = workspace_action_failure_recommendation(workspace, action_name, last_result)
@@ -5855,6 +5869,9 @@ def admin_workspace_autopilot(payload):
         "planner_source": step_planner_source,
         "planner_reason": step_planner_reason,
         "recommendation": recommendation.get("text", ""),
+        "wants_preview": wants_preview,
+        "preview_urls": preview_urls,
+        "preview_url": preview_urls[0] if preview_urls else "",
         "patch_target": recommendation.get("patch_target", ""),
         "patch_hint": recommendation.get("patch_hint", ""),
         "patch_summary": recommendation.get("patch_summary", ""),
@@ -6320,15 +6337,25 @@ def agent_loop_human_answer(result):
     if workflow == "autopilot":
         steps = execution.get("executed_actions") if isinstance(execution.get("executed_actions"), list) else []
         step_names = [str(step.get("action")) for step in steps if isinstance(step, dict) and step.get("action")]
+        preview_url = str(execution.get("preview_url") or "").strip()
+        wants_preview = bool(execution.get("wants_preview"))
         if result.get("ok"):
             if step_names:
-                return f"Autopilot ve workspace {workspace} dokončil kroky: {', '.join(step_names)}."
+                text = f"Autopilot ve workspace {workspace} dokončil kroky: {', '.join(step_names)}."
+                if preview_url:
+                    text += f" Preview běží na `{preview_url}`."
+                elif wants_preview:
+                    text += " Preview krok byl součástí cíle, ale runtime zatím nevrátil konkrétní URL."
+                return text
             return f"Autopilot ve workspace {workspace} doběhl bez chyby."
         if step_names:
-            return (
+            text = (
                 f"Autopilot ve workspace {workspace} se zastavil po krocích {', '.join(step_names)}. "
                 + preview_text(recovery.get("text") or execution.get("recommendation") or result.get("summary"))
             ).strip()
+            if preview_url:
+                text += f" Poslední nalezené preview URL: `{preview_url}`."
+            return text
         return (
             f"Autopilot ve workspace {workspace} nenašel bezpečný další krok. "
             + preview_text(recovery.get("text") or execution.get("recommendation") or result.get("summary"))

@@ -839,6 +839,21 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
     if chain_plan.get("workflow") != "autopilot" or "workspace_action_chain" not in chain_spec.get("required_capabilities", []):
         raise SystemExit(f"workspace action chain should route to autopilot, got {chain_spec!r} {chain_plan!r}")
 
+    autopilot_preview_text = gateway.agent_loop_human_answer(
+        {
+            "ok": True,
+            "workflow": "autopilot",
+            "requested_workspace": "Test2",
+            "execution": {
+                "executed_actions": [{"action": "install"}, {"action": "build"}, {"action": "smoke"}],
+                "wants_preview": True,
+                "preview_url": "http://127.0.0.1:4173",
+            },
+        }
+    )
+    if "Preview běží na `http://127.0.0.1:4173`." not in autopilot_preview_text:
+        raise SystemExit(f"autopilot preview answer should expose preview url, got {autopilot_preview_text!r}")
+
     confirm_spec, confirm_plan = _taskspec_plan(
         {
             **direct,

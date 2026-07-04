@@ -35,6 +35,7 @@ SMOKE_READY_PATTERNS = [
         r"uvicorn running on",
     )
 ]
+SMOKE_URL_RE = re.compile(r"https?://(?:127\.0\.0\.1|localhost)(?::\d+)?(?:/[^\s\"'<>]*)?", re.IGNORECASE)
 
 
 class ActionError(RuntimeError):
@@ -204,6 +205,17 @@ def resolve_smoke(root: Path, manifest_set: set[str], package_scripts: list[str]
 
 def smoke_ready(output: str) -> bool:
     return any(pattern.search(output) for pattern in SMOKE_READY_PATTERNS)
+
+
+def smoke_preview_urls(output: str) -> list[str]:
+    seen = set()
+    urls = []
+    for match in SMOKE_URL_RE.finditer(str(output or "")):
+        url = match.group(0).rstrip(".,);]")
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
 
 
 def normalize_output(value: object) -> str:
@@ -579,6 +591,7 @@ def run_smoke(
         }
     output = normalize_output(proc.stdout)
     startup_detected = smoke_ready(output)
+    preview_urls = smoke_preview_urls(output)
     ok = startup_detected and proc.returncode in {0, 124, 143}
 
     return {
@@ -595,6 +608,8 @@ def run_smoke(
         "wrapped_command": wrapped_command,
         "smoke_window_s": smoke_window,
         "startup_detected": startup_detected,
+        "preview_urls": preview_urls,
+        "preview_url": preview_urls[0] if preview_urls else "",
         "timed_window_exit": proc.returncode == 124,
         "duration_ms": int((time.time() - started) * 1000),
         "exit_code": proc.returncode,
