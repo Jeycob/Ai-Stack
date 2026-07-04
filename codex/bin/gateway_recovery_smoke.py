@@ -960,6 +960,7 @@ def assert_capability_draft_contracts() -> None:
         gateway_integration_path = ROOT / f"docs/capability-drafts/{capability}.gateway-integration.json"
         gateway_patch_fragment_path = ROOT / f"docs/capability-drafts/{capability}.gateway.patch.md"
         gateway_runtime_patch_candidate_path = ROOT / f"docs/capability-drafts/{capability}.runtime.patch.diff"
+        gateway_promotion_patch_path = ROOT / f"docs/capability-drafts/{capability}.promotion.patch.diff"
         wiring_path = ROOT / f"docs/capability-drafts/{capability}.wiring.json"
         executor_contract_path = ROOT / f"docs/capability-drafts/{capability}.executor-contract.json"
         executor_dispatch_path = ROOT / f"docs/capability-drafts/{capability}.executor-dispatch.json"
@@ -1001,6 +1002,14 @@ def assert_capability_draft_contracts() -> None:
             ):
                 if required not in runtime_patch_candidate_text:
                     raise SystemExit(f"runtime patch candidate missing {required!r} for {capability}: {gateway_runtime_patch_candidate_path}")
+        if gateway_promotion_patch_path.is_file():
+            promotion_patch_text = gateway_promotion_patch_path.read_text(encoding="utf-8")
+            for required in (
+                "diff --git a/codex/gateway/gateway.py b/codex/gateway/gateway.py",
+                f'+    "{capability}": ',
+            ):
+                if required not in promotion_patch_text:
+                    raise SystemExit(f"promotion patch candidate missing {required!r} for {capability}: {gateway_promotion_patch_path}")
         if wiring_path.is_file():
             wiring = json.loads(wiring_path.read_text(encoding="utf-8"))
             if str(wiring.get("kind") or "") != str(markers.get("wiring_kind") or ""):

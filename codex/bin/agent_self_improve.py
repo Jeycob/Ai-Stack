@@ -1059,6 +1059,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
                 f"docs/capability-drafts/{capability}.gateway-integration.json",
                 f"docs/capability-drafts/{capability}.gateway.patch.md",
                 f"docs/capability-drafts/{capability}.runtime.patch.diff",
+                f"docs/capability-drafts/{capability}.promotion.patch.diff",
                 f"docs/capability-drafts/{capability}.wiring.json",
                 f"docs/capability-drafts/{capability}.executor-contract.json",
                 f"docs/capability-drafts/{capability}.executor-dispatch.json",
@@ -1275,6 +1276,7 @@ def capability_implementation_workorder_file(
             f"docs/capability-drafts/{capability}.gateway-integration.json",
             f"docs/capability-drafts/{capability}.gateway.patch.md",
             f"docs/capability-drafts/{capability}.runtime.patch.diff",
+            f"docs/capability-drafts/{capability}.promotion.patch.diff",
             f"docs/capability-drafts/{capability}.wiring.json",
             f"docs/capability-drafts/{capability}.executor-contract.json",
             f"docs/capability-drafts/{capability}.executor-dispatch.json",
@@ -1503,6 +1505,103 @@ def capability_runtime_patch_candidate_file(capability: str, feature_request: st
         f'+    # dispatch_handler: {handler_name}\n'
         f'+    # selector: required_capability == "{capability}"\n'
     )
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def find_braced_assignment(text: str, var_name: str) -> tuple[int, int, int]:
+    match = re.search(rf"(?m)^{re.escape(var_name)}\s*=\s*\{{", text)
+    if not match:
+        raise ValueError(f"assignment {var_name!r} not found")
+    brace_start = text.find("{", match.start())
+    if brace_start < 0:
+        raise ValueError(f"opening brace for {var_name!r} not found")
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(brace_start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return match.start(), brace_start, idx
+    raise ValueError(f"closing brace for {var_name!r} not found")
+
+
+def insert_into_dict_assignment(text: str, var_name: str, entry_text: str, marker: str) -> str:
+    _, _, brace_end = find_braced_assignment(text, var_name)
+    block = text[: brace_end + 1]
+    if marker in block:
+        return text
+    prefix = text[:brace_end]
+    suffix = text[brace_end:]
+    if not prefix.endswith("\n"):
+        entry_text = "\n" + entry_text
+    return prefix + entry_text + suffix
+
+
+def capability_runtime_promotion_patch_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.promotion.patch.diff"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    gateway_rel = "codex/gateway/gateway.py"
+    gateway_path = ROOT / gateway_rel
+    gateway_before = read_text(gateway_path)
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    runtime_workflow = "self_improve" if capability.startswith("agent_") else shape["workflow"]
+
+    workflow_entry = f'    "{capability}": "{runtime_workflow}",\n'
+    gateway_after = insert_into_dict_assignment(
+        gateway_before,
+        "AGENT_CAPABILITY_TO_WORKFLOW",
+        workflow_entry,
+        f'"{capability}": "{runtime_workflow}"',
+    )
+
+    registry_entry = (
+        f'    "{capability}": {{\n'
+        f'        "workflow": "{runtime_workflow}",\n'
+        f'        "summary": "{shape["summary"]}",\n'
+        f'        "scope": "{shape["scope"]}",\n'
+        '        "implemented": False,\n'
+        '        "draft": True,\n'
+        f'        "executor": "{shape["executor"]}",\n'
+        "    },\n"
+    )
+    gateway_after = insert_into_dict_assignment(
+        gateway_after,
+        "CORE_AGENT_CAPABILITIES",
+        registry_entry,
+        f'"{capability}": {{',
+    )
+
+    alias_entries = "".join(
+        f'    "{alias}": "{capability}",\n'
+        for alias in shape["aliases"]
+        if alias
+    )
+    if alias_entries:
+        gateway_after = insert_into_dict_assignment(
+            gateway_after,
+            "CANONICAL_AGENT_CAPABILITY_ALIASES",
+            alias_entries,
+            f'"{capability}": "{capability}"',
+        )
+
+    promotion_diff = unified_diff_for_file(gateway_rel, gateway_before, gateway_after)
+    after = promotion_diff
     return rel, unified_diff_for_file(rel, before, after)
 
 
@@ -1911,6 +2010,7 @@ def generate_unified_diff(
                 capability_gateway_integration_file(capability, feature_request, reasoning),
                 capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
                 capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
+                capability_runtime_promotion_patch_file(capability, feature_request, reasoning),
                 capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_contract_file(capability, feature_request, reasoning),
                 capability_executor_dispatch_file(capability, feature_request, reasoning),
