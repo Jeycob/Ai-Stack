@@ -786,6 +786,21 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
     )
     if "capability_catalog_show" not in help_spec.get("required_capabilities", []) or help_plan.get("workflow") != "meta":
         raise SystemExit(f"capability_help should map to meta catalog, got {help_spec!r} {help_plan!r}")
+    help_meta = gateway.admin_agent_meta(help_plan, "ai-stack", "ai-stack", True, {"ai-stack": {"path": "/repo/ai-stack"}})
+    help_answer = str(help_meta.get("answer") or "")
+    if "Umim bezny chat" not in help_answer or "`repo: Test2`" not in help_answer:
+        raise SystemExit(f"capability_help answer should be human and practical, got {help_meta!r}")
+
+    context_meta = gateway.admin_agent_meta(
+        {"meta_capability": "workspace_context_status"},
+        "Test2",
+        "ai-stack",
+        True,
+        {"Test2": {"path": "/repo/Test2"}, "ai-stack": {"path": "/repo/ai-stack"}},
+    )
+    context_answer = str(context_meta.get("answer") or "")
+    if "workspace `Test2`" not in context_answer or "/repo/Test2" not in context_answer:
+        raise SystemExit(f"workspace_context_status answer should mention workspace and path, got {context_meta!r}")
 
     web_spec, web_plan = _taskspec_plan(
         {

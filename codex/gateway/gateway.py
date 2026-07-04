@@ -1730,6 +1730,44 @@ def agent_capability_catalog():
     return "\n".join(lines)
 
 
+def agent_capability_human_summary(max_items_per_scope=4):
+    registry = agent_capability_registry()
+    scope_order = [
+        ("conversation", "Bezny chat"),
+        ("public_web", "Web"),
+        ("workspace_runtime", "Workspace"),
+        ("workspace_bootstrap", "Bootstrap"),
+        ("stack_runtime", "Self-improve/deploy"),
+        ("agent_metadata", "Meta"),
+    ]
+    grouped = {scope: [] for scope, _label in scope_order}
+    extras = []
+    for name, spec in sorted(registry.items()):
+        if not isinstance(spec, dict) or not spec.get("implemented"):
+            continue
+        scope = str(spec.get("scope") or "").strip()
+        if scope in grouped:
+            grouped[scope].append(name)
+        else:
+            extras.append(name)
+
+    lines = []
+    for scope, label in scope_order:
+        items = grouped.get(scope) or []
+        if not items:
+            continue
+        preview = ", ".join(f"`{item}`" for item in items[:max_items_per_scope])
+        if len(items) > max_items_per_scope:
+            preview += f" +{len(items) - max_items_per_scope}"
+        lines.append(f"{label}: {preview}")
+    if extras:
+        preview = ", ".join(f"`{item}`" for item in extras[:max_items_per_scope])
+        if len(extras) > max_items_per_scope:
+            preview += f" +{len(extras) - max_items_per_scope}"
+        lines.append(f"Dalsi: {preview}")
+    return " | ".join(lines)
+
+
 def agent_infer_action_from_task(task):
     lower = str(task or "").lower()
     registry = load_workspace_action_registry()
@@ -3466,10 +3504,15 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
     known = sorted(workspaces)
     if capability == "workspace_context_set":
         if workspace_exists:
-            answer = f"Workspace context je nastavený na `{requested_workspace}`."
+            answer = (
+                f"Pracuju ve workspace `{requested_workspace}`."
+                + (f" Cesta: `{cfg.get('path', '')}`." if cfg.get("path") else "")
+                + " Muzeme rovnou pokracovat dalsim ukolem v nem."
+            )
         else:
             answer = (
-                f"Workspace `{requested_workspace}` není registrovaný; aktuální controller zůstává `{controller_workspace}`."
+                f"Workspace `{requested_workspace}` neni registrovany; zustavam v `{controller_workspace}`."
+                + (f" Zname workspaces: {', '.join(f'`{item}`' for item in known[:6])}." if known else "")
             )
         return {
             "ok": bool(workspace_exists),
@@ -3499,10 +3542,17 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
             "aliases": aliases,
             "issues": agent_capability_registry_issues(),
             "catalog": agent_capability_catalog(),
-            "answer": "Capability katalog je připravený; níže jsou canonical capability a aliasy.",
+            "answer": (
+                "Umim bezny chat, verejny web, praci ve workspacech i self-improve/deploy workflow. "
+                + agent_capability_human_summary()
+                + ". Pro konkretni repo staci napsat treba `repo: Test2` a pak normalni zadani."
+            ),
         }
     if capability == "agent_runtime_status":
         health = runtime_health()
+        model_runtime = health.get("model_runtime") or {}
+        default_model = str(model_runtime.get("default_model") or "").strip()
+        heavy_model = str(model_runtime.get("heavy_model") or "").strip()
         return {
             "ok": bool(health.get("codex_local_ready")),
             "capability": capability,
@@ -3512,8 +3562,11 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
             "readiness_issues": health.get("readiness_issues") or [],
             "model_runtime": health.get("model_runtime") or {},
             "answer": (
-                f"Runtime workspace `{current}`; ready={bool(health.get('codex_local_ready'))}; "
-                f"commit={health.get('runtime_commit')}; fingerprint={health.get('runtime_fingerprint')}."
+                f"Runtime je {'pripraveny' if health.get('codex_local_ready') else 'nepripraveny'} pro workspace `{current}`. "
+                f"Commit `{health.get('runtime_commit')}`"
+                + (f", default model `{default_model}`" if default_model else "")
+                + (f", heavy model `{heavy_model}`" if heavy_model else "")
+                + "."
             ),
         }
     return {
@@ -3525,7 +3578,11 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
         "workspace_exists": bool(workspace_exists),
         "path": str(cfg.get("path") or ""),
         "known_workspaces": known,
-        "answer": f"Jsem v workspace `{current}` na cestě `{cfg.get('path', '')}`.",
+        "answer": (
+            f"Jsem ve workspace `{current}`."
+            + (f" Cesta: `{cfg.get('path', '')}`." if cfg.get("path") else "")
+            + (f" Zname workspaces: {', '.join(f'`{item}`' for item in known[:6])}." if known else "")
+        ),
     }
 
 
