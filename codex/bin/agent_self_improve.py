@@ -717,6 +717,74 @@ def proposal_offload_split(capability_plan: dict[str, Any] | None) -> dict[str, 
     return {"codex_local": codex_local, "senior_codex": senior}
 
 
+def capability_acceptance_evidence_plan(capability: str, acceptance: list[str]) -> list[dict[str, Any]]:
+    verify_commands = [" ".join(command) for command in effective_verify_commands()]
+    return [
+        {
+            "criterion": "TaskSpec includes target_capability_name when a capability is being developed.",
+            "expected_artifacts": [
+                f"docs/capability-drafts/{capability}.smoke.json",
+                f"docs/capability-drafts/{capability}.gateway-integration.json",
+                f"docs/capability-drafts/{capability}.executor-dispatch.json",
+                f"docs/capability-drafts/{capability}.implementation-workorder.json",
+            ],
+            "verify_commands": verify_commands,
+            "proof_intent": "Planner, dispatch, smoke contract, and workorder all preserve the canonical target capability name.",
+        },
+        {
+            "criterion": "Capability appears in roadmap or draft artifact with scope, preconditions, executor plan, recovery and tests.",
+            "expected_artifacts": [
+                "docs/codex-local-capability-roadmap.json",
+                f"docs/capability-drafts/{capability}.json",
+                f"docs/capability-drafts/{capability}.executor-contract.json",
+                f"docs/capability-drafts/{capability}.wiring.json",
+            ],
+            "verify_commands": verify_commands,
+            "proof_intent": "Registry-facing roadmap plus draft contract bundle expose scope, executor contract, and recovery plan.",
+        },
+        {
+            "criterion": "Generated patch is a unified diff, touches only allowed paths, and passes git apply --check before any apply.",
+            "expected_artifacts": [
+                "AUDIT:generated-unified.diff",
+                "AUDIT:safe-apply-candidate.diff",
+                "AUDIT:review-only-patch.diff",
+                f"docs/capability-drafts/{capability}.promotion.patch.diff",
+            ],
+            "verify_commands": verify_commands,
+            "proof_intent": "Generated diff files plus guarded split and promotion patch prove draft/apply boundaries and git apply validation.",
+        },
+        {
+            "criterion": "Runtime deploy/E2E remains blocked by fingerprint/source epoch drift.",
+            "expected_artifacts": [
+                "codex/bin/gateway_runtime_fingerprint_check.py",
+                "AUDIT:guarded-apply-manifest.json",
+                f"docs/capability-drafts/{capability}.runtime.patch.diff",
+            ],
+            "verify_commands": verify_commands + ["python3 codex/bin/gateway_runtime_fingerprint_check.py"],
+            "proof_intent": "Runtime patch remains review-only and the manifest preserves the fingerprint gate before deploy/E2E.",
+        },
+    ] if acceptance else []
+
+
+def generic_acceptance_evidence_plan(
+    acceptance: list[str],
+    file_change_plan: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not acceptance:
+        return []
+    verify_commands = [" ".join(command) for command in effective_verify_commands()]
+    expected_paths = [str(item.get("path") or "") for item in file_change_plan if isinstance(item, dict) and item.get("path")]
+    return [
+        {
+            "criterion": criterion,
+            "expected_artifacts": expected_paths,
+            "verify_commands": verify_commands,
+            "proof_intent": "Generated regression bundle and bounded verify commands must cover the requested recovery outcome.",
+        }
+        for criterion in acceptance
+    ]
+
+
 def propose_patch(
     args: argparse.Namespace,
     audit_dir: Path,
@@ -730,6 +798,11 @@ def propose_patch(
     file_change_plan = proposal_change_plan(args, diagnosis, regression, reasoning, capability_plan)
     offload_split = proposal_offload_split(capability_plan)
     task_spec = reasoning.get("task_spec") or {}
+    acceptance_criteria = task_spec.get("acceptance_criteria") or []
+    if capability_plan:
+        acceptance_evidence_plan = capability_acceptance_evidence_plan(capability_plan["capability_name"], acceptance_criteria)
+    else:
+        acceptance_evidence_plan = generic_acceptance_evidence_plan(acceptance_criteria, file_change_plan)
     proposal = {
         "ok": True,
         "phase": "propose_patch",
@@ -741,7 +814,8 @@ def propose_patch(
         "reasoning_task_spec": reasoning.get("task_spec") or {},
         "capability_development": capability_plan,
         "target_capability_name": capability_plan.get("capability_name") if capability_plan else "",
-        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "acceptance_criteria": acceptance_criteria,
+        "acceptance_evidence_plan": acceptance_evidence_plan,
         "proposed_file_changes": file_change_plan,
         "offload_split": offload_split,
         "unified_diff_expectations": {
@@ -783,6 +857,14 @@ def propose_patch(
     markdown.extend(["", "## Acceptance Criteria", ""])
     for item in proposal["acceptance_criteria"]:
         markdown.append(f"- {item}")
+    if acceptance_evidence_plan:
+        markdown.extend(["", "## Acceptance Evidence Plan", ""])
+        for item in acceptance_evidence_plan:
+            markdown.append(f"- {item['criterion']}")
+            for artifact in item.get("expected_artifacts") or []:
+                markdown.append(f"  - artifact: `{artifact}`")
+            for command in item.get("verify_commands") or []:
+                markdown.append(f"  - verify: `{command}`")
     markdown.extend(["", "## Guard Rails", ""])
     for item in proposal["proposal"]:
         markdown.append(f"- {item}")
@@ -2483,6 +2565,53 @@ def capability_patch_readiness(
     }
 
 
+def evidence_artifact_present(name: str, generated_diff_result: dict[str, Any]) -> bool:
+    generated_paths = {str(path) for path in (generated_diff_result.get("paths") or [])}
+    if name.startswith("AUDIT:"):
+        marker = name.removeprefix("AUDIT:")
+        if marker == "generated-unified.diff":
+            return bool(generated_diff_result.get("patch_file"))
+        if marker == "safe-apply-candidate.diff":
+            return bool(generated_diff_result.get("safe_apply_candidate_patch_file"))
+        if marker == "review-only-patch.diff":
+            return bool(generated_diff_result.get("review_only_patch_file"))
+        if marker == "guarded-apply-manifest.json":
+            return True
+        if marker == "self-improve-report.json":
+            return True
+        return False
+    return name in generated_paths or (ROOT / name).is_file()
+
+
+def acceptance_evidence_status(
+    summary: dict[str, Any],
+    proposal_result: dict[str, Any],
+    generated_diff_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    verify_info = verify_summary(summary_phase_payload(summary, "verify"))
+    plan = proposal_result.get("acceptance_evidence_plan") or []
+    results: list[dict[str, Any]] = []
+    for item in plan:
+        if not isinstance(item, dict):
+            continue
+        expected_artifacts = [str(path) for path in (item.get("expected_artifacts") or [])]
+        covered = [path for path in expected_artifacts if evidence_artifact_present(path, generated_diff_result)]
+        missing = [path for path in expected_artifacts if path not in covered]
+        results.append(
+            {
+                "criterion": str(item.get("criterion") or ""),
+                "expected_artifacts": expected_artifacts,
+                "covered_artifacts": covered,
+                "missing_artifacts": missing,
+                "verify_commands": [str(command) for command in (item.get("verify_commands") or [])],
+                "verify_all_green": verify_info.get("all_green"),
+                "status": "covered" if not missing else "incomplete",
+                "proof_intent": str(item.get("proof_intent") or ""),
+            }
+        )
+    return results
+
+
 def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], generated_diff_result: dict[str, Any]) -> dict[str, Any]:
     codex_local_offload = [
         "repository exploration",
@@ -2527,6 +2656,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
     verify_info = verify_summary(summary_phase_payload(summary, "verify"))
     phase_status = phase_status_summary(summary)
     readiness = capability_patch_readiness(summary, proposal_result, generated_diff_result)
+    evidence_status = acceptance_evidence_status(summary, proposal_result, generated_diff_result)
     report = {
         "safe_to_offload_to_codex_local": codex_local_offload,
         "completed_by_codex_local_in_this_run": completed_offload,
@@ -2537,6 +2667,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
         "phase_status": phase_status,
         "verify_summary": verify_info,
         "capability_patch_readiness": readiness,
+        "acceptance_evidence_status": evidence_status,
         "generated_patch_paths": generated_paths,
         "safe_apply_candidate_paths": generated_diff_result.get("safe_apply_candidate_paths") or [],
         "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
@@ -2701,6 +2832,20 @@ def write_final_report(
         lines.append("- failed commands:")
         for item in report["verify_summary"]["failed_commands"]:
             lines.append(f"  - `{item}`")
+    lines.extend(["", "## Acceptance Evidence Status", ""])
+    if report.get("acceptance_evidence_status"):
+        for item in report["acceptance_evidence_status"]:
+            lines.append(f"- criterion: {item.get('criterion')}")
+            lines.append(f"  - status: `{item.get('status')}`")
+            lines.append(f"  - verify_all_green: `{item.get('verify_all_green')}`")
+            if item.get("proof_intent"):
+                lines.append(f"  - proof_intent: {item.get('proof_intent')}")
+            for artifact in item.get("covered_artifacts") or []:
+                lines.append(f"  - covered_artifact: `{artifact}`")
+            for artifact in item.get("missing_artifacts") or []:
+                lines.append(f"  - missing_artifact: `{artifact}`")
+    else:
+        lines.append("- none")
     lines.extend(["", "## Capability Patch Readiness", ""])
     readiness = report["capability_patch_readiness"]
     lines.append(f"- enabled: `{readiness.get('enabled')}`")

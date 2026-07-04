@@ -197,6 +197,13 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected implementation workorder change plan in capability proposal, got {proposal!r}")
         if not any(item.get("path") == "codex/bin/capability_drafts/workspace_profile_executor_stub.py" for item in proposed_file_changes if isinstance(item, dict)):
             raise SystemExit(f"expected executor scaffold change plan in capability proposal, got {proposal!r}")
+        evidence_plan = proposal.get("acceptance_evidence_plan") or []
+        if len(evidence_plan) < 4:
+            raise SystemExit(f"expected capability acceptance evidence plan, got {proposal!r}")
+        if not any("target_capability_name" in str(item.get("criterion") or "") for item in evidence_plan if isinstance(item, dict)):
+            raise SystemExit(f"expected target_capability_name evidence criterion, got {proposal!r}")
+        if not any("AUDIT:generated-unified.diff" in (item.get("expected_artifacts") or []) for item in evidence_plan if isinstance(item, dict)):
+            raise SystemExit(f"expected unified diff audit evidence in capability proposal, got {proposal!r}")
         if proposal.get("target_capability_name") != "workspace_profile":
             raise SystemExit(f"expected target capability in proposal, got {proposal!r}")
         if proposal.get("unified_diff_expectations", {}).get("must_pass_git_apply_check") is not True:
@@ -237,6 +244,13 @@ def run_capability_develop_mode() -> None:
         verify_summary = report.get("verify_summary") or {}
         if verify_summary.get("all_green") is not True:
             raise SystemExit(f"expected verify summary all_green in report, got {report!r}")
+        evidence_status = report.get("acceptance_evidence_status") or []
+        if len(evidence_status) < 4:
+            raise SystemExit(f"expected acceptance evidence status in report, got {report!r}")
+        if any(item.get("status") != "covered" for item in evidence_status if isinstance(item, dict)):
+            raise SystemExit(f"expected covered acceptance evidence status, got {report!r}")
+        if not any("AUDIT:generated-unified.diff" in (item.get("expected_artifacts") or []) for item in evidence_status if isinstance(item, dict)):
+            raise SystemExit(f"expected unified diff audit evidence in report status, got {report!r}")
         if manifest.get("decision") != "safe_apply_candidate_with_runtime_review":
             raise SystemExit(f"expected runtime-review guarded apply decision, got {manifest!r}")
         if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in (manifest.get("review_only_runtime_artifacts") or []):
