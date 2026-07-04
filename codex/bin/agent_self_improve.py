@@ -610,6 +610,12 @@ def proposal_change_plan(
                 "acceptance_criteria": acceptance,
             },
             {
+                "path": f"docs/capability-drafts/{capability}.executor-dispatch.json",
+                "change_type": "create_or_update",
+                "intent": "Describe the concrete gateway dispatch hook, handler name, request payload, and verify path for the new capability.",
+                "acceptance_criteria": acceptance,
+            },
+            {
                 "path": f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 "change_type": "create_or_update",
                 "intent": "Provide a bounded executor stub that codex-local can extend into a real capability implementation.",
@@ -1041,6 +1047,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
                 f"docs/capability-drafts/{capability}.runtime.patch.diff",
                 f"docs/capability-drafts/{capability}.wiring.json",
                 f"docs/capability-drafts/{capability}.executor-contract.json",
+                f"docs/capability-drafts/{capability}.executor-dispatch.json",
                 f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
                 f"codex/bin/capability_drafts/{capability}_smoke.py",
@@ -1051,6 +1058,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
                 "gateway_patch_fragment_marker": "codex-local-capability-gateway-patch-fragment",
                 "runtime_patch_candidate_marker": "codex-local-capability-runtime-patch-candidate",
                 "wiring_kind": "codex-local-capability-wiring-blueprint",
+                "executor_dispatch_kind": "codex-local-capability-executor-dispatch-plan",
                 "runtime_hook_marker": "CAPABILITY_RUNTIME_HOOK_STUB",
                 "executor_capability_constant": capability,
                 "smoke_marker": "CAPABILITY_DRAFT_SMOKE_SCAFFOLD",
@@ -1176,6 +1184,45 @@ def capability_executor_contract_file(capability: str, feature_request: str, rea
     return rel, unified_diff_for_file(rel, before, after)
 
 
+def capability_executor_dispatch_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.executor-dispatch.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    dispatch = {
+        "kind": "codex-local-capability-executor-dispatch-plan",
+        "capability_name": capability,
+        "target_file": "codex/gateway/gateway.py",
+        "handler_name": f"run_{capability}_capability",
+        "helper_module": f"codex.bin.capability_drafts.{capability}_executor_stub",
+        "helper_entrypoint": "draft_execute",
+        "workflow": shape["workflow"],
+        "planned_workflow": shape["planned_workflow"],
+        "executor_pattern": shape["executor"],
+        "request_payload": {
+            "capability": capability,
+            "workspace": "resolved workspace context when workspace-scoped",
+            "desired_end_state": task_spec.get("desired_end_state") or "",
+            "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+            "task_spec": "canonicalized TaskSpec JSON",
+        },
+        "dispatcher_binding": {
+            "selector": f"required_capability == {capability!r}",
+            "manual_gate": shape["scope"] == "stack_runtime",
+            "fallback": "Return MANUAL_STEP_REQUIRED when the reviewed executor is not wired yet.",
+        },
+        "verify_commands": [
+            "python3 -m py_compile codex/gateway/gateway.py codex/bin/capability_drafts/*.py",
+            "python3 codex/bin/gateway_recovery_smoke.py",
+            "python3 codex/bin/agent_self_improve_smoke.py",
+        ],
+        "generated_by": "agent_self_improve.generate_unified_diff",
+    }
+    after = json.dumps(dispatch, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
 def capability_gateway_integration_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
     rel = f"docs/capability-drafts/{capability}.gateway-integration.json"
     path = ROOT / rel
@@ -1233,6 +1280,9 @@ def capability_gateway_integration_file(capability: str, feature_request: str, r
             "executor_hook": {
                 "anchor": "workflow executor dispatch",
                 "code": {
+                    "handler_name": f"run_{capability}_capability",
+                    "helper_module": f"codex.bin.capability_drafts.{capability}_executor_stub",
+                    "helper_entrypoint": "draft_execute",
                     "executor_pattern": shape["executor"],
                     "planned_workflow": planned_workflow,
                     "manual_gate": True,
@@ -1311,6 +1361,7 @@ def capability_runtime_patch_candidate_file(capability: str, feature_request: st
     task_spec = reasoning.get("task_spec") or {}
     shape = capability_draft_shape(capability, feature_request, reasoning)
     planned_workflow = "self_improve" if capability.startswith("agent_") else shape["workflow"]
+    handler_name = f"run_{capability}_capability"
     alias_lines = "\n".join(f'+    "{alias}": "{capability}",' for alias in shape["aliases"])
     after = (
         "### codex-local-capability-runtime-patch-candidate\n"
@@ -1333,8 +1384,21 @@ def capability_runtime_patch_candidate_file(capability: str, feature_request: st
         "@@ agent_taskspec_to_plan @@\n"
         f'+    # target_capability_name={capability}\n'
         f'+    # desired_end_state={task_spec.get("desired_end_state") or ""}\n'
+        "@@ capability_dispatch_helper @@\n"
+        f"+def {handler_name}(self, task_spec, workspace):\n"
+        "+    payload = {\n"
+        f'+        "capability": "{capability}",\n'
+        '+        "workspace": workspace,\n'
+        '+        "task_spec": task_spec,\n'
+        '+        "desired_end_state": task_spec.get("desired_end_state", ""),\n'
+        '+        "acceptance_criteria": task_spec.get("acceptance_criteria", []),\n'
+        "+    }\n"
+        f"+    # delegate to codex/bin/capability_drafts/{capability}_executor_stub.py::draft_execute\n"
+        "+    return payload\n"
         "@@ executor_or_admin_handler @@\n"
         f'+    # runtime_patch_candidate for {capability} using {shape["executor"]}\n'
+        f'+    # dispatch_handler: {handler_name}\n'
+        f'+    # selector: required_capability == "{capability}"\n'
     )
     return rel, unified_diff_for_file(rel, before, after)
 
@@ -1746,6 +1810,7 @@ def generate_unified_diff(
                 capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
                 capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_contract_file(capability, feature_request, reasoning),
+                capability_executor_dispatch_file(capability, feature_request, reasoning),
                 capability_executor_stub_file(capability, feature_request, reasoning),
                 capability_runtime_hook_stub_file(capability, feature_request, reasoning),
                 capability_smoke_stub_file(capability, feature_request, reasoning),

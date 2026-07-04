@@ -962,6 +962,7 @@ def assert_capability_draft_contracts() -> None:
         gateway_runtime_patch_candidate_path = ROOT / f"docs/capability-drafts/{capability}.runtime.patch.diff"
         wiring_path = ROOT / f"docs/capability-drafts/{capability}.wiring.json"
         executor_contract_path = ROOT / f"docs/capability-drafts/{capability}.executor-contract.json"
+        executor_dispatch_path = ROOT / f"docs/capability-drafts/{capability}.executor-dispatch.json"
         executor_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_executor_stub.py"
         runtime_hook_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py"
         smoke_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_smoke.py"
@@ -994,6 +995,8 @@ def assert_capability_draft_contracts() -> None:
                 "@@ AGENT_CAPABILITY_TO_WORKFLOW @@",
                 "@@ CANONICAL_AGENT_CAPABILITY_ALIASES @@",
                 "@@ agent_capability_registry @@",
+                "@@ capability_dispatch_helper @@",
+                "@@ executor_or_admin_handler @@",
             ):
                 if required not in runtime_patch_candidate_text:
                     raise SystemExit(f"runtime patch candidate missing {required!r} for {capability}: {gateway_runtime_patch_candidate_path}")
@@ -1011,6 +1014,14 @@ def assert_capability_draft_contracts() -> None:
                 raise SystemExit(f"executor contract missing inputs for {capability}: {executor_contract!r}")
             if not (executor_contract.get("return_schema") or {}):
                 raise SystemExit(f"executor contract missing return schema for {capability}: {executor_contract!r}")
+        if executor_dispatch_path.is_file():
+            executor_dispatch = json.loads(executor_dispatch_path.read_text(encoding="utf-8"))
+            if str(executor_dispatch.get("kind") or "") != str(markers.get("executor_dispatch_kind") or ""):
+                raise SystemExit(f"executor dispatch kind mismatch for {capability}: {executor_dispatch!r}")
+            if not str(executor_dispatch.get("handler_name") or "").strip():
+                raise SystemExit(f"executor dispatch missing handler_name for {capability}: {executor_dispatch!r}")
+            if not str(executor_dispatch.get("helper_entrypoint") or "").strip():
+                raise SystemExit(f"executor dispatch missing helper_entrypoint for {capability}: {executor_dispatch!r}")
         if executor_stub_path.is_file():
             executor_text = executor_stub_path.read_text(encoding="utf-8")
             capability_constant = str(markers.get("executor_capability_constant") or "").strip()
