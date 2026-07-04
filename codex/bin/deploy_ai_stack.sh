@@ -185,6 +185,13 @@ if [ "${1:-}" = "--restart-only" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "--sudoers-probe" ]; then
+  echo "DEPLOY_SUDOERS_PROBE_OK"
+  echo "script=$SCRIPT_PATH"
+  echo "euid=${EUID:-$(id -u)}"
+  exit 0
+fi
+
 section "AI Stack deploy started"
 echo "repo=$REPO_ROOT"
 echo "remote=$REMOTE"
@@ -279,7 +286,8 @@ bash -n \
   codex/bin/store_runtime_secret.sh \
   codex/bin/store_openwebui_api_key.sh \
   codex/bin/owui_request.sh \
-  codex/bin/deploy_ai_stack.sh
+  codex/bin/deploy_ai_stack.sh \
+  codex/bin/install_deploy_sudoers.sh
 
 section "Restart phase"
 if [ "${EUID:-$(id -u)}" -eq 0 ]; then
@@ -308,7 +316,8 @@ else
     echo "Manual fallback:"
     echo "sudo $SCRIPT_PATH --restart-only"
     echo "Optional narrow sudoers entry:"
-    echo "$(id -un) ALL=(root) NOPASSWD: $SCRIPT_PATH"
+    echo "$REPO_ROOT/codex/bin/install_deploy_sudoers.sh --print"
+    echo "sudo $REPO_ROOT/codex/bin/install_deploy_sudoers.sh --install"
     exit "$rc"
   fi
 fi

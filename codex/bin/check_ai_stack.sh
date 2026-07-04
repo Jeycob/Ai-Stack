@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -u
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEFAULT_KEY_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/state/openwebui-api.key"
+OWUI_KEY_FILE="${OWUI_API_KEY_FILE:-$DEFAULT_KEY_FILE}"
+WSL_BOOT_WRAPPER="${WSL_BOOT_WRAPPER:-$REPO_ROOT/codex/bin/wsl_boot_ai_stack.sh}"
+WSL_CONF="${WSL_CONF:-/etc/wsl.conf}"
+DEPLOY_SCRIPT="${DEPLOY_SCRIPT:-$REPO_ROOT/codex/bin/deploy_ai_stack.sh}"
+DEPLOY_SUDOERS_HELPER="${DEPLOY_SUDOERS_HELPER:-$REPO_ROOT/codex/bin/install_deploy_sudoers.sh}"
+
 if [ -z "${OPENWEBUI_URL:-}" ] && command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/openwebui_runtime.py" ]; then
   OPENWEBUI_URL="$(python3 "$SCRIPT_DIR/openwebui_runtime.py" | head -n 1)"
 fi
@@ -15,12 +24,6 @@ OWUI_CHAT_SMOKE_VISIBLE="${OWUI_CHAT_SMOKE_VISIBLE:-repo: ${WORKSPACE}\nOdpovez 
 OWUI_CHAT_SMOKE_PROMPT="${OWUI_CHAT_SMOKE_PROMPT:-repo: ${WORKSPACE}\nOdpovez jednim slovem: smoke}"
 OWUI_CHAT_SCENARIOS="${OWUI_CHAT_SCENARIOS:-agent-review,explicit-agent-loop,verify-project}"
 SUMMARY_ONLY="${CHECK_AI_STACK_SUMMARY_ONLY:-0}"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DEFAULT_KEY_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/state/openwebui-api.key"
-OWUI_KEY_FILE="${OWUI_API_KEY_FILE:-$DEFAULT_KEY_FILE}"
-WSL_BOOT_WRAPPER="${WSL_BOOT_WRAPPER:-$REPO_ROOT/codex/bin/wsl_boot_ai_stack.sh}"
-WSL_CONF="${WSL_CONF:-/etc/wsl.conf}"
 
 failures=0
 total_checks=0
@@ -127,6 +130,42 @@ check_wsl_boot_config() {
   fi
 }
 
+check_deploy_sudoers() {
+  local label="Deploy sudoers NOPASSWD"
+  if [ "${SKIP_DEPLOY_SUDOERS_CHECK:-0}" = "1" ]; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] %s ... SKIP (disabled)\n' "$label"
+    record_summary "$label" "SKIP"
+    return
+  fi
+  if [ ! -x "$DEPLOY_SCRIPT" ]; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] %s ... FAIL (%s missing or not executable)\n' "$label" "$DEPLOY_SCRIPT"
+    failures=$((failures + 1))
+    record_summary "$label" "FAIL"
+    return
+  fi
+  if sudo -n "$DEPLOY_SCRIPT" --sudoers-probe >/dev/null 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] %s ... OK\n' "$label"
+    record_summary "$label" "OK"
+    return
+  fi
+
+  if [ "${REQUIRE_DEPLOY_SUDOERS:-0}" = "1" ]; then
+    [ "$SUMMARY_ONLY" != "1" ] && {
+      printf '[check] %s ... FAIL\n' "$label"
+      printf 'DEPLOY_SUDOERS_NOT_CONFIGURED\n'
+      printf 'Recovery: sudo %s --install\n' "$DEPLOY_SUDOERS_HELPER"
+    }
+    failures=$((failures + 1))
+    record_summary "$label" "FAIL"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && {
+      printf '[check] %s ... SKIP (not configured)\n' "$label"
+      printf 'Recovery if automated deploy restarts are desired: sudo %s --install\n' "$DEPLOY_SUDOERS_HELPER"
+    }
+    record_summary "$label" "SKIP"
+  fi
+}
+
 emit_summary() {
   local verdict="OK"
   if [ "$failures" -ne 0 ]; then
@@ -160,6 +199,7 @@ else
   check_file_exists "WSL boot wrapper" "$WSL_BOOT_WRAPPER"
   check_wsl_boot_config
 fi
+check_deploy_sudoers
 
 if [ "${SKIP_OPENWEBUI:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI config endpoint ... SKIP (self-check disabled)\n'

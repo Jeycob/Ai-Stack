@@ -86,6 +86,7 @@ def assert_bootstrap_beats_workspace_ssh_for_new_repo() -> None:
     for task in (
         "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic",
         "vytvor mi nove repository TestCode; vygeneruj do nej ssh klic",
+        "Test11:\nvytvoř repository a vygeneruj ssh klic; pred push/deploy pockej na potvrzeni",
     ):
         plan, _raw = gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True)
         if plan.get("workflow") != "bootstrap":
@@ -105,8 +106,9 @@ def assert_bootstrap_beats_workspace_ssh_for_new_repo() -> None:
         )
         if normalized.get("workflow") != "bootstrap":
             raise SystemExit(f"expected normalized bootstrap workflow for combined bootstrap+ssh prompt, got {normalized!r}")
-        if normalized.get("repo_name") != "TestCode":
-            raise SystemExit(f"expected repo_name='TestCode', got {normalized!r}")
+        expected_name = "Test11" if task.startswith("Test11:") else "TestCode"
+        if normalized.get("repo_name") != expected_name:
+            raise SystemExit(f"expected repo_name={expected_name!r}, got {normalized!r}")
     print("BOOTSTRAP_BEATS_SSH_INTENT_OK")
 
 
@@ -856,7 +858,7 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
     first_line = rendered.splitlines()[0]
     if "AGENT_LOOP" in first_line:
         raise SystemExit(f"renderer should start with human answer, got {rendered!r}")
-    for marker in ("Ve workspace Test2 jsem upravil README.md.", "Změněné soubory: `README.md`", "Debug:", "AGENT_LOOP_OK", "workflow=edit"):
+    for marker in ("Ve workspace Test2 jsem upravil README.md.", "Změněné soubory: `README.md`", "CODEX_DEBUG", "AGENT_LOOP_OK", "workflow=edit"):
         if marker not in rendered:
             raise SystemExit(f"renderer missing marker {marker!r}: {rendered!r}")
     print("TASKSPEC_V2_INTENTS_AND_RENDERER_OK")
@@ -1351,8 +1353,11 @@ def assert_codex_local_payload_routing() -> None:
         "task": "Prohlédni architekturu gateway/filter/helper vrstvy. Nic needituj.",
         "model": "codex-local-plan-qwen14b",
     }
-    if routed != expected:
+    comparable = {key: routed.get(key) for key in expected}
+    if comparable != expected:
         raise SystemExit(f"expected codex-local payload routing {expected!r}, got {routed!r}")
+    if routed.get("messages") != payload["messages"]:
+        raise SystemExit(f"expected codex-local payload to preserve messages, got {routed!r}")
     print("CODEX_LOCAL_PAYLOAD_ROUTING_OK")
 
 
@@ -1724,6 +1729,88 @@ def assert_deploy_status_diagnostics() -> None:
     print("DEPLOY_STATUS_DIAGNOSTICS_OK")
 
 
+def assert_agent_loop_passes_conversation_context() -> None:
+    captured = {}
+
+    def fake_agent_plan(task, requested_workspace, controller_workspace, workspace_exists, conversation_context=""):
+        captured["context"] = conversation_context
+        return (
+            {
+                "intent_class": "web_search",
+                "workflow": "web_search",
+                "reason": "follow-up search",
+                "read_only": True,
+                "workspace": "ai-stack",
+                "action": "",
+                "command": [],
+                "run_after": "",
+                "followup_actions": [],
+                "repo_name": "",
+                "target_capability_name": "",
+                "github": False,
+                "remote_url": "",
+                "desired_end_state": "public web result",
+                "required_capabilities": ["public_web_search"],
+                "missing_capabilities": [],
+                "missing_inputs": [],
+                "meta_capability": "",
+                "search_query": "kdo ma dneska svatek",
+                "url": "",
+                "question": "kdo ma dneska svatek",
+                "ssh_comment": "",
+                "confidence": "high",
+                "referents": {"to": "kdo ma dneska svatek"},
+                "target_workspace": "",
+                "execution_plan": [],
+                "needs_user_input": False,
+                "answer_visibility": "summary",
+                "capability_locked": True,
+            },
+            {
+                "intent_class": "web_search",
+                "referents": {"to": "kdo ma dneska svatek"},
+                "current_workspace": "ai-stack",
+                "target_workspace": "",
+                "user_goal": "vyhledej předchozí dotaz",
+                "required_capabilities": ["public_web_search"],
+                "missing_capabilities": [],
+                "missing_inputs": [],
+                "read_only": True,
+                "search_query": "kdo ma dneska svatek",
+                "question": "kdo ma dneska svatek",
+                "recovery_plan": "",
+            },
+            {"source": "fake"},
+        )
+
+    with patch.object(gateway, "agent_plan", side_effect=fake_agent_plan), patch.object(
+        gateway,
+        "admin_public_web_search",
+        return_value={
+            "ok": True,
+            "answer": "Našel jsem veřejné výsledky.",
+            "query": "kdo ma dneska svatek",
+            "results": [{"title": "Svátky", "url": "https://example.test"}],
+        },
+    ):
+        result = gateway.admin_agent_loop(
+            {
+                "workspace": "ai-stack",
+                "task": "vyhledej to kdekoliv",
+                "messages": [
+                    {"role": "user", "content": "kdo ma dneska svatek?"},
+                    {"role": "assistant", "content": "Mám to vyhledat na webu."},
+                    {"role": "user", "content": "vyhledej to kdekoliv"},
+                ],
+            }
+        )
+    if not result.get("ok") or result.get("workflow") != "web_search":
+        raise SystemExit(f"expected web_search result, got {result!r}")
+    if "kdo ma dneska svatek" not in captured.get("context", ""):
+        raise SystemExit(f"conversation context did not preserve referent source, got {captured!r}")
+    print("AGENT_LOOP_CONVERSATION_CONTEXT_OK")
+
+
 def main() -> int:
     assert_agent_loop_parse()
     assert_fallback_plans()
@@ -1760,6 +1847,7 @@ def main() -> int:
     assert_agent_loop_human_answers()
     assert_host_runner_requires_explicit_capability()
     assert_deploy_status_diagnostics()
+    assert_agent_loop_passes_conversation_context()
     assert_case(
         "test",
         "npm error Missing script: test",

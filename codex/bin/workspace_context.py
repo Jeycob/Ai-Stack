@@ -22,6 +22,11 @@ BOOTSTRAP_REPO_PATTERNS = BOOTSTRAP_CREATE_REPO_PATTERNS + (
     rf"(?i)\bv\s+(?:repository|repozit\w*|reposit\w*|workspace|projektu|projectu|repo)\b\s+({WORKSPACE_NAME_PATTERN})\b",
     rf"(?i)\b(?:workspace|projekt|project)\b\s+({WORKSPACE_NAME_PATTERN})\b",
 )
+BOOTSTRAP_CREATE_INTENT_RE = re.compile(
+    rf"(?i)\b(?:vytvor|vytvoř|zaloz|založ|create|new|novy|nový|nove|nové)\b"
+    rf".*\b{BOOTSTRAP_TARGET_LABEL_PATTERN}\b",
+    re.S,
+)
 ASSISTANT_CONTEXT_PATTERNS = (
     rf"(?im)^\s*requested_workspace\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
     rf"(?im)^\s*controller_workspace\s*=\s*({WORKSPACE_NAME_PATTERN})\s*$",
@@ -112,6 +117,13 @@ def infer_repo_name_from_text(text: str) -> str:
 
 def bootstrap_repo_name_from_text(text: str) -> str:
     value = str(text or "")
+    first_lines = [line.strip() for line in value.splitlines() if line.strip()]
+    if first_lines:
+        label_match = re.fullmatch(rf"({WORKSPACE_NAME_PATTERN})\s*:", first_lines[0])
+        if label_match and BOOTSTRAP_CREATE_INTENT_RE.search(value):
+            candidate = label_match.group(1).strip()
+            if candidate.lower() not in INVALID_REPO_NAME_CANDIDATES:
+                return candidate
     for pattern in BOOTSTRAP_CREATE_REPO_PATTERNS:
         match = re.search(pattern, value)
         if match:

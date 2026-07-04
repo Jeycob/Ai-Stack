@@ -63,6 +63,10 @@ STRUCTURED_BACKEND_STATE = {
 }
 
 
+def env_truthy(name):
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _repo_root_candidates():
     env_workspaces = os.getenv("CODEX_WORKSPACES_FILE", "").strip()
     if env_workspaces:
@@ -201,6 +205,26 @@ def content_to_text(content):
     if isinstance(content, list):
         return "\n".join(str(x.get("text", x)) for x in content)
     return str(content)
+
+
+def recent_conversation_context(messages, max_messages=8, max_chars=3000):
+    context = []
+    for message in (messages or [])[-max_messages:]:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "user").strip().lower()
+        if role == "system":
+            continue
+        text = content_to_text(message.get("content", "")).strip()
+        if not text:
+            continue
+        text = re.sub(r"-----BEGIN OPENSSH PRIVATE KEY-----.*?-----END OPENSSH PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]", text, flags=re.S)
+        text = re.sub(r"(?im)^.*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)\s*[:=].*?$", "[REDACTED_SECRET_LINE]", text)
+        context.append(f"{role}: {preview_text(text, 700)}")
+    rendered = "\n".join(context)
+    if len(rendered) > max_chars:
+        rendered = rendered[-max_chars:]
+    return rendered
 
 def select_workspace(messages):
     default, workspaces = load_registry()
@@ -1563,7 +1587,7 @@ def agent_read_only_requested(task):
 
 
 def agent_extract_repo_name(task):
-    return infer_repo_name_from_text(task)
+    return bootstrap_repo_name_from_text(task) or infer_repo_name_from_text(task)
 
 
 def agent_controller_workspace(requested_workspace):
@@ -2580,6 +2604,7 @@ def agent_capability_selector_messages(
     controller_workspace,
     workspace_exists,
     task,
+    conversation_context="",
 ):
     capability_registry = agent_capability_registry()
     capability_names = sorted(
@@ -2621,6 +2646,7 @@ def agent_capability_selector_messages(
                 f"Requested workspace exists: {workspace_exists}\n"
                 f"Implemented capabilities: {', '.join(capability_names)}\n"
                 f"Partial TaskSpec:\n{partial_json}\n\n"
+                f"Recent conversation context:\n{conversation_context or '(none)'}\n\n"
                 f"User task:\n{task}"
             ),
         },
@@ -2633,6 +2659,7 @@ def agent_select_capabilities_with_llm(
     controller_workspace,
     workspace_exists,
     task,
+    conversation_context="",
 ):
     model_id = codex_local_runtime_model_name(task=task, role=ROLE_PLANNER)
     parsed, raw, _meta = structured_json_chat(
@@ -2643,6 +2670,7 @@ def agent_select_capabilities_with_llm(
             controller_workspace,
             workspace_exists,
             task,
+            conversation_context,
         ),
         "capability_selector",
         agent_capability_selector_schema(),
@@ -2708,7 +2736,7 @@ def split_agent_capabilities(capabilities):
     return implemented, missing
 
 
-def agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
+def agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot, conversation_context=""):
     registry = load_registry()[1]
     workspace_list = ", ".join(sorted(registry))
     return [
@@ -2755,6 +2783,7 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 "- Capability/help questions are capability_help, not repository review.\n"
                 "- Public web questions without a concrete URL are web_search; public web questions with a URL are web_fetch/web_search as appropriate.\n"
                 "- Resolve follow-up referents such as to/tam/ten projekt from the conversation context when it is present.\n"
+                "- If the current message contains pronouns like it/that/to/tam/ten projekt, resolve them from Recent conversation context before selecting a capability.\n"
                 "- For multi-step app work, use workspace_action_chain with an execution_plan instead of inventing missing capabilities like build.\n"
                 "- Before push/deploy/destructive steps that need user confirmation, include await_user_confirmation in required_capabilities and set needs_user_input=true.\n"
                 "- If an existing workspace is the target and the user mentions git init, origin, remote, push, or a remote URL, prefer existing-workspace git publishing instead of bootstrap.\n"
@@ -2778,6 +2807,7 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 f"Requested workspace exists: {workspace_exists}\n"
                 f"Known workspaces: {workspace_list}\n\n"
                 f"Capability catalog:\n{agent_capability_catalog()}\n\n"
+                f"Recent conversation context:\n{conversation_context or '(none)'}\n\n"
                 f"User task:\n{task}\n\n"
                 f"Repository snapshot for the controller workspace:\n{snapshot[:18000]}"
             ),
@@ -2785,7 +2815,7 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
     ]
 
 
-def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, workspace_exists, task):
+def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, workspace_exists, task, conversation_context=""):
     if not isinstance(spec, dict):
         spec = {}
     allowed_intents = {
@@ -2914,6 +2944,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
                 controller_workspace,
                 workspace_exists,
                 task,
+                conversation_context,
             )
         except Exception:
             llm_capability_selection = None
@@ -3223,8 +3254,8 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     }
 
 
-def agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot):
-    return agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot)
+def agent_plan_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot, conversation_context=""):
+    return agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot, conversation_context)
 
 
 def normalize_agent_plan(plan, requested_workspace, controller_workspace, workspace_exists, task):
@@ -3408,7 +3439,7 @@ def agent_review_response(workspace, task):
     return response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
 
-def agent_plan(task, requested_workspace, controller_workspace, workspace_exists):
+def agent_plan(task, requested_workspace, controller_workspace, workspace_exists, conversation_context=""):
     default, workspaces = load_registry()
     cfg = workspaces.get(controller_workspace) or workspaces.get(default)
     try:
@@ -3418,12 +3449,12 @@ def agent_plan(task, requested_workspace, controller_workspace, workspace_exists
     model_id = codex_local_runtime_model_name(task=task, role=ROLE_PLANNER)
     parsed, raw, _meta = structured_json_chat(
         model_id,
-        agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot),
+        agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot, conversation_context),
         "agent_taskspec",
         agent_taskspec_schema(),
         timeout=240,
     )
-    taskspec = normalize_agent_taskspec(parsed, requested_workspace, controller_workspace, workspace_exists, task)
+    taskspec = normalize_agent_taskspec(parsed, requested_workspace, controller_workspace, workspace_exists, task, conversation_context)
     plan = agent_taskspec_to_plan(taskspec, requested_workspace, controller_workspace, workspace_exists, task)
     return plan, taskspec, raw
 
@@ -3716,10 +3747,11 @@ def admin_agent_loop(payload):
     task = str(payload.get("task") or "").strip()
     if not task or len(task) > 6000:
         raise ValueError("task must be 1..6000 characters")
+    conversation_context = recent_conversation_context(payload.get("messages") or [])
     controller_workspace, workspace_exists, workspaces = agent_controller_workspace(requested_workspace)
     planner_source = "llm"
     try:
-        plan, taskspec, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists)
+        plan, taskspec, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists, conversation_context)
     except Exception as exc:
         fallback = agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists)
         if not fallback:
@@ -3756,6 +3788,7 @@ def admin_agent_loop(payload):
         "workspace_exists": workspace_exists,
         "model_runtime": codex_local_runtime_surface(requested_model, task=task, role=ROLE_AGENT),
         "task": task,
+        "conversation_context": conversation_context,
         "plan": plan,
         "taskspec": taskspec,
         "raw_plan": raw_plan,
@@ -5890,6 +5923,12 @@ def admin_deploy_status(payload):
     restart_required = blocker == "DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED"
     user = run_ro(["id", "-un"], REPO_ROOT, 4)
     script = REPO_ROOT / "codex/bin/deploy_ai_stack.sh"
+    sudoers_helper = REPO_ROOT / "codex/bin/install_deploy_sudoers.sh"
+    sudoers_entry = (
+        f"{user} ALL=(root) NOPASSWD: {script} --restart-only, {script} --sudoers-probe"
+        if restart_required and user
+        else ""
+    )
     return {
         "ok": True,
         "action": "deploy_status",
@@ -5905,7 +5944,8 @@ def admin_deploy_status(payload):
         "deployment_blocker": blocker,
         "restart_required": restart_required,
         "manual_restart_command": f"sudo {script} --restart-only" if restart_required else "",
-        "sudoers_entry": f"{user} ALL=(root) NOPASSWD: {script}" if restart_required and user else "",
+        "sudoers_entry": sudoers_entry,
+        "sudoers_install_command": f"sudo {sudoers_helper} --install" if restart_required else "",
         "log": str(log_file),
         "tail": tail,
     }
@@ -6309,6 +6349,9 @@ def agent_loop_response_text(result):
     status = "AGENT_LOOP_OK" if result.get("ok") else "AGENT_LOOP_NEEDS_ATTENTION"
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
     workflow = str(result.get("workflow", plan.get("workflow", "")))
+    answer_visibility = str(result.get("answer_visibility") or plan.get("answer_visibility") or "summary").strip().lower()
+    if answer_visibility not in {"summary", "details", "hidden_debug"}:
+        answer_visibility = "summary"
     answer = agent_loop_human_answer(result)
     lines = []
     if answer:
@@ -6353,18 +6396,24 @@ def agent_loop_response_text(result):
         if value in (None, {}, []):
             continue
         debug_payload[key] = value
-    lines.append("")
-    lines.append("Debug:")
-    lines.append("```text")
-    lines.extend(debug_lines)
+    debug_rendered = "\n".join(debug_lines)
     if debug_payload:
-        lines.append("")
         try:
             rendered = json.dumps(debug_payload, ensure_ascii=False, indent=2)
         except TypeError:
             rendered = str(debug_payload)
-        lines.append(trim_response_text(rendered, 12000))
-    lines.append("```")
+        debug_rendered = debug_rendered + "\n\n" + trim_response_text(rendered, 12000)
+    if env_truthy("CODEX_LOCAL_SHOW_DEBUG") or answer_visibility == "details":
+        lines.append("")
+        lines.append("Debug:")
+        lines.append("```text")
+        lines.append(debug_rendered)
+        lines.append("```")
+    else:
+        # Keep machine-readable markers for helper/test correlation without
+        # making normal OpenWebUI replies look like raw runtime logs.
+        safe_debug = debug_rendered.replace("--", "- -")
+        lines.append(f"\n<!-- CODEX_DEBUG\n{safe_debug}\n-->")
     return "\n".join(lines).strip()
 
 
@@ -6410,6 +6459,7 @@ def codex_local_agent_loop_payload(payload):
         "workspace": agent_requested_workspace_from_text(admin_text, messages),
         "task": text[:6000],
         "model": str(payload.get("model") or DEFAULT_MODEL_ALIAS),
+        "messages": messages,
     }
 
 def normal_chat_requires_tool(payload):
@@ -6510,6 +6560,7 @@ def completion(payload):
     explicit_loop = explicit_agent_loop_request(admin_text)
     if explicit_loop:
         try:
+            explicit_loop["messages"] = payload.get("messages") or []
             text = agent_loop_response_text(admin_agent_loop(explicit_loop))
         except Exception as exc:
             text = f"CODEX_LOCAL_AGENT_LOOP_FAILED\nerror={type(exc).__name__}: {exc}"
@@ -6558,6 +6609,7 @@ def completion(payload):
                 "workspace": agent_requested_workspace_from_text(admin_text, payload.get("messages") or []),
                 "task": task,
                 "model": str(payload.get("model") or DEFAULT_MODEL_ALIAS),
+                "messages": payload.get("messages") or [],
             })
             text = agent_loop_response_text(result)
         except Exception as exc:
