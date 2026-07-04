@@ -415,7 +415,12 @@ def classify_failure(text: str, expected_behavior: str, failure_marker: str) -> 
     patch_scope = ["codex/gateway/gateway.py", "codex/bin/gateway_recovery_smoke.py"]
     recovery = "Add or run a deterministic regression that captures the observed failure before changing routing."
 
-    if "missing_capabilities" in lower or "unsupported capability" in lower:
+    if any(marker in lower for marker in ("agent_status_cycle", "git_status", "health_check", "smoke_status", "status cyklus", "status cycle")):
+        category = "status_cycle_capability_gap"
+        root_cause = "A status/reporting request did not map to a canonical codex-local status capability with git, health, fingerprint, and smoke evidence."
+        patch_scope = ["codex/gateway/gateway.py", "codex/bin/gateway_recovery_smoke.py", "codex/bin/agent_self_improve.py"]
+        recovery = "Add a canonical status-cycle capability, alias normalization for status evidence names, and a TaskSpec-path regression."
+    elif "missing_capabilities" in lower or "unsupported capability" in lower:
         category = "capability_alias_or_registry_bug"
         root_cause = "TaskSpec capability validation likely used a raw or unsupported capability name instead of canonical form."
         patch_scope = ["codex/gateway/gateway.py", "docs/codex-local-capability-roadmap.json", "codex/bin/gateway_recovery_smoke.py"]
@@ -458,6 +463,7 @@ def classify_failure(text: str, expected_behavior: str, failure_marker: str) -> 
 SELF_IMPROVE_DIAGNOSIS_CATEGORIES = {
     "unknown",
     "capability_alias_or_registry_bug",
+    "status_cycle_capability_gap",
     "false_executor_or_recursion_bug",
     "transport_timeout_or_streaming_bug",
     "runtime_drift",
@@ -4734,6 +4740,34 @@ def main() -> int:
     }
     write_json(audit_dir / "learned-pattern.json", learned_pattern)
 
+    phase_payloads = {
+        "reproduce": reproduce_result,
+        "reason": reasoning_result,
+        "proposal": proposal_result,
+        "generated_diff": generated_diff_result,
+        "patch": patch_result,
+        "verify": verify_result,
+        "deploy": deploy_result,
+        "e2e": e2e_result,
+    }
+    skipped_phases = [
+        name
+        for name, payload in phase_payloads.items()
+        if isinstance(payload, dict) and payload.get("skipped")
+    ]
+    if proposal_result.get("manual_next_step"):
+        next_step = str(proposal_result.get("manual_next_step") or "")
+    elif generated_diff_result.get("safe_apply_candidate_patch_file"):
+        next_step = "Review and apply the safe generated diff, then rerun verify."
+    elif verify_result.get("ok") and not verify_result.get("skipped"):
+        next_step = "Review verification evidence and decide whether to commit/push/deploy."
+    elif not verify_result.get("ok") and not verify_result.get("skipped"):
+        next_step = "Use failed verify output as context for the next self-improve cycle."
+    elif args.mode == "diagnose":
+        next_step = "Run self-improve in propose_patch mode with this diagnosis artifact."
+    else:
+        next_step = "Inspect the generated artifacts and run the next guarded phase."
+
     summary = {
         "ok": all(
             bool(item.get("ok"))
@@ -4759,7 +4793,12 @@ def main() -> int:
         "diagnosis_source": diagnosis.get("source") or "",
         "regression_source": regression.get("source") or "",
         "root_cause": diagnosis.get("root_cause"),
+        "user_intent": args.prompt or args.expected_behavior or args.failure_marker or args.chat_url or args.chat_id,
+        "where_failed": diagnosis.get("root_cause") or diagnosis.get("source") or "unknown",
         "patch_scope": diagnosis.get("patch_scope"),
+        "regression_artifact": str(audit_dir / "regression.json"),
+        "skipped_phases": skipped_phases,
+        "next_step": next_step,
         "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
         "reproduce": {
             "ok": reproduce_result.get("ok"),

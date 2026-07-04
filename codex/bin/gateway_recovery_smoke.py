@@ -709,6 +709,86 @@ def assert_taskspec_meta_capabilities() -> None:
     print("TASKSPEC_META_CAPABILITIES_OK")
 
 
+def assert_agent_status_cycle_capability() -> None:
+    for alias in ("git_status", "http_request", "health_check", "smoke_status"):
+        canonical = gateway.canonicalize_agent_capability(alias)
+        if canonical != "agent_status_cycle":
+            raise SystemExit(f"expected {alias!r} -> agent_status_cycle, got {canonical!r}")
+
+    task = "Spusť levný codex-local status cyklus"
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "run cheap codex-local status cycle",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "git status, gateway health, runtime fingerprint, smoke summary, blocker, and next step returned",
+            "required_capabilities": ["git_status", "health_check", "smoke_status"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "return precise blocker and smallest next step",
+            "read_only": False,
+        },
+        task,
+        workspace="ai-stack",
+        workspace_exists=True,
+    )
+    if taskspec.get("required_capabilities") != ["agent_status_cycle"]:
+        raise SystemExit(f"expected canonical status-cycle capability, got {taskspec!r}")
+    if plan.get("workflow") != "meta" or plan.get("meta_capability") != "agent_status_cycle":
+        raise SystemExit(f"expected status cycle to route as meta capability, got {plan!r}")
+    if plan.get("workflow") in {"bootstrap", "clarify"}:
+        raise SystemExit(f"status cycle must not route to bootstrap/clarify, got {plan!r}")
+
+    def fake_run_ro(command, root, timeout=8):
+        mapping = {
+            ("git", "status", "--short", "--branch"): "## main...origin/main",
+            ("git", "rev-parse", "--short", "HEAD"): "abc1234",
+            ("git", "rev-parse", "--short", "origin/main"): "abc1234",
+            ("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"): "origin/main",
+        }
+        return mapping.get(tuple(command), "")
+
+    fake_health = {
+        "codex_local_ready": True,
+        "readiness_issues": [],
+        "runtime_commit": "abc1234",
+        "gateway_source_epoch": "smoke",
+        "runtime_fingerprint": "fingerprint-smoke",
+        "openwebui": {"ok": True},
+    }
+
+    def fake_smoke(command, name, timeout=45):
+        return {
+            "name": name,
+            "ok": True,
+            "exit_code": 0,
+            "duration_ms": 1,
+            "command": " ".join(command),
+            "output_tail": f"{name}_OK",
+        }
+
+    with patch.object(gateway, "runtime_health", return_value=fake_health), patch.object(
+        gateway, "deploy_runtime_gate_status", return_value={"ok": True, "marker": ""}
+    ), patch.object(gateway, "run_ro", side_effect=fake_run_ro), patch.object(
+        gateway, "run_status_cycle_smoke", side_effect=fake_smoke
+    ):
+        meta = gateway.admin_agent_meta(plan, "ai-stack", "ai-stack", True, {"ai-stack": {"path": str(ROOT)}})
+
+    if meta.get("capability") != "agent_status_cycle" or meta.get("biggest_blocker") != "none":
+        raise SystemExit(f"expected clean status-cycle meta result, got {meta!r}")
+    for key in ("git_status", "gateway_health", "runtime", "smoke_summary", "next_step"):
+        if key not in meta:
+            raise SystemExit(f"status-cycle result missing {key}: {meta!r}")
+    if meta.get("smoke_summary", {}).get("passed") != 3:
+        raise SystemExit(f"expected all cheap smokes to pass, got {meta!r}")
+    if "Status cyklus" not in str(meta.get("answer") or ""):
+        raise SystemExit(f"expected human status-cycle answer, got {meta!r}")
+    print("AGENT_STATUS_CYCLE_CAPABILITY_OK")
+
+
 def assert_workspace_search_capability() -> None:
     taskspec, plan = _taskspec_plan(
         {
@@ -2130,6 +2210,7 @@ def main() -> int:
     assert_taskspec_public_key_prompt_uses_show_public()
     assert_taskspec_unknown_capability_stays_missing()
     assert_taskspec_meta_capabilities()
+    assert_agent_status_cycle_capability()
     assert_workspace_search_capability()
     assert_taskspec_v2_intents_and_renderer()
     assert_agent_self_improve_capability()

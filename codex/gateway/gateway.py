@@ -1115,6 +1115,7 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "workspace_context_status": "meta",
     "capability_catalog_show": "meta",
     "agent_runtime_status": "meta",
+    "agent_status_cycle": "meta",
     "review": "review",
     "workspace_search": "workspace_search",
     "workspace_edit": "edit",
@@ -1178,6 +1179,12 @@ CORE_AGENT_CAPABILITIES = {
     "agent_runtime_status": {
         "workflow": "meta",
         "summary": "Deterministically show codex-local runtime status.",
+        "scope": "agent_metadata",
+        "implemented": True,
+    },
+    "agent_status_cycle": {
+        "workflow": "meta",
+        "summary": "Run a cheap codex-local status cycle: git status, gateway health, runtime drift, smoke summary, blocker, and next step.",
         "scope": "agent_metadata",
         "implemented": True,
     },
@@ -1443,6 +1450,14 @@ CANONICAL_AGENT_CAPABILITY_ALIASES = {
     "runtime_status": "agent_runtime_status",
     "system_status": "agent_runtime_status",
     "status": "agent_runtime_status",
+    "agent_status_cycle": "agent_status_cycle",
+    "status_cycle": "agent_status_cycle",
+    "codex_status_cycle": "agent_status_cycle",
+    "cheap_status_cycle": "agent_status_cycle",
+    "git_status": "agent_status_cycle",
+    "http_request": "agent_status_cycle",
+    "health_check": "agent_status_cycle",
+    "smoke_status": "agent_status_cycle",
     "workspace_context_set": "workspace_context_set",
     "context_set": "workspace_context_set",
     "workspace_set": "workspace_context_set",
@@ -1771,6 +1786,7 @@ def agent_capability_registry_issues():
         "workspace_context_status",
         "capability_catalog_show",
         "agent_runtime_status",
+        "agent_status_cycle",
         "agent_self_improve",
         "agent_capability_develop",
     }
@@ -1990,6 +2006,7 @@ def agent_capability_catalog():
         "- workspace_context_status: deterministically report current workspace, path, and registered workspaces",
         "- capability_catalog_show: show implemented capabilities and canonical aliases",
         "- agent_runtime_status: show codex-local runtime/readiness status",
+        "- agent_status_cycle: cheap git/health/fingerprint/smoke status cycle with blocker and next step",
         "- review: read-only analysis over repository snapshot; never edits",
         "- workspace_search: bounded rg search over the workspace; returns matching files and lines",
         "- edit: safe repository edit through audited unified diff application; optional verify/test/build/smoke follow-up",
@@ -3055,6 +3072,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
                     "workspace_context_status",
                     "capability_catalog_show",
                     "agent_runtime_status",
+                    "agent_status_cycle",
                 }
             ),
             "",
@@ -3264,6 +3282,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
                 "workspace_context_status",
                 "capability_catalog_show",
                 "agent_runtime_status",
+                "agent_status_cycle",
             }
         ),
         "",
@@ -3508,6 +3527,150 @@ def agent_plan(task, requested_workspace, controller_workspace, workspace_exists
     return plan, taskspec, raw
 
 
+def run_status_cycle_smoke(command, name, timeout=45):
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+        output = proc.stdout or ""
+        return {
+            "name": name,
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "duration_ms": int((time.time() - started) * 1000),
+            "command": shell_join_safe(command),
+            "output_tail": trim_response_text(output[-2000:], 2000),
+        }
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        return {
+            "name": name,
+            "ok": False,
+            "exit_code": None,
+            "duration_ms": int((time.time() - started) * 1000),
+            "command": shell_join_safe(command),
+            "output_tail": trim_response_text(str(output)[-2000:], 2000),
+            "error": f"timeout after {timeout}s",
+        }
+    except Exception as exc:
+        return {
+            "name": name,
+            "ok": False,
+            "exit_code": None,
+            "duration_ms": int((time.time() - started) * 1000),
+            "command": shell_join_safe(command),
+            "output_tail": "",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def agent_status_cycle_report(current_workspace):
+    health = runtime_health()
+    git_status = run_ro(["git", "status", "--short", "--branch"], REPO_ROOT, 8)
+    local_head = run_ro(["git", "rev-parse", "--short", "HEAD"], REPO_ROOT, 8)
+    origin_head = run_ro(["git", "rev-parse", "--short", "origin/main"], REPO_ROOT, 8)
+    upstream = run_ro(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], REPO_ROOT, 8)
+    runtime_gate = deploy_runtime_gate_status()
+    smoke_commands = [
+        ("llm_first_guard", [sys.executable, "codex/bin/gateway_llm_first_guard_smoke.py"]),
+        ("keyword_inventory", [sys.executable, "codex/bin/keyword_routing_inventory_smoke.py"]),
+        ("runtime_health", [sys.executable, "codex/bin/gateway_runtime_health_smoke.py"]),
+    ]
+    smoke_results = [run_status_cycle_smoke(command, name) for name, command in smoke_commands]
+    failed_smokes = [item for item in smoke_results if not item.get("ok")]
+    readiness_issues = list(health.get("readiness_issues") or [])
+    drift = []
+    runtime_commit = str(health.get("runtime_commit") or "").strip()
+    runtime_fingerprint_value = str(health.get("runtime_fingerprint") or "").strip()
+    if runtime_commit and local_head and runtime_commit != local_head:
+        drift.append("runtime_commit_mismatch")
+    if origin_head and local_head and origin_head != local_head:
+        drift.append("origin_main_differs_from_local_head")
+    if runtime_gate.get("ok") is not True:
+        drift.append(str(runtime_gate.get("marker") or "runtime_gate_not_ok"))
+    tracked_dirty = [
+        line
+        for line in git_status.splitlines()
+        if line and not line.startswith("## ") and not line.startswith("?? ")
+    ]
+    untracked = [line for line in git_status.splitlines() if line.startswith("?? ")]
+    if tracked_dirty:
+        blocker = "dirty_tracked_files"
+        next_step = "Review tracked changes, run focused tests, then commit or revert the intended patch."
+    elif failed_smokes:
+        blocker = f"smoke_failed:{failed_smokes[0].get('name')}"
+        next_step = f"Fix or rerun `{failed_smokes[0].get('command')}` and use its output as the next recovery context."
+    elif readiness_issues:
+        blocker = readiness_issues[0]
+        next_step = "Repair the readiness issue reported by gateway /health, then rerun the status cycle."
+    elif drift:
+        blocker = drift[0]
+        next_step = "Run the safe ai-stack deploy/restart flow, then verify runtime fingerprint again."
+    elif "[unavailable:" in git_status:
+        blocker = "git_status_unavailable"
+        next_step = "Check git availability and safe.directory configuration for the ai-stack checkout."
+    elif untracked:
+        blocker = "untracked_files_present"
+        next_step = "Inspect untracked files and decide whether they are intended artifacts or should stay ignored."
+    else:
+        blocker = "none"
+        next_step = "Proceed with the next OpenWebUI E2E or capability implementation task."
+
+    passed = len([item for item in smoke_results if item.get("ok")])
+    smoke_summary = {
+        "passed": passed,
+        "failed": len(failed_smokes),
+        "total": len(smoke_results),
+        "results": smoke_results,
+    }
+    gateway_health = {
+        "codex_local_ready": bool(health.get("codex_local_ready")),
+        "readiness_issues": readiness_issues,
+        "openwebui_ok": bool((health.get("openwebui") or {}).get("ok")),
+        "runtime_commit": runtime_commit,
+        "gateway_source_epoch": health.get("gateway_source_epoch"),
+        "runtime_fingerprint": runtime_fingerprint_value,
+    }
+    answer = (
+        f"Status cyklus pro `{current_workspace}` doběhl: "
+        f"smoke {passed}/{len(smoke_results)}, "
+        f"gateway {'OK' if gateway_health['codex_local_ready'] else 'needs attention'}, "
+        f"blocker `{blocker}`. Další krok: {next_step}"
+    )
+    return {
+        "ok": blocker == "none",
+        "capability": "agent_status_cycle",
+        "current_workspace": current_workspace,
+        "git_status": git_status,
+        "git": {
+            "head": local_head,
+            "origin_main": origin_head,
+            "upstream": upstream,
+            "tracked_dirty_count": len(tracked_dirty),
+            "untracked_count": len(untracked),
+        },
+        "gateway_health": gateway_health,
+        "runtime": {
+            "commit": runtime_commit,
+            "local_head": local_head,
+            "origin_main": origin_head,
+            "fingerprint": runtime_fingerprint_value,
+            "drift": drift,
+            "gate": runtime_gate,
+        },
+        "smoke_summary": smoke_summary,
+        "biggest_blocker": blocker,
+        "next_step": next_step,
+        "answer": answer,
+    }
+
+
 def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_exists, workspaces):
     capability = str(plan.get("meta_capability") or "").strip() or "workspace_context_status"
     current = requested_workspace if workspace_exists else controller_workspace
@@ -3584,6 +3747,8 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
                 + "."
             ),
         }
+    if capability == "agent_status_cycle":
+        return agent_status_cycle_report(current)
     return {
         "ok": True,
         "capability": "workspace_context_status",
@@ -4029,12 +4194,51 @@ def admin_agent_loop(payload):
         result["execution"] = execution
         result["ok"] = bool(execution.get("ok"))
         result["summary"] = "Self-improve diagnosis artifact created." if result["ok"] else "Self-improve needs attention."
+        parsed = execution.get("result") if isinstance(execution.get("result"), dict) else {}
+        skipped_phases = [
+            name
+            for name, payload in (
+                ("reproduce", parsed.get("reproduce")),
+                ("reason", parsed.get("reason")),
+                ("proposal", parsed.get("proposal")),
+                ("generated_diff", parsed.get("generated_diff")),
+                ("verify", parsed.get("verify")),
+                ("deploy", parsed.get("deploy")),
+                ("e2e", parsed.get("e2e")),
+            )
+            if isinstance(payload, dict) and payload.get("skipped")
+        ]
+        report = parsed.get("report") if isinstance(parsed.get("report"), dict) else {}
+        execution_packet = report.get("execution_packet") if isinstance(report.get("execution_packet"), dict) else {}
+        decision = execution_packet.get("decision") if isinstance(execution_packet.get("decision"), dict) else {}
+        next_step = str(
+            parsed.get("next_step")
+            or report.get("next_step")
+            or decision.get("next_step")
+            or "review self-improve artifact and run the next guarded phase"
+        ).strip()
+        patch_scope = parsed.get("patch_scope") or []
+        regression_artifact = str(execution.get("artifact_dir") or "").strip()
+        if regression_artifact:
+            regression_artifact = f"{regression_artifact}/regression.json"
+        result["self_improve_report"] = {
+            "user_intent": task,
+            "where_failed": parsed.get("root_cause") or parsed.get("diagnosis_source") or execution.get("artifact_dir"),
+            "diagnosis_category": parsed.get("diagnosis_category"),
+            "regression_artifact": regression_artifact,
+            "patch_scope": patch_scope,
+            "skipped_phases": skipped_phases,
+            "next_step": next_step,
+        }
         result["answer"] = (
-            f"AGENT_SELF_IMPROVE {'OK' if result['ok'] else 'NEEDS_ATTENTION'}\n"
-            f"mode={execution.get('mode')}\n"
-            f"dry_run={execution.get('dry_run')}\n"
-            f"artifact_dir={execution.get('artifact_dir')}\n"
-            f"exit_code={execution.get('exit_code')}"
+            f"Self-improve {'doběhlo' if result['ok'] else 'potřebuje zásah'} v režimu `{execution.get('mode')}`.\n"
+            f"Intent: {preview_text(task, 220)}\n"
+            f"Kde selhal: {preview_text(result['self_improve_report']['where_failed'] or 'nezjištěno', 260)}\n"
+            f"Diagnóza: `{parsed.get('diagnosis_category') or 'unknown'}`\n"
+            f"Regrese: `{regression_artifact or '(missing)'}`\n"
+            f"Patch scope: {', '.join(f'`{item}`' for item in patch_scope) if patch_scope else '(none)'}\n"
+            f"Přeskočené fáze: {', '.join(skipped_phases) if skipped_phases else 'žádné'}\n"
+            f"Další krok: {next_step}"
         )
         return result
 
@@ -6244,6 +6448,7 @@ def runtime_fingerprint():
         ("normalize_agent_taskspec", normalize_agent_taskspec),
         ("agent_taskspec_to_plan", agent_taskspec_to_plan),
         ("normalize_agent_plan", normalize_agent_plan),
+        ("agent_status_cycle_report", agent_status_cycle_report),
         ("admin_agent_meta", admin_agent_meta),
         ("admin_workspace_search", admin_workspace_search),
         ("admin_agent_loop", admin_agent_loop),
@@ -6357,6 +6562,8 @@ def agent_loop_human_answer(result):
         ).strip()
 
     if workflow == "self_improve":
+        if str(result.get("answer") or "").strip():
+            return str(result.get("answer") or "").strip()
         artifact = str(execution.get("artifact_dir") or "").strip()
         exit_code = execution.get("exit_code")
         mode = str(execution.get("mode") or "").strip()
