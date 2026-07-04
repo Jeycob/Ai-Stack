@@ -777,6 +777,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
             "canonical_alias_roundtrip": shape["aliases"],
             "required_paths": [
                 f"docs/capability-drafts/{capability}.json",
+                f"docs/capability-drafts/{capability}.wiring.json",
                 "docs/codex-local-capability-roadmap.json",
             ],
         },
@@ -788,6 +789,97 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
         ],
     }
     after = json.dumps(contract, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def capability_wiring_blueprint_file(
+    capability: str,
+    feature_request: str,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.wiring.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    regression_cases = [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)]
+    blueprint = {
+        "kind": "codex-local-capability-wiring-blueprint",
+        "capability_name": capability,
+        "summary": shape["summary"],
+        "goal": task_spec.get("desired_end_state") or feature_request,
+        "planned_runtime_contract": {
+            "scope": shape["scope"],
+            "workflow": shape["workflow"],
+            "planned_workflow": shape["planned_workflow"],
+            "executor_pattern": shape["executor"],
+            "aliases": shape["aliases"],
+        },
+        "touchpoints": [
+            {
+                "file": "codex/gateway/gateway.py",
+                "symbols": [
+                    "canonicalize_agent_capability",
+                    "canonicalize_agent_capabilities",
+                    "normalize_agent_taskspec",
+                    "split_agent_capabilities",
+                    "agent_taskspec_to_plan",
+                    "agent_capability_registry",
+                ],
+                "responsibility": "Canonicalization, TaskSpec normalization, capability validation, workflow mapping, registry exposure.",
+            },
+            {
+                "file": "codex/bin/gateway_recovery_smoke.py",
+                "symbols": [
+                    "assert_agent_self_improve_capability",
+                    "assert_capability_draft_contracts",
+                ],
+                "responsibility": "Capability routing, alias/canonicalization, and draft-contract regression coverage.",
+            },
+            {
+                "file": "codex/bin/agent_self_improve_smoke.py",
+                "symbols": [
+                    "run_capability_develop_mode",
+                    "run_generate_unified_diff_mode",
+                    "run_patch_mode_dry_run",
+                ],
+                "responsibility": "Generated diff shape, guarded patch path, and self-improve offload contract.",
+            },
+        ],
+        "implementation_steps": [
+            "Add or confirm canonical capability name and aliases in the registry source of truth.",
+            "Map the canonical capability to a workflow without introducing prompt-specific routing branches.",
+            "Reuse an existing bounded executor pattern where possible; otherwise add an explicit executor hook with recovery output.",
+            "Extend route/recovery/workspace smoke coverage for the new capability behavior.",
+            "Update roadmap/docs and keep generated diff within audited ai-stack paths.",
+        ],
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "regression_cases": regression_cases,
+        "failure_recovery": {
+            "when_registry_missing": f"Return NEEDS_ATTENTION with missing capability `{capability}` and propose `agent_capability_develop` follow-up.",
+            "when_executor_missing": "Keep the capability draft non-implemented and return MANUAL_STEP_REQUIRED with the wiring blueprint and smoke contract.",
+            "when_verify_fails": "Feed verify output into the next max_cycles iteration and regenerate the diff instead of silently falling back.",
+        },
+        "review_split": {
+            "codex_local_offload": [
+                "Repo reconnaissance",
+                "Acceptance criteria draft",
+                "Regression scenario draft",
+                "Unified diff draft generation",
+                "Smoke command plan",
+            ],
+            "senior_codex_review": [
+                "Runtime executor scope approval",
+                "Guard-rail review before apply",
+                "Deploy/E2E approval when fingerprint gate is green",
+            ],
+        },
+        "generated_by": "agent_self_improve.generate_unified_diff",
+        "diagnosis_category": diagnosis.get("category"),
+    }
+    after = json.dumps(blueprint, ensure_ascii=False, indent=2) + "\n"
     return rel, unified_diff_for_file(rel, before, after)
 
 
@@ -922,6 +1014,7 @@ def generate_unified_diff(
                 roadmap_with_capability(capability, feature_request, reasoning),
                 capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_stub_file(capability, feature_request, reasoning),
                 capability_smoke_stub_file(capability, feature_request, reasoning),
             ):
