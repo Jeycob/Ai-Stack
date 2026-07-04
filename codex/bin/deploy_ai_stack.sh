@@ -119,6 +119,25 @@ wait_http() {
   return 1
 }
 
+gateway_runtime_fingerprint_gate() {
+  local gate_log
+  gate_log="$(mktemp)"
+
+  if ! CODEX_GATEWAY_URL="http://127.0.0.1:9101" \
+    python3 "$REPO_ROOT/codex/bin/gateway_runtime_fingerprint_check.py" \
+      --base-url "http://127.0.0.1:9101" \
+      --json >"$gate_log" 2>&1
+  then
+    echo "DEPLOY_BLOCKED_GATEWAY_RUNTIME_DRIFT"
+    cat "$gate_log"
+    rm -f "$gate_log"
+    exit 23
+  fi
+
+  cat "$gate_log"
+  rm -f "$gate_log"
+}
+
 restart_only() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     echo "DEPLOY_BLOCKED_ROOT_REQUIRED"
@@ -136,6 +155,8 @@ restart_only() {
   local openwebui_base
   openwebui_base="$(resolve_openwebui_url)"
   wait_http gateway http://127.0.0.1:9101/health 45 1
+  section "Gateway runtime fingerprint gate"
+  gateway_runtime_fingerprint_gate
   wait_http openwebui "${openwebui_base%/}/" 90 1
   wait_http openwebui_loader "${openwebui_base%/}/static/loader.js" 90 1
   curl -fsS http://127.0.0.1:9101/health

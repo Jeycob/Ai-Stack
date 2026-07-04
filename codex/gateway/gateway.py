@@ -6088,6 +6088,44 @@ def tail_text(path, max_bytes=24000):
         return "[tail truncated]\n" + data
     return data
 
+def deploy_runtime_gate_status():
+    script = REPO_ROOT / "codex/bin/gateway_runtime_fingerprint_check.py"
+    if not script.is_file():
+        return {
+            "ok": False,
+            "marker": "CODEX_LOCAL_RUNTIME_GATE_MISSING",
+            "recovery": "codex/bin/gateway_runtime_fingerprint_check.py is missing from the runtime checkout.",
+        }
+
+    raw = run_ro(
+        [
+            sys.executable,
+            str(script),
+            "--base-url",
+            "http://127.0.0.1:9101",
+            "--json",
+        ],
+        REPO_ROOT,
+        12,
+    )
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {
+            "ok": False,
+            "marker": "CODEX_LOCAL_RUNTIME_GATE_PARSE_FAILED",
+            "recovery": "Run python3 codex/bin/gateway_runtime_fingerprint_check.py --base-url http://127.0.0.1:9101 --json from the runtime checkout.",
+            "raw": trim_response_text(raw, 3000),
+        }
+    if not isinstance(parsed, dict):
+        return {
+            "ok": False,
+            "marker": "CODEX_LOCAL_RUNTIME_GATE_INVALID",
+            "recovery": "gateway_runtime_fingerprint_check.py returned a non-object payload.",
+            "raw": trim_response_text(raw, 3000),
+        }
+    return parsed
+
 def admin_deploy_stack(payload):
     branch = str(payload.get("branch") or "main").strip()
     force = bool(payload.get("force", False))
@@ -6170,10 +6208,24 @@ def admin_deploy_status(payload):
         "DEPLOY_BLOCKED_RUNTIME_METADATA_CONFLICT",
         "DEPLOY_BLOCKED_DIRTY_TRACKED_FILES",
         "DEPLOY_BLOCKED_ROOT_REQUIRED",
+        "DEPLOY_BLOCKED_GATEWAY_RUNTIME_DRIFT",
     ):
         if marker in tail:
             blocker = marker
-    restart_required = blocker == "DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED"
+    runtime_gate = deploy_runtime_gate_status()
+    runtime_gate_marker = str(runtime_gate.get("marker") or "").strip()
+    if not blocker and runtime_gate.get("ok") is not True:
+        blocker = runtime_gate_marker or "CODEX_LOCAL_RUNTIME_GATE_FAILED"
+    restart_required = blocker in {
+        "DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED",
+        "DEPLOY_BLOCKED_GATEWAY_RUNTIME_DRIFT",
+        "CODEX_LOCAL_GATEWAY_SOURCE_EPOCH_DRIFT",
+        "CODEX_LOCAL_RUNTIME_FINGERPRINT_MISSING",
+        "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
+        "CODEX_LOCAL_AGENT_ROUTE_DEGRADED",
+        "CODEX_LOCAL_RUNTIME_GATE_PARSE_FAILED",
+        "CODEX_LOCAL_RUNTIME_GATE_INVALID",
+    }
     user = run_ro(["id", "-un"], REPO_ROOT, 4)
     script = REPO_ROOT / "codex/bin/deploy_ai_stack.sh"
     sudoers_helper = REPO_ROOT / "codex/bin/install_deploy_sudoers.sh"
@@ -6196,6 +6248,7 @@ def admin_deploy_status(payload):
         "last_after": last_after,
         "deployment_blocker": blocker,
         "restart_required": restart_required,
+        "runtime_gate": runtime_gate,
         "manual_restart_command": f"sudo {script} --restart-only" if restart_required else "",
         "sudoers_entry": sudoers_entry,
         "sudoers_install_command": f"sudo {sudoers_helper} --install" if restart_required else "",

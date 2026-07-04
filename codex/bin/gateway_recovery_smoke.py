@@ -1801,6 +1801,41 @@ def assert_deploy_status_diagnostics() -> None:
     print("DEPLOY_STATUS_DIAGNOSTICS_OK")
 
 
+def assert_deploy_status_runtime_gate_blocks_stale_process() -> None:
+    run_outputs = {
+        ("git", "rev-parse", "--short", "HEAD"): "0a68163",
+        ("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"): "origin/main",
+        ("git", "rev-parse", "--short", "origin/main"): "0a68163",
+        ("git", "remote", "get-url", "origin"): "git@github.com:Jeycob/Ai-Stack.git",
+        ("git", "status", "--short", "--branch"): "## main...origin/main",
+        ("id", "-un"): "sklenik",
+    }
+
+    def fake_run_ro(command, root, timeout=8):
+        if "gateway_runtime_fingerprint_check.py" in " ".join(command):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "marker": "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
+                    "recovery": "Restartuj stack a znovu ověř /health.",
+                }
+            )
+        return run_outputs.get(tuple(command), "")
+
+    with patch.object(gateway, "run_ro", side_effect=fake_run_ro), patch.object(
+        gateway, "tail_text", return_value="[2026-07-04T21:00:00+02:00] AI Stack deploy finished\nDEPLOY_OK\n"
+    ):
+        result = gateway.admin_deploy_status({})
+
+    if result.get("deployment_blocker") != "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN":
+        raise SystemExit(f"deploy status should expose runtime split-brain blocker, got {result!r}")
+    if result.get("restart_required") is not True:
+        raise SystemExit(f"deploy status should require restart for split-brain, got {result!r}")
+    if (result.get("runtime_gate") or {}).get("marker") != "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN":
+        raise SystemExit(f"deploy status should include runtime gate payload, got {result!r}")
+    print("DEPLOY_STATUS_RUNTIME_GATE_OK")
+
+
 def assert_agent_loop_passes_conversation_context() -> None:
     captured = {}
 
@@ -1919,6 +1954,7 @@ def main() -> int:
     assert_agent_loop_human_answers()
     assert_host_runner_requires_explicit_capability()
     assert_deploy_status_diagnostics()
+    assert_deploy_status_runtime_gate_blocks_stale_process()
     assert_agent_loop_passes_conversation_context()
     assert_case(
         "test",
