@@ -2032,6 +2032,114 @@ def verify(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
     return {"ok": ok, "commands": results}
 
 
+def summary_phase_payload(summary: dict[str, Any], phase_name: str) -> dict[str, Any]:
+    cycles = summary.get("cycles") or []
+    if cycles and isinstance(cycles[-1], dict):
+        payload = ((cycles[-1].get("phases") or {}).get(phase_name) or {})
+        if isinstance(payload, dict) and payload:
+            return payload
+    payload = summary.get(phase_name) or {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def verify_summary(verify_result: dict[str, Any]) -> dict[str, Any]:
+    commands = verify_result.get("commands") or []
+    passed = sum(1 for item in commands if isinstance(item, dict) and item.get("exit_code") == 0)
+    failed = sum(1 for item in commands if isinstance(item, dict) and item.get("exit_code") not in {0, None})
+    return {
+        "command_count": len(commands),
+        "passed": passed,
+        "failed": failed,
+        "all_green": bool(commands) and failed == 0,
+        "failed_commands": [
+            " ".join(str(part) for part in (item.get("command") or []))
+            for item in commands
+            if isinstance(item, dict) and item.get("exit_code") not in {0, None}
+        ],
+    }
+
+
+def phase_status_summary(summary: dict[str, Any]) -> dict[str, str]:
+    phase_map = {
+        "collect_context": "ok",
+        "diagnose": "ok",
+        "reproduce": summary.get("reproduce", {}),
+        "reason": summary.get("reason", {}),
+        "propose_patch": summary.get("proposal", {}),
+        "generate_unified_diff": summary.get("generated_diff", {}),
+        "apply_guarded_patch": summary.get("patch", {}),
+        "verify": summary.get("verify", {}),
+        "deploy": summary.get("deploy", {}),
+        "e2e": summary.get("e2e", {}),
+    }
+    result: dict[str, str] = {}
+    for phase, payload in phase_map.items():
+        if payload == "ok":
+            result[phase] = "ok"
+            continue
+        if not isinstance(payload, dict):
+            result[phase] = "unknown"
+            continue
+        if payload.get("skipped"):
+            result[phase] = "skipped"
+        elif payload.get("ok"):
+            result[phase] = "ok"
+        elif payload:
+            result[phase] = "failed"
+        else:
+            result[phase] = "pending"
+    return result
+
+
+def capability_patch_readiness(
+    summary: dict[str, Any],
+    proposal_result: dict[str, Any],
+    generated_diff_result: dict[str, Any],
+) -> dict[str, Any]:
+    capability_development = proposal_result.get("capability_development") or {}
+    capability = capability_development.get("capability_name") or ""
+    generated_paths = {str(path) for path in (generated_diff_result.get("paths") or [])}
+    if not capability:
+        return {
+            "target_capability_name": "",
+            "enabled": False,
+            "ready_for_review": False,
+            "ready_for_apply": False,
+            "missing_artifacts": [],
+        }
+    required = [
+        "docs/codex-local-capability-roadmap.json",
+        f"docs/capability-drafts/{capability}.json",
+        f"docs/capability-drafts/{capability}.smoke.json",
+        f"docs/capability-drafts/{capability}.gateway-integration.json",
+        f"docs/capability-drafts/{capability}.gateway.patch.md",
+        f"docs/capability-drafts/{capability}.runtime.patch.diff",
+        f"docs/capability-drafts/{capability}.wiring.json",
+        f"docs/capability-drafts/{capability}.executor-contract.json",
+        f"docs/capability-drafts/{capability}.executor-dispatch.json",
+        f"codex/bin/capability_drafts/{capability}_executor_stub.py",
+        f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
+        f"codex/bin/capability_drafts/{capability}_smoke.py",
+    ]
+    missing = [path for path in required if path not in generated_paths]
+    verify_info = verify_summary(summary_phase_payload(summary, "verify"))
+    return {
+        "target_capability_name": capability,
+        "enabled": True,
+        "ready_for_review": generated_diff_result.get("ok") is True and not missing,
+        "ready_for_apply": (
+            generated_diff_result.get("ok") is True
+            and not missing
+            and not (generated_diff_result.get("blocked_paths") or [])
+            and verify_info.get("all_green") is True
+            and summary.get("dry_run") is False
+        ),
+        "missing_artifacts": missing,
+        "verify_all_green": verify_info.get("all_green"),
+        "git_apply_check_exit_code": generated_diff_result.get("git_apply_check_exit_code"),
+    }
+
+
 def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], generated_diff_result: dict[str, Any]) -> dict[str, Any]:
     codex_local_offload = [
         "repository exploration",
@@ -2056,13 +2164,36 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
         for path in sorted(artifact_dir.rglob("*"))
         if path.is_file()
     ]
+    completed_offload = []
+    if summary.get("reproduce", {}).get("ok"):
+        completed_offload.append("repository exploration")
+        completed_offload.append("regression artifact proposal")
+    if proposal_result.get("acceptance_criteria") or (proposal_result.get("reasoning_task_spec") or {}).get("acceptance_criteria"):
+        completed_offload.append("acceptance criteria drafting")
+    if capability_development:
+        completed_offload.append("capability implementation checklist")
+    if generated_diff_result.get("ok"):
+        completed_offload.append("unified diff draft generation for allowed paths")
+    if summary_phase_payload(summary, "verify").get("ok"):
+        completed_offload.append("smoke command execution")
+    completed_offload.append("recovery report drafting")
+    completed_offload = sorted(set(completed_offload), key=codex_local_offload.index)
+    pending_offload = [item for item in codex_local_offload if item not in completed_offload]
     total_work_buckets = len(codex_local_offload) + len(senior_review)
     offload_ratio = round((len(codex_local_offload) / total_work_buckets) * 100, 1) if total_work_buckets else 0.0
+    verify_info = verify_summary(summary_phase_payload(summary, "verify"))
+    phase_status = phase_status_summary(summary)
+    readiness = capability_patch_readiness(summary, proposal_result, generated_diff_result)
     report = {
         "safe_to_offload_to_codex_local": codex_local_offload,
+        "completed_by_codex_local_in_this_run": completed_offload,
+        "pending_codex_local_work": pending_offload,
         "codex_senior_review_required_for": senior_review,
         "offload_ratio_percent": offload_ratio,
         "target_capability_name": capability_development.get("capability_name") or "",
+        "phase_status": phase_status,
+        "verify_summary": verify_info,
+        "capability_patch_readiness": readiness,
         "generated_patch_paths": generated_paths,
         "generated_artifacts": generated_artifacts,
         "patch_application_decision": (
@@ -2196,9 +2327,42 @@ def write_final_report(
     ]
     for item in report["safe_to_offload_to_codex_local"]:
         lines.append(f"- {item}")
+    lines.extend(["", "## Completed By Codex-Local In This Run", ""])
+    for item in report["completed_by_codex_local_in_this_run"]:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Pending Codex-Local Work", ""])
+    if report["pending_codex_local_work"]:
+        for item in report["pending_codex_local_work"]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- none")
     lines.extend(["", "## Senior Codex Review Still Required", ""])
     for item in report["codex_senior_review_required_for"]:
         lines.append(f"- {item}")
+    lines.extend(["", "## Phase Status", ""])
+    for phase, status in report["phase_status"].items():
+        lines.append(f"- {phase}: `{status}`")
+    lines.extend(["", "## Verify Summary", ""])
+    lines.append(f"- command_count: `{report['verify_summary'].get('command_count')}`")
+    lines.append(f"- passed: `{report['verify_summary'].get('passed')}`")
+    lines.append(f"- failed: `{report['verify_summary'].get('failed')}`")
+    lines.append(f"- all_green: `{report['verify_summary'].get('all_green')}`")
+    if report["verify_summary"].get("failed_commands"):
+        lines.append("- failed commands:")
+        for item in report["verify_summary"]["failed_commands"]:
+            lines.append(f"  - `{item}`")
+    lines.extend(["", "## Capability Patch Readiness", ""])
+    readiness = report["capability_patch_readiness"]
+    lines.append(f"- enabled: `{readiness.get('enabled')}`")
+    lines.append(f"- target_capability_name: `{readiness.get('target_capability_name') or '-'}`")
+    lines.append(f"- ready_for_review: `{readiness.get('ready_for_review')}`")
+    lines.append(f"- ready_for_apply: `{readiness.get('ready_for_apply')}`")
+    lines.append(f"- verify_all_green: `{readiness.get('verify_all_green')}`")
+    lines.append(f"- git_apply_check_exit_code: `{readiness.get('git_apply_check_exit_code')}`")
+    if readiness.get("missing_artifacts"):
+        lines.append("- missing artifacts:")
+        for item in readiness["missing_artifacts"]:
+            lines.append(f"  - `{item}`")
     lines.extend(["", "## Generated Patch Paths", ""])
     if report["generated_patch_paths"]:
         for item in report["generated_patch_paths"]:

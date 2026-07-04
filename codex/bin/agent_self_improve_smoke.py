@@ -214,6 +214,19 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected applicable generated diff, got {generated!r}")
         if report.get("target_capability_name") != "workspace_profile":
             raise SystemExit(f"expected report to expose target capability, got {report!r}")
+        readiness = report.get("capability_patch_readiness") or {}
+        if readiness.get("target_capability_name") != "workspace_profile":
+            raise SystemExit(f"expected capability readiness target in report, got {report!r}")
+        if readiness.get("ready_for_review") is not True:
+            raise SystemExit(f"expected capability readiness to be review-ready, got {report!r}")
+        if readiness.get("ready_for_apply") is not False:
+            raise SystemExit(f"expected capability readiness to remain non-apply in dry-run capability mode, got {report!r}")
+        phase_status = report.get("phase_status") or {}
+        if phase_status.get("generate_unified_diff") != "ok":
+            raise SystemExit(f"expected generate_unified_diff phase status ok, got {report!r}")
+        verify_summary = report.get("verify_summary") or {}
+        if verify_summary.get("all_green") is not True:
+            raise SystemExit(f"expected verify summary all_green in report, got {report!r}")
         if manifest.get("decision") != "safe_apply_candidate_with_runtime_review":
             raise SystemExit(f"expected runtime-review guarded apply decision, got {manifest!r}")
         if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in (manifest.get("review_only_runtime_artifacts") or []):
@@ -229,6 +242,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected runtime review blocker explanation, got {manifest!r}")
         if "repository exploration" not in (report.get("safe_to_offload_to_codex_local") or []):
             raise SystemExit(f"expected codex-local offload report, got {report!r}")
+        if "smoke command execution" not in (report.get("completed_by_codex_local_in_this_run") or []):
+            raise SystemExit(f"expected completed codex-local smoke execution in report, got {report!r}")
         if "applying runtime patches" not in (report.get("codex_senior_review_required_for") or []):
             raise SystemExit(f"expected senior review report, got {report!r}")
         patch_text = generated_file.read_text(encoding="utf-8")
@@ -478,6 +493,10 @@ def run_verify_dry_run() -> None:
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         if report.get("patch_application_decision") not in {"not_applied", "validated_only"}:
             raise SystemExit(f"expected report patch decision in verify dry-run, got {payload!r}")
+        if (report.get("phase_status") or {}).get("verify") != "ok":
+            raise SystemExit(f"expected verify phase status ok in verify dry-run, got {payload!r}")
+        if (report.get("verify_summary") or {}).get("all_green") is not True:
+            raise SystemExit(f"expected verify summary all_green in verify dry-run, got {payload!r}")
         if manifest.get("decision") not in {"safe_apply_candidate", "safe_apply_candidate_with_runtime_review", "no_apply_candidate"}:
             raise SystemExit(f"unexpected guarded apply decision in verify dry-run, got {manifest!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
