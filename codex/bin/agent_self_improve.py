@@ -1723,6 +1723,59 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
     return report
 
 
+def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result: dict[str, Any]) -> dict[str, Any]:
+    generated_paths = [str(path) for path in (generated_diff_result.get("paths") or [])]
+    review_only_artifacts = sorted(
+        [
+            path
+            for path in generated_paths
+            if path.endswith(".runtime.patch.diff") or path.endswith(".gateway.patch.md")
+        ]
+    )
+    safe_apply_candidate_paths = sorted(
+        [
+            path
+            for path in generated_paths
+            if path not in review_only_artifacts
+        ]
+    )
+    verify_commands = [" ".join(command) for command in effective_verify_commands()]
+    generated_diff_ok = bool(generated_diff_result.get("ok"))
+    blocked_paths = generated_diff_result.get("blocked_paths") or []
+    if blocked_paths:
+        decision = "blocked_paths"
+    elif review_only_artifacts:
+        decision = "safe_apply_candidate_with_runtime_review"
+    elif generated_diff_ok:
+        decision = "safe_apply_candidate"
+    else:
+        decision = "no_apply_candidate"
+    return {
+        "kind": "codex-local-guarded-apply-manifest",
+        "workspace": summary.get("workspace") or "",
+        "mode": summary.get("mode") or "",
+        "dry_run": bool(summary.get("dry_run")),
+        "generated_diff_ok": generated_diff_ok,
+        "generated_patch_file": generated_diff_result.get("patch_file") or "",
+        "generated_patch_sha256": generated_diff_result.get("patch_sha256") or "",
+        "decision": decision,
+        "safe_apply_candidate_paths": safe_apply_candidate_paths,
+        "review_only_runtime_artifacts": review_only_artifacts,
+        "blocked_paths": blocked_paths,
+        "minimum_verify_commands": verify_commands,
+        "runtime_gate_required_for": ["deploy", "e2e", "runtime_apply_promotion"],
+        "manual_review_required": [
+            "review runtime patch candidates before touching gateway.py",
+            "confirm generated diff still matches current repo state",
+            "re-run verify commands and live runtime fingerprint check before deploy",
+        ],
+        "promotion_rule": (
+            "Generated unified diff may be applied only after senior review; runtime patch candidate artifacts "
+            "remain review-only and must not be auto-applied."
+        ),
+    }
+
+
 def write_final_report(
     audit_dir: Path,
     summary: dict[str, Any],
@@ -1730,7 +1783,9 @@ def write_final_report(
     generated_diff_result: dict[str, Any],
 ) -> dict[str, Any]:
     report = build_report(summary, proposal_result, generated_diff_result)
+    manifest = build_guarded_apply_manifest(summary, generated_diff_result)
     write_json(audit_dir / "self-improve-report.json", report)
+    write_json(audit_dir / "guarded-apply-manifest.json", manifest)
     lines = [
         "# Agent Self-Improve Report",
         "",
@@ -1742,6 +1797,7 @@ def write_final_report(
         f"- cycles_completed: `{summary.get('cycles_completed')}` / `{summary.get('cycles_requested')}`",
         f"- target_capability_name: `{report.get('target_capability_name') or '-'}'",
         f"- patch_application_decision: `{report.get('patch_application_decision')}`",
+        f"- guarded_apply_decision: `{manifest.get('decision')}`",
         f"- offload_ratio_percent: `{report.get('offload_ratio_percent')}`",
         "",
         "## Offloaded To Codex-Local",
@@ -1761,6 +1817,19 @@ def write_final_report(
     lines.extend(["", "## Artifacts", ""])
     for item in report["generated_artifacts"]:
         lines.append(f"- `{item}`")
+    lines.extend(["", "## Guarded Apply Manifest", ""])
+    lines.append(f"- decision: `{manifest.get('decision')}`")
+    if manifest.get("safe_apply_candidate_paths"):
+        lines.append("- safe apply candidate paths:")
+        for item in manifest["safe_apply_candidate_paths"]:
+            lines.append(f"  - `{item}`")
+    if manifest.get("review_only_runtime_artifacts"):
+        lines.append("- runtime review-only artifacts:")
+        for item in manifest["review_only_runtime_artifacts"]:
+            lines.append(f"  - `{item}`")
+    lines.append("- minimum verify commands:")
+    for item in manifest["minimum_verify_commands"]:
+        lines.append(f"  - `{item}`")
     if report.get("why_patch_was_not_applied"):
         lines.extend(["", "## Patch Apply Recovery", "", f"- {report['why_patch_was_not_applied']}"])
     write_text(audit_dir / "self-improve-report.md", "\n".join(lines) + "\n")

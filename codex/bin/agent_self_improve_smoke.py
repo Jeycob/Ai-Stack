@@ -182,16 +182,26 @@ def run_capability_develop_mode() -> None:
         generated_file = Path(payload["artifact_dir"]) / "cycle-01/generated-unified.diff"
         generated_result_file = Path(payload["artifact_dir"]) / "cycle-01/generated-diff-result.json"
         report_file = Path(payload["artifact_dir"]) / "self-improve-report.json"
+        manifest_file = Path(payload["artifact_dir"]) / "guarded-apply-manifest.json"
         if not generated_file.is_file() or not generated_result_file.is_file():
             raise SystemExit(f"expected generated unified diff artifacts under {payload['artifact_dir']}")
         if not report_file.is_file():
             raise SystemExit(f"expected final self-improve report artifact under {payload['artifact_dir']}")
+        if not manifest_file.is_file():
+            raise SystemExit(f"expected guarded apply manifest artifact under {payload['artifact_dir']}")
         generated = json.loads(generated_result_file.read_text(encoding="utf-8"))
         report = json.loads(report_file.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         if not generated.get("ok") or generated.get("git_apply_check_exit_code") != 0:
             raise SystemExit(f"expected applicable generated diff, got {generated!r}")
         if report.get("target_capability_name") != "workspace_profile":
             raise SystemExit(f"expected report to expose target capability, got {report!r}")
+        if manifest.get("decision") != "safe_apply_candidate_with_runtime_review":
+            raise SystemExit(f"expected runtime-review guarded apply decision, got {manifest!r}")
+        if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in (manifest.get("review_only_runtime_artifacts") or []):
+            raise SystemExit(f"expected runtime patch candidate in review-only list, got {manifest!r}")
+        if "docs/codex-local-capability-roadmap.json" not in (manifest.get("safe_apply_candidate_paths") or []):
+            raise SystemExit(f"expected roadmap diff in safe-apply candidate paths, got {manifest!r}")
         if "repository exploration" not in (report.get("safe_to_offload_to_codex_local") or []):
             raise SystemExit(f"expected codex-local offload report, got {report!r}")
         if "applying runtime patches" not in (report.get("codex_senior_review_required_for") or []):
@@ -422,8 +432,15 @@ def run_verify_dry_run() -> None:
         if payload.get("verify", {}).get("command_count", 0) < 6:
             raise SystemExit(f"expected smoke commands in verify result, got {payload!r}")
         report = payload.get("report") or {}
+        artifact_dir = Path(payload["artifact_dir"])
+        manifest_file = artifact_dir / "guarded-apply-manifest.json"
+        if not manifest_file.is_file():
+            raise SystemExit(f"expected guarded apply manifest in verify dry-run: {artifact_dir}")
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         if report.get("patch_application_decision") not in {"not_applied", "validated_only"}:
             raise SystemExit(f"expected report patch decision in verify dry-run, got {payload!r}")
+        if manifest.get("decision") not in {"safe_apply_candidate", "safe_apply_candidate_with_runtime_review", "no_apply_candidate"}:
+            raise SystemExit(f"unexpected guarded apply decision in verify dry-run, got {manifest!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
 
 
