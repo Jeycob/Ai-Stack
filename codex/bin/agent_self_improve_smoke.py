@@ -168,12 +168,16 @@ def run_capability_develop_mode() -> None:
         patch_text = generated_file.read_text(encoding="utf-8")
         if "docs/capability-drafts/workspace_profile.json" not in patch_text:
             raise SystemExit(f"expected capability draft file in generated diff:\n{patch_text}")
+        if "docs/capability-drafts/workspace_profile.smoke.json" not in patch_text:
+            raise SystemExit(f"expected capability smoke contract file in generated diff:\n{patch_text}")
         if "docs/codex-local-capability-roadmap.json" not in patch_text:
             raise SystemExit(f"expected roadmap entry in generated diff:\n{patch_text}")
         if '"planned_workflow": "autopilot"' not in patch_text:
             raise SystemExit(f"expected planned workflow metadata in generated diff:\n{patch_text}")
         if '"aliases": [' not in patch_text:
             raise SystemExit(f"expected aliases metadata in generated diff:\n{patch_text}")
+        if '"kind": "codex-local-capability-draft-smoke"' not in patch_text:
+            raise SystemExit(f"expected draft smoke contract metadata in generated diff:\n{patch_text}")
         print("AGENT_SELF_IMPROVE_CAPABILITY_DEVELOP_OK")
 
 
@@ -201,6 +205,8 @@ def run_generate_unified_diff_mode() -> None:
         paths = generated.get("paths") or []
         if "docs/capability-drafts/workspace_profile.json" not in paths:
             raise SystemExit(f"expected capability draft path in generated diff, got {generated!r}")
+        if "docs/capability-drafts/workspace_profile.smoke.json" not in paths:
+            raise SystemExit(f"expected capability smoke contract path in generated diff, got {generated!r}")
         if "docs/codex-local-capability-roadmap.json" not in paths:
             raise SystemExit(f"expected roadmap path in generated diff, got {generated!r}")
         print("AGENT_SELF_IMPROVE_GENERATE_UNIFIED_DIFF_OK")

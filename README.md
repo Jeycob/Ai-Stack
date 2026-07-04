@@ -426,7 +426,7 @@ Pro návrh nové capability slouží režim `capability_develop`:
       --feature-request "Add bounded workspace profiling capability." \
       --dry-run
 
-`target_capability_name` je součást TaskSpec kontraktu. Planner tak nemusí schovávat název nové capability do volného textu; gateway ho předá do self-improve helperu a helper podle něj vytvoří `generated-unified.diff`. Ten je omezený na povolené cesty, typicky `docs/`, `codex/bin/`, `codex/gateway/` a kořenové provozní soubory, a ještě před apply musí projít `git apply --check`. Defaultní OpenWebUI agent loop spouští self-improve jako `dry_run=True`; skutečný apply má jít přes auditovaný admin/CLI krok po senior review.
+`target_capability_name` je součást TaskSpec kontraktu. Planner tak nemusí schovávat název nové capability do volného textu; gateway ho předá do self-improve helperu a helper podle něj vytvoří `generated-unified.diff`. Ten je omezený na povolené cesty, typicky `docs/`, `codex/bin/`, `codex/gateway/` a kořenové provozní soubory, a ještě před apply musí projít `git apply --check`. Capability draft už netvoří jen roadmap poznámku, ale i strojově validovatelný smoke kontrakt `docs/capability-drafts/<capability>.smoke.json`, který generic recovery smoke ověří proti roadmapě, canonical aliasům a očekávaným draft pathům. Defaultní OpenWebUI agent loop spouští self-improve jako `dry_run=True`; skutečný apply má jít přes auditovaný admin/CLI krok po senior review.
 
 Přes gateway existuje stejná capability jako `agent_self_improve` a přímý endpoint `/v1/admin/agent/self-improve`. CLI cesta:
 

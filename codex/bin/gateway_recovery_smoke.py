@@ -834,6 +834,50 @@ def assert_agent_self_improve_capability() -> None:
     print("AGENT_SELF_IMPROVE_CAPABILITY_OK")
 
 
+def assert_capability_draft_contracts() -> None:
+    roadmap_path = ROOT / "docs" / "codex-local-capability-roadmap.json"
+    if not roadmap_path.is_file():
+        print("CAPABILITY_DRAFT_CONTRACTS_SKIPPED")
+        return
+    roadmap = json.loads(roadmap_path.read_text(encoding="utf-8"))
+    capabilities = roadmap.get("capabilities") or {}
+    draft_dir = ROOT / "docs" / "capability-drafts"
+    if not draft_dir.is_dir():
+        print("CAPABILITY_DRAFT_CONTRACTS_OK")
+        return
+
+    contract_files = sorted(draft_dir.glob("*.smoke.json"))
+    for contract_file in contract_files:
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        capability = str(contract.get("capability_name") or "").strip()
+        if not capability:
+            raise SystemExit(f"draft smoke contract missing capability_name: {contract_file}")
+        expected = contract.get("expected_registry") or {}
+        roadmap_entry = capabilities.get(capability) or {}
+        if not roadmap_entry:
+            raise SystemExit(f"roadmap missing capability {capability!r} declared by {contract_file}")
+        if bool(roadmap_entry.get("implemented", True)) != bool(expected.get("implemented", False)):
+            raise SystemExit(f"implemented mismatch for {capability}: roadmap={roadmap_entry!r} contract={expected!r}")
+        if bool(roadmap_entry.get("draft", False)) != bool(expected.get("draft", True)):
+            raise SystemExit(f"draft mismatch for {capability}: roadmap={roadmap_entry!r} contract={expected!r}")
+        for key in ("scope", "workflow", "planned_workflow", "executor"):
+            wanted = str(expected.get(key) or "").strip()
+            got = str(roadmap_entry.get(key) or "").strip()
+            if wanted and got != wanted:
+                raise SystemExit(f"{key} mismatch for {capability}: wanted={wanted!r} got={got!r}")
+        expected_aliases = gateway.canonicalize_agent_capabilities(expected.get("aliases") or [])
+        roadmap_aliases = gateway.canonicalize_agent_capabilities(roadmap_entry.get("aliases") or [])
+        if expected_aliases != roadmap_aliases:
+            raise SystemExit(f"alias mismatch for {capability}: roadmap={roadmap_aliases!r} contract={expected_aliases!r}")
+        for alias in contract.get("verifier_expectations", {}).get("canonical_alias_roundtrip") or []:
+            if gateway.canonicalize_agent_capability(alias) != capability:
+                raise SystemExit(f"alias {alias!r} did not canonicalize to {capability!r}")
+        for rel in contract.get("verifier_expectations", {}).get("required_paths") or []:
+            if not (ROOT / rel).is_file():
+                raise SystemExit(f"required capability draft path missing for {capability}: {rel}")
+    print("CAPABILITY_DRAFT_CONTRACTS_OK")
+
+
 def assert_agent_loop_meta_response() -> None:
     taskspec, plan = _taskspec_plan(
         {
@@ -1332,6 +1376,7 @@ def main() -> int:
     assert_taskspec_meta_capabilities()
     assert_workspace_search_capability()
     assert_agent_self_improve_capability()
+    assert_capability_draft_contracts()
     assert_agent_loop_meta_response()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()

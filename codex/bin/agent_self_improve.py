@@ -752,6 +752,45 @@ def capability_draft_file(capability: str, feature_request: str, diagnosis: dict
     return rel, unified_diff_for_file(rel, before, after)
 
 
+def capability_smoke_contract_file(capability: str, feature_request: str, diagnosis: dict[str, Any], regression: dict[str, Any], reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.smoke.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    contract = {
+        "kind": "codex-local-capability-draft-smoke",
+        "capability_name": capability,
+        "summary": shape["summary"],
+        "expected_registry": {
+            "implemented": False,
+            "draft": True,
+            "scope": shape["scope"],
+            "workflow": shape["workflow"],
+            "planned_workflow": shape["planned_workflow"],
+            "aliases": shape["aliases"],
+            "executor": shape["executor"],
+        },
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
+        "verifier_expectations": {
+            "canonical_alias_roundtrip": shape["aliases"],
+            "required_paths": [
+                f"docs/capability-drafts/{capability}.json",
+                "docs/codex-local-capability-roadmap.json",
+            ],
+        },
+        "generated_by": "agent_self_improve.generate_unified_diff",
+        "review_status": "draft",
+        "notes": [
+            "This contract is validated by gateway_recovery_smoke generic draft checks.",
+            "Applying the diff keeps the capability non-implemented until a bounded executor is approved.",
+        ],
+    }
+    after = json.dumps(contract, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
 def check_patch_text(patch_text: str, timeout: int) -> dict[str, Any]:
     paths = changed_paths_from_patch(patch_text)
     blocked = [path for path in paths if not patch_path_allowed(path)]
@@ -808,6 +847,7 @@ def generate_unified_diff(
             for rel, diff in (
                 roadmap_with_capability(capability, feature_request, reasoning),
                 capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
             ):
                 if diff:
                     patch_parts.append(diff)
