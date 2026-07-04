@@ -388,24 +388,34 @@ def stack_deploy_prompt(text: str) -> bool:
     return bool(re.search(r"(?im)^\s*GATEWAY_ADMIN_DEPLOY_STACK(?:\s+|$)", text or ""))
 
 
+def stack_deploy_status_prompt(text: str) -> bool:
+    return bool(re.search(r"(?im)^\s*GATEWAY_ADMIN_DEPLOY_STATUS(?:\s+|$)", text or ""))
+
+
 def deploy_drift_recovery_allowed(technical_prompt: str, health: dict, checkout: dict[str, str | bool]) -> tuple[bool, dict]:
     local_commit = str(checkout.get("local_repo_commit") or "").strip()
     tracking_commit = local_repo_tracking_commit_short()
     status_short = local_repo_status_short()
+    deploy_prompt = stack_deploy_prompt(technical_prompt)
+    status_prompt = stack_deploy_status_prompt(technical_prompt)
     details = {
-        "deploy_prompt": stack_deploy_prompt(technical_prompt),
+        "deploy_prompt": deploy_prompt,
+        "deploy_status_prompt": status_prompt,
         "local_repo_commit": local_commit,
         "tracking_commit": tracking_commit,
         "local_status_clean": status_short == "",
         "gateway_admin": health.get("gateway_admin", {}),
     }
     allowed = (
-        details["deploy_prompt"] is True
-        and status_short == ""
-        and bool(local_commit)
-        and bool(tracking_commit)
-        and local_commit == tracking_commit
-        and health.get("gateway_admin", {}).get("lan_admin_ready") is True
+        (status_prompt and health.get("gateway_admin", {}).get("lan_admin_ready") is True)
+        or (
+            deploy_prompt
+            and status_short == ""
+            and bool(local_commit)
+            and bool(tracking_commit)
+            and local_commit == tracking_commit
+            and health.get("gateway_admin", {}).get("lan_admin_ready") is True
+        )
     )
     if status_short:
         details["local_status_short"] = status_short[:2000]
