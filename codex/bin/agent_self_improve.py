@@ -1226,6 +1226,101 @@ def verify(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
     return {"ok": ok, "commands": results}
 
 
+def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], generated_diff_result: dict[str, Any]) -> dict[str, Any]:
+    codex_local_offload = [
+        "repository exploration",
+        "regression artifact proposal",
+        "acceptance criteria drafting",
+        "capability implementation checklist",
+        "unified diff draft generation for allowed paths",
+        "smoke command execution",
+        "recovery report drafting",
+    ]
+    senior_review = [
+        "applying runtime patches",
+        "deploying ai-stack",
+        "approving new host/runtime capability boundaries",
+        "reviewing security-sensitive recovery",
+    ]
+    capability_development = proposal_result.get("capability_development") or {}
+    generated_paths = generated_diff_result.get("paths") or []
+    artifact_dir = Path(str(summary.get("artifact_dir") or "."))
+    generated_artifacts = [
+        str(path.relative_to(artifact_dir))
+        for path in sorted(artifact_dir.rglob("*"))
+        if path.is_file()
+    ]
+    total_work_buckets = len(codex_local_offload) + len(senior_review)
+    offload_ratio = round((len(codex_local_offload) / total_work_buckets) * 100, 1) if total_work_buckets else 0.0
+    report = {
+        "safe_to_offload_to_codex_local": codex_local_offload,
+        "codex_senior_review_required_for": senior_review,
+        "offload_ratio_percent": offload_ratio,
+        "target_capability_name": capability_development.get("capability_name") or "",
+        "generated_patch_paths": generated_paths,
+        "generated_artifacts": generated_artifacts,
+        "patch_application_decision": (
+            "applied"
+            if summary.get("patch", {}).get("applied")
+            else ("validated_only" if generated_diff_result.get("ok") and summary.get("dry_run") else "not_applied")
+        ),
+        "why_patch_was_not_applied": (
+            ""
+            if summary.get("patch", {}).get("applied")
+            else (
+                "dry_run=true"
+                if summary.get("dry_run")
+                else str(summary.get("patch", {}).get("message") or summary.get("generated_diff", {}).get("message") or "")
+            )
+        ),
+    }
+    return report
+
+
+def write_final_report(
+    audit_dir: Path,
+    summary: dict[str, Any],
+    proposal_result: dict[str, Any],
+    generated_diff_result: dict[str, Any],
+) -> dict[str, Any]:
+    report = build_report(summary, proposal_result, generated_diff_result)
+    write_json(audit_dir / "self-improve-report.json", report)
+    lines = [
+        "# Agent Self-Improve Report",
+        "",
+        f"- workspace: `{summary.get('workspace')}`",
+        f"- mode: `{summary.get('mode')}`",
+        f"- dry_run: `{summary.get('dry_run')}`",
+        f"- diagnosis_category: `{summary.get('diagnosis_category')}`",
+        f"- root_cause: `{summary.get('root_cause')}`",
+        f"- cycles_completed: `{summary.get('cycles_completed')}` / `{summary.get('cycles_requested')}`",
+        f"- target_capability_name: `{report.get('target_capability_name') or '-'}'",
+        f"- patch_application_decision: `{report.get('patch_application_decision')}`",
+        f"- offload_ratio_percent: `{report.get('offload_ratio_percent')}`",
+        "",
+        "## Offloaded To Codex-Local",
+        "",
+    ]
+    for item in report["safe_to_offload_to_codex_local"]:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Senior Codex Review Still Required", ""])
+    for item in report["codex_senior_review_required_for"]:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Generated Patch Paths", ""])
+    if report["generated_patch_paths"]:
+        for item in report["generated_patch_paths"]:
+            lines.append(f"- `{item}`")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Artifacts", ""])
+    for item in report["generated_artifacts"]:
+        lines.append(f"- `{item}`")
+    if report.get("why_patch_was_not_applied"):
+        lines.extend(["", "## Patch Apply Recovery", "", f"- {report['why_patch_was_not_applied']}"])
+    write_text(audit_dir / "self-improve-report.md", "\n".join(lines) + "\n")
+    return report
+
+
 def deploy(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
     gate = runtime_gate(args, audit_dir, "deploy")
     if not gate.get("ok"):
@@ -1605,29 +1700,8 @@ def main() -> int:
         },
         "deploy": deploy_result,
         "e2e": e2e_result,
-        "report": {
-            "safe_to_offload_to_codex_local": [
-                "repository exploration",
-                "regression artifact proposal",
-                "acceptance criteria drafting",
-                "capability implementation checklist",
-                "unified diff draft generation for allowed paths",
-                "smoke command execution",
-                "recovery report drafting",
-            ],
-            "codex_senior_review_required_for": [
-                "applying runtime patches",
-                "deploying ai-stack",
-                "approving new host/runtime capability boundaries",
-                "reviewing security-sensitive recovery",
-            ],
-            "patch_application_decision": (
-                "applied"
-                if patch_result.get("applied")
-                else ("validated_only" if generated_diff_result.get("ok") and args.dry_run else "not_applied")
-            ),
-        },
     }
+    summary["report"] = write_final_report(audit_dir, summary, proposal_result, generated_diff_result)
     write_json(audit_dir / "summary.json", summary)
     if args.json:
         print(json.dumps(redact(summary), ensure_ascii=False, indent=2))

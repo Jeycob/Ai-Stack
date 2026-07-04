@@ -160,11 +160,21 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected capability development plan, got {proposal!r}")
         generated_file = Path(payload["artifact_dir"]) / "cycle-01/generated-unified.diff"
         generated_result_file = Path(payload["artifact_dir"]) / "cycle-01/generated-diff-result.json"
+        report_file = Path(payload["artifact_dir"]) / "self-improve-report.json"
         if not generated_file.is_file() or not generated_result_file.is_file():
             raise SystemExit(f"expected generated unified diff artifacts under {payload['artifact_dir']}")
+        if not report_file.is_file():
+            raise SystemExit(f"expected final self-improve report artifact under {payload['artifact_dir']}")
         generated = json.loads(generated_result_file.read_text(encoding="utf-8"))
+        report = json.loads(report_file.read_text(encoding="utf-8"))
         if not generated.get("ok") or generated.get("git_apply_check_exit_code") != 0:
             raise SystemExit(f"expected applicable generated diff, got {generated!r}")
+        if report.get("target_capability_name") != "workspace_profile":
+            raise SystemExit(f"expected report to expose target capability, got {report!r}")
+        if "repository exploration" not in (report.get("safe_to_offload_to_codex_local") or []):
+            raise SystemExit(f"expected codex-local offload report, got {report!r}")
+        if "applying runtime patches" not in (report.get("codex_senior_review_required_for") or []):
+            raise SystemExit(f"expected senior review report, got {report!r}")
         patch_text = generated_file.read_text(encoding="utf-8")
         if "docs/capability-drafts/workspace_profile.json" not in patch_text:
             raise SystemExit(f"expected capability draft file in generated diff:\n{patch_text}")
@@ -362,6 +372,9 @@ def run_verify_dry_run() -> None:
         payload = json.loads(proc.stdout)
         if payload.get("verify", {}).get("command_count", 0) < 6:
             raise SystemExit(f"expected smoke commands in verify result, got {payload!r}")
+        report = payload.get("report") or {}
+        if report.get("patch_application_decision") not in {"not_applied", "validated_only"}:
+            raise SystemExit(f"expected report patch decision in verify dry-run, got {payload!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
 
 
