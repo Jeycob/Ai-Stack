@@ -421,6 +421,10 @@ def run_patch_mode_dry_run() -> None:
             raise SystemExit(f"patch should not apply during dry-run, got {payload!r}")
         if patch.get("git_apply_check_exit_code") != 0:
             raise SystemExit(f"expected git apply --check to pass in patch mode, got {payload!r}")
+        if patch.get("patch_file") != generated.get("safe_apply_candidate_patch_file"):
+            raise SystemExit(f"expected patch mode to use safe apply candidate bundle, got {payload!r}")
+        if patch.get("patch_source") != "guarded_generated_patch":
+            raise SystemExit(f"expected guarded generated patch source, got {payload!r}")
         print("AGENT_SELF_IMPROVE_PATCH_DRY_RUN_OK")
 
 

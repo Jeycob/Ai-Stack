@@ -2059,8 +2059,17 @@ def patch_path_allowed(rel: str) -> bool:
     return normalized in ALLOWED_PATCH_FILES or any(normalized.startswith(prefix) for prefix in ALLOWED_PATCH_PREFIXES)
 
 
-def validate_or_apply_patch(args: argparse.Namespace, audit_dir: Path, generated_patch_file: str = "") -> dict[str, Any]:
-    patch_file = args.patch_file or generated_patch_file
+def guarded_patch_file(args: argparse.Namespace, generated_diff_result: dict[str, Any]) -> str:
+    if args.patch_file:
+        return args.patch_file
+    return str(
+        generated_diff_result.get("safe_apply_candidate_patch_file")
+        or generated_diff_result.get("patch_file")
+        or ""
+    )
+
+
+def validate_or_apply_patch(args: argparse.Namespace, audit_dir: Path, patch_file: str = "") -> dict[str, Any]:
     if not patch_file:
         return {
             "ok": True,
@@ -2076,6 +2085,7 @@ def validate_or_apply_patch(args: argparse.Namespace, audit_dir: Path, generated
         "ok": not blocked,
         "mode": "dry_run" if args.dry_run else "apply",
         "patch_file": str(patch_path),
+        "patch_source": "explicit_patch_file" if args.patch_file else "guarded_generated_patch",
         "paths": paths,
         "blocked_paths": blocked,
         "applied": False,
@@ -2890,7 +2900,7 @@ def main() -> int:
             cycle_record["ok"] = cycle_record["ok"] and bool(generated_diff_result.get("ok"))
 
         if args.mode in {"patch", "full"}:
-            patch_result = validate_or_apply_patch(args, cycle_dir, str(generated_diff_result.get("patch_file") or ""))
+            patch_result = validate_or_apply_patch(args, cycle_dir, guarded_patch_file(args, generated_diff_result))
             cycle_record["phases"]["apply_guarded_patch"] = patch_result
             cycle_record["ok"] = cycle_record["ok"] and bool(patch_result.get("ok"))
 
