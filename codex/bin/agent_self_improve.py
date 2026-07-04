@@ -87,6 +87,7 @@ VERIFY_COMMANDS = [
     ["python3", "codex/bin/gateway_admin_filter_passthrough_smoke.py"],
     ["python3", "codex/bin/gateway_admin_self_improve_smoke.py"],
     ["python3", "codex/bin/gateway_runtime_health_smoke.py"],
+    ["python3", "codex/bin/gateway_runtime_fingerprint_check_smoke.py"],
 ]
 
 REPRODUCE_COMMANDS = [

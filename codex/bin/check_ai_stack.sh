@@ -454,6 +454,28 @@ else
   record_summary "Codex gateway runtime fingerprint check" "SKIP"
 fi
 
+if [ "${SKIP_GATEWAY_RUNTIME_FINGERPRINT_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint smoke ... SKIP (disabled)\n'
+  record_summary "Codex gateway runtime fingerprint smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_runtime_fingerprint_check_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint smoke ...\n'
+  gateway_runtime_fp_smoke_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/gateway_runtime_fingerprint_check_smoke.py" >"$gateway_runtime_fp_smoke_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_runtime_fp_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint smoke OK\n'
+    record_summary "Codex gateway runtime fingerprint smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_runtime_fp_smoke_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex gateway runtime fingerprint smoke" "FAIL"
+  fi
+  rm -f "$gateway_runtime_fp_smoke_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway runtime fingerprint smoke ... SKIP (python3 or gateway_runtime_fingerprint_check_smoke.py missing)\n'
+  record_summary "Codex gateway runtime fingerprint smoke" "SKIP"
+fi
+
 if [ "${SKIP_MENTOR_CAPABILITY_ROUTING_SMOKE:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Mentor capability routing smoke ... SKIP (disabled)\n'
   record_summary "Mentor capability routing smoke" "SKIP"

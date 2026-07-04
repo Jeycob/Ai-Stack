@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -17,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from codex.gateway import gateway
+from codex.bin.openwebui_runtime import discover_gateway_base_urls
 
 
 def request_json(url: str, timeout: float) -> dict:
@@ -24,6 +26,28 @@ def request_json(url: str, timeout: float) -> dict:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8", errors="replace")
         return json.loads(raw or "{}")
+
+
+def candidate_base_urls(explicit_base_url: str) -> list[str]:
+    candidates = []
+    for item in (
+        explicit_base_url,
+        os.getenv("CODEX_GATEWAY_URL", ""),
+        os.getenv("CODEX_GATEWAY_PUBLIC_URL", ""),
+    ):
+        value = str(item or "").strip().rstrip("/")
+        if value:
+            candidates.append(value)
+    candidates.extend(discover_gateway_base_urls(ROOT))
+    result = []
+    seen = set()
+    for item in candidates:
+        value = str(item or "").strip().rstrip("/")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def local_repo_root() -> str:
@@ -61,25 +85,39 @@ def local_repo_commit_short() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check gateway runtime fingerprint against local repo code.")
-    parser.add_argument("--base-url", default="http://127.0.0.1:9101")
+    parser.add_argument("--base-url", default=os.getenv("CODEX_GATEWAY_URL", "http://127.0.0.1:9101"))
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    url = args.base_url.rstrip("/") + "/health"
     local_fingerprint = str(gateway.runtime_fingerprint()).strip()
     local_epoch = str(getattr(gateway, "GATEWAY_SOURCE_EPOCH", "") or "").strip()
     local_root = local_repo_root()
     local_commit = local_repo_commit_short()
-    try:
-        payload = request_json(url, args.timeout)
-    except urllib.error.URLError as exc:
+    tried = []
+    payload = None
+    url = ""
+    last_error = ""
+    for base_url in candidate_base_urls(args.base_url):
+        url = base_url.rstrip("/") + "/health"
+        try:
+            payload = request_json(url, args.timeout)
+            tried.append({"base_url": base_url, "ok": True})
+            break
+        except urllib.error.URLError as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            tried.append({"base_url": base_url, "ok": False, "error": last_error})
+        except Exception as exc:  # pragma: no cover - defensive parity with runtime helper
+            last_error = f"{type(exc).__name__}: {exc}"
+            tried.append({"base_url": base_url, "ok": False, "error": last_error})
+    if payload is None:
         message = {
             "ok": False,
             "marker": "CODEX_LOCAL_GATEWAY_UNAVAILABLE",
             "recovery": "Zkontroluj gateway /health a pak spusť bash codex/bin/check_ai_stack.sh",
             "url": url,
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": last_error or "unknown",
+            "tried": tried,
             "local_runtime_fingerprint": local_fingerprint,
             "local_gateway_source_epoch": local_epoch,
         }
@@ -112,6 +150,7 @@ def main() -> int:
     result = {
         "ok": ok,
         "url": url,
+        "tried": tried,
         "capability_mode": capability_mode,
         "natural_codex_local_route": natural_route,
         "remote_runtime_fingerprint": remote_fingerprint,

@@ -84,6 +84,44 @@ def discover_openwebui_base_urls(repo_root: Path, env: dict[str, str] | None = N
     return result
 
 
+def discover_gateway_base_urls(repo_root: Path, env: dict[str, str] | None = None) -> list[str]:
+    env = env or os.environ
+    candidates = []
+
+    for key in (
+        "CODEX_GATEWAY_URL",
+        "CODEX_GATEWAY_PUBLIC_URL",
+        "GATEWAY_URL",
+    ):
+        candidates.append(_base_url(env.get(key, "")))
+
+    compose_url = _compose_webui_url(repo_root)
+    if compose_url:
+        candidates.append(_replace_port(_base_url(compose_url), 9101))
+
+    openwebui_base = _base_url(env.get("OPENWEBUI_URL", "") or env.get("WEBUI_URL", ""))
+    if openwebui_base:
+        candidates.append(_replace_port(openwebui_base, 9101))
+
+    candidates.extend(
+        [
+            "http://127.0.0.1:9101",
+            "http://localhost:9101",
+            "http://192.168.0.48:9101",
+        ]
+    )
+
+    result = []
+    seen = set()
+    for item in candidates:
+        base = _base_url(item)
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        result.append(base)
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Resolve candidate OpenWebUI base URLs.")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[2]))
