@@ -1716,6 +1716,21 @@ def assert_codex_local_completion_hard_fails_on_agent_loop_error() -> None:
     print("CODEX_LOCAL_COMPLETION_HARD_FAILURE_OK")
 
 
+def assert_normal_chat_tool_routing_is_structural_only() -> None:
+    natural_payloads = [
+        {"model": "qwen2.5-coder:14b", "messages": [{"role": "user", "content": "vytvor ssh klic pro github"}]},
+        {"model": "qwen2.5-coder:14b", "messages": [{"role": "user", "content": "stahni mi to ze seznam.cz"}]},
+        {"model": "qwen2.5-coder:14b", "messages": [{"role": "user", "content": "git push do githubu"}]},
+    ]
+    for payload in natural_payloads:
+        if gateway.normal_chat_requires_tool(payload):
+            raise SystemExit(f"non-codex chat must not route to gateway by keyword, got {payload!r}")
+    url_payload = {"model": "qwen2.5-coder:14b", "messages": [{"role": "user", "content": "https://www.seznam.cz/"}]}
+    if not gateway.normal_chat_requires_tool(url_payload):
+        raise SystemExit("concrete URL should remain a structural gateway route for compatibility")
+    print("NORMAL_CHAT_TOOL_ROUTING_STRUCTURAL_ONLY_OK")
+
+
 def assert_agent_loop_human_answers() -> None:
     run_text = gateway.agent_loop_response_text(
         {
@@ -2047,6 +2062,7 @@ def main() -> int:
     assert_codex_local_completion_bootstrap_routing()
     assert_codex_local_completion_web_answer_routing()
     assert_codex_local_completion_hard_fails_on_agent_loop_error()
+    assert_normal_chat_tool_routing_is_structural_only()
     assert_agent_loop_human_answers()
     assert_host_runner_requires_explicit_capability()
     assert_deploy_status_diagnostics()

@@ -6806,14 +6806,10 @@ def normal_chat_requires_tool(payload):
     text = strip_routing(gateway_admin_text(payload)).strip()
     if "GATEWAY_ADMIN_" in text:
         return False
-    lower = text.lower()
-    return bool(
-        re.search(r"https?://", text)
-        or "seznam.cz" in lower
-        or "github" in lower
-        or "ssh" in lower
-        or "git push" in lower
-    )
+    # Non-codex models should not be pulled into the gateway by natural-language
+    # keywords. Only concrete URLs are structural enough to route without the
+    # codex-local TaskSpec planner.
+    return bool(re.search(r"https?://", text))
 
 def sse_line_info(raw):
     line = raw.decode("utf-8", "replace").strip()
