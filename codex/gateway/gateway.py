@@ -6523,12 +6523,22 @@ def agent_loop_response_text(result):
         except TypeError:
             rendered = str(debug_payload)
         debug_rendered = debug_rendered + "\n\n" + trim_response_text(rendered, 12000)
-    if env_truthy("CODEX_LOCAL_SHOW_DEBUG") or answer_visibility == "details":
+    if env_truthy("CODEX_LOCAL_SHOW_DEBUG"):
         lines.append("")
         lines.append("Debug:")
         lines.append("```text")
         lines.append(debug_rendered)
         lines.append("```")
+    elif answer_visibility == "details":
+        collapsed_debug = debug_rendered.replace("</", "<\\/")
+        lines.append("")
+        lines.append("<details><summary>Technické detaily</summary>")
+        lines.append("")
+        lines.append("```text")
+        lines.append(trim_response_text(collapsed_debug, 5000))
+        lines.append("```")
+        lines.append("")
+        lines.append("</details>")
     else:
         # Keep machine-readable markers for helper/test correlation without
         # making normal OpenWebUI replies look like raw runtime logs.
