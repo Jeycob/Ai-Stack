@@ -255,6 +255,124 @@ if remaining:
 PY
 }
 
+release_workspace_port() {
+  local port="$1"
+  local expected_container="$2"
+  python3 - "$port" "$expected_container" <<'PY'
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+port = str(sys.argv[1])
+expected_container = str(sys.argv[2])
+
+
+def run(args):
+    return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
+def published_port_matches(ports):
+    # Docker formats examples as:
+    #   127.0.0.1:4103->4096/tcp
+    #   0.0.0.0:4103->4096/tcp, [::]:4103->4096/tcp
+    return re.search(rf"(^|[,\s])(?:127\.0\.0\.1|0\.0\.0\.0|\[::\]|\*)?:?{re.escape(port)}->", ports or "") is not None
+
+
+proc = run(["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"])
+removed = []
+for line in proc.stdout.splitlines():
+    parts = line.split("\t", 2)
+    if len(parts) != 3:
+        continue
+    container_id, name, ports = parts
+    if name == expected_container:
+        continue
+    if not name.startswith("codex-opencode-"):
+        continue
+    if not published_port_matches(ports):
+        continue
+    print(f"workspace_port_conflict_container={name}", flush=True)
+    subprocess.run(["docker", "rm", "-f", container_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    removed.append(name)
+
+if removed:
+    time.sleep(1.0)
+
+
+def socket_inodes_for_port():
+    inodes = set()
+    port_hex = format(int(port), "04X")
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = open(table, encoding="ascii").read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 10:
+                continue
+            try:
+                _addr, raw_port = parts[1].rsplit(":", 1)
+            except ValueError:
+                continue
+            if raw_port.upper() == port_hex:
+                inodes.add(parts[9])
+    return inodes
+
+
+def pids_for_inodes(inodes):
+    pids = set()
+    if not inodes:
+        return pids
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(f"{fd_dir}/{fd}")
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target[8:-1] in inodes:
+                pids.add(int(pid))
+                break
+    return pids
+
+
+def cmdline(pid):
+    try:
+        raw = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        return ""
+    return raw.strip()
+
+
+for pid in sorted(pids_for_inodes(socket_inodes_for_port())):
+    cmd = cmdline(pid)
+    if "docker-proxy" not in cmd or port not in cmd:
+        continue
+    print(f"workspace_port_orphan_docker_proxy_pid={pid}", flush=True)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
+        except PermissionError:
+            print(f"workspace_port_proxy_kill_permission_denied pid={pid}", flush=True)
+            break
+        time.sleep(0.3)
+        if pid not in pids_for_inodes(socket_inodes_for_port()):
+            break
+PY
+}
+
 mkdir -p "$STATE_ROOT" "$AUDIT_ROOT"
 chown -R "$AI_USER:$AI_USER" "$STATE_ROOT" "$AUDIT_ROOT" || true
 
@@ -317,6 +435,7 @@ while IFS=$'\t' read -r name path port cpus memory; do
   fi
 
   docker rm -f "$cname" >/dev/null 2>&1 || true
+  release_workspace_port "$port" "$cname"
 
   docker run -d \
     --name "$cname" \

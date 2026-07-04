@@ -36,6 +36,10 @@ def main() -> int:
         raise SystemExit("expected start script to launch gateway with python3 -B and PYTHONDONTWRITEBYTECODE=1")
     if "clear_gateway_bytecode_cache" not in script_text:
         raise SystemExit("expected start script to clear gateway bytecode cache before launch")
+    if "release_workspace_port" not in script_text or 'release_workspace_port "$port" "$cname"' not in script_text:
+        raise SystemExit("expected start script to release stale codex workspace port owners before docker run")
+    if "workspace_port_conflict_container=" not in script_text:
+        raise SystemExit("expected start script to report stale codex workspace port conflicts")
 
     payload = run_print_config()
     if payload.get("repo_root") != str(ROOT):
