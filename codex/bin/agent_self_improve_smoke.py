@@ -212,6 +212,37 @@ def run_generate_unified_diff_mode() -> None:
         print("AGENT_SELF_IMPROVE_GENERATE_UNIFIED_DIFF_OK")
 
 
+def run_patch_mode_dry_run() -> None:
+    with tempfile.TemporaryDirectory(prefix="asi-patch-") as tmp:
+        payload = run_self_improve(
+            [
+                "--workspace",
+                "ai-stack",
+                "--mode",
+                "patch",
+                "--target-capability-name",
+                "workspace_profile",
+                "--feature-request",
+                "Add bounded workspace profiling capability.",
+                "--dry-run",
+                "--audit-root",
+                str(Path(tmp) / "audit"),
+            ],
+            timeout=240,
+        )
+        generated = payload.get("generated_diff") or {}
+        patch = payload.get("patch") or {}
+        if not generated.get("ok"):
+            raise SystemExit(f"expected generated diff to be valid before patch phase, got {payload!r}")
+        if patch.get("mode") != "dry_run":
+            raise SystemExit(f"expected dry-run patch mode, got {payload!r}")
+        if patch.get("applied"):
+            raise SystemExit(f"patch should not apply during dry-run, got {payload!r}")
+        if patch.get("git_apply_check_exit_code") != 0:
+            raise SystemExit(f"expected git apply --check to pass in patch mode, got {payload!r}")
+        print("AGENT_SELF_IMPROVE_PATCH_DRY_RUN_OK")
+
+
 def run_max_cycles_mode() -> None:
     with tempfile.TemporaryDirectory(prefix="asi-cycles-") as tmp:
         payload = run_self_improve(
@@ -328,6 +359,7 @@ def main() -> int:
     run_proposal_mode()
     run_capability_develop_mode()
     run_generate_unified_diff_mode()
+    run_patch_mode_dry_run()
     run_max_cycles_mode()
     run_parallel_artifact_uniqueness()
     run_runtime_drift_blocks_e2e()
