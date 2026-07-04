@@ -616,6 +616,12 @@ def proposal_change_plan(
                 "acceptance_criteria": acceptance,
             },
             {
+                "path": f"docs/capability-drafts/{capability}.implementation-workorder.json",
+                "change_type": "create_or_update",
+                "intent": "Give codex-local a concrete bounded work order for implementing, verifying, and escalating the new capability draft.",
+                "acceptance_criteria": acceptance,
+            },
+            {
                 "path": f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 "change_type": "create_or_update",
                 "intent": "Provide a bounded executor stub that codex-local can extend into a real capability implementation.",
@@ -1048,6 +1054,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
                 f"docs/capability-drafts/{capability}.wiring.json",
                 f"docs/capability-drafts/{capability}.executor-contract.json",
                 f"docs/capability-drafts/{capability}.executor-dispatch.json",
+                f"docs/capability-drafts/{capability}.implementation-workorder.json",
                 f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
                 f"codex/bin/capability_drafts/{capability}_smoke.py",
@@ -1059,6 +1066,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
                 "runtime_patch_candidate_marker": "codex-local-capability-runtime-patch-candidate",
                 "wiring_kind": "codex-local-capability-wiring-blueprint",
                 "executor_dispatch_kind": "codex-local-capability-executor-dispatch-plan",
+                "implementation_workorder_kind": "codex-local-capability-implementation-workorder",
                 "runtime_hook_marker": "CAPABILITY_RUNTIME_HOOK_STUB",
                 "executor_capability_constant": capability,
                 "smoke_marker": "CAPABILITY_DRAFT_SMOKE_SCAFFOLD",
@@ -1220,6 +1228,93 @@ def capability_executor_dispatch_file(capability: str, feature_request: str, rea
         "generated_by": "agent_self_improve.generate_unified_diff",
     }
     after = json.dumps(dispatch, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def capability_implementation_workorder_file(
+    capability: str,
+    feature_request: str,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.implementation-workorder.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    regression_cases = [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)]
+    workorder = {
+        "kind": "codex-local-capability-implementation-workorder",
+        "capability_name": capability,
+        "summary": shape["summary"],
+        "goal": task_spec.get("desired_end_state") or feature_request,
+        "bounded_scope": {
+            "workflow": shape["workflow"],
+            "planned_workflow": shape["planned_workflow"],
+            "scope": shape["scope"],
+            "executor_pattern": shape["executor"],
+        },
+        "inputs": {
+            "feature_request": feature_request,
+            "target_capability_name": capability,
+            "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+            "regression_cases": regression_cases,
+        },
+        "artifacts_to_consume": [
+            f"docs/capability-drafts/{capability}.json",
+            f"docs/capability-drafts/{capability}.smoke.json",
+            f"docs/capability-drafts/{capability}.gateway-integration.json",
+            f"docs/capability-drafts/{capability}.gateway.patch.md",
+            f"docs/capability-drafts/{capability}.runtime.patch.diff",
+            f"docs/capability-drafts/{capability}.wiring.json",
+            f"docs/capability-drafts/{capability}.executor-contract.json",
+            f"docs/capability-drafts/{capability}.executor-dispatch.json",
+            f"codex/bin/capability_drafts/{capability}_executor_stub.py",
+            f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
+            f"codex/bin/capability_drafts/{capability}_smoke.py",
+        ],
+        "codex_local_steps": [
+            {
+                "id": "review-draft-contracts",
+                "description": "Read the generated capability draft artifacts and confirm the canonical capability name, workflow, and executor contract are aligned.",
+                "outputs": ["confirmed capability shape", "implementation notes"],
+            },
+            {
+                "id": "prepare-runtime-hunks",
+                "description": "Use the gateway integration draft, runtime patch candidate, and runtime hook scaffold to prepare the smallest safe gateway/runtime hunks.",
+                "outputs": ["review-ready runtime hunk draft"],
+            },
+            {
+                "id": "prepare-tests",
+                "description": "Extend bounded smoke coverage so the new capability is exercised through TaskSpec, registry, recovery, and generated draft artifacts.",
+                "outputs": ["updated smoke/regression plan"],
+            },
+            {
+                "id": "run-verify",
+                "description": "Run the bounded verify commands and capture failures for the next max_cycles iteration if needed.",
+                "outputs": ["verify output", "next-cycle recovery input on failure"],
+            },
+        ],
+        "senior_review_checkpoints": [
+            "Approve gateway.py runtime hook shape before any reviewed promotion patch is applied.",
+            "Approve any new executor semantics that widen runtime authority.",
+            "Approve deploy/E2E only after runtime fingerprint gate passes.",
+        ],
+        "verify_commands": [
+            "python3 -m py_compile codex/gateway/gateway.py codex/bin/capability_drafts/*.py",
+            "python3 codex/bin/gateway_recovery_smoke.py",
+            "python3 codex/bin/agent_self_improve_smoke.py",
+        ],
+        "escalation_points": [
+            "If generated hunks would touch paths outside the allowed self-improve patch scope, stop and return MANUAL_STEP_REQUIRED.",
+            "If verify fails, feed the failure output into the next max_cycles iteration instead of widening the runtime patch.",
+            "If runtime/source fingerprint drifts, block deploy/E2E and return the recovery command.",
+        ],
+        "generated_by": "agent_self_improve.generate_unified_diff",
+        "diagnosis_category": diagnosis.get("category"),
+    }
+    after = json.dumps(workorder, ensure_ascii=False, indent=2) + "\n"
     return rel, unified_diff_for_file(rel, before, after)
 
 
@@ -1811,6 +1906,7 @@ def generate_unified_diff(
                 capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_contract_file(capability, feature_request, reasoning),
                 capability_executor_dispatch_file(capability, feature_request, reasoning),
+                capability_implementation_workorder_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_stub_file(capability, feature_request, reasoning),
                 capability_runtime_hook_stub_file(capability, feature_request, reasoning),
                 capability_smoke_stub_file(capability, feature_request, reasoning),

@@ -963,6 +963,7 @@ def assert_capability_draft_contracts() -> None:
         wiring_path = ROOT / f"docs/capability-drafts/{capability}.wiring.json"
         executor_contract_path = ROOT / f"docs/capability-drafts/{capability}.executor-contract.json"
         executor_dispatch_path = ROOT / f"docs/capability-drafts/{capability}.executor-dispatch.json"
+        implementation_workorder_path = ROOT / f"docs/capability-drafts/{capability}.implementation-workorder.json"
         executor_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_executor_stub.py"
         runtime_hook_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py"
         smoke_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_smoke.py"
@@ -1022,6 +1023,14 @@ def assert_capability_draft_contracts() -> None:
                 raise SystemExit(f"executor dispatch missing handler_name for {capability}: {executor_dispatch!r}")
             if not str(executor_dispatch.get("helper_entrypoint") or "").strip():
                 raise SystemExit(f"executor dispatch missing helper_entrypoint for {capability}: {executor_dispatch!r}")
+        if implementation_workorder_path.is_file():
+            workorder = json.loads(implementation_workorder_path.read_text(encoding="utf-8"))
+            if str(workorder.get("kind") or "") != str(markers.get("implementation_workorder_kind") or ""):
+                raise SystemExit(f"implementation workorder kind mismatch for {capability}: {workorder!r}")
+            if not (workorder.get("codex_local_steps") or []):
+                raise SystemExit(f"implementation workorder missing codex_local_steps for {capability}: {workorder!r}")
+            if not (workorder.get("verify_commands") or []):
+                raise SystemExit(f"implementation workorder missing verify_commands for {capability}: {workorder!r}")
         if executor_stub_path.is_file():
             executor_text = executor_stub_path.read_text(encoding="utf-8")
             capability_constant = str(markers.get("executor_capability_constant") or "").strip()
