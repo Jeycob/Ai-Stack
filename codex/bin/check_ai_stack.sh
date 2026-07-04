@@ -251,6 +251,28 @@ check_json_contains 'Codex gateway codex-local readiness' "$CODEX_GATEWAY_URL/he
 check_json_contains 'Codex gateway model alias' "$CODEX_GATEWAY_URL/v1/models" "$MODEL"
 check_json_contains 'Codex gateway workspace registry' "$CODEX_GATEWAY_URL/v1/workspaces" "$WORKSPACE"
 
+if [ "${SKIP_GATEWAY_LLM_FIRST_GUARD_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway LLM-first guard smoke ... SKIP (disabled)\n'
+  record_summary "Codex gateway LLM-first guard smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/gateway_llm_first_guard_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway LLM-first guard smoke ...\n'
+  llm_first_guard_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/gateway_llm_first_guard_smoke.py" >"$llm_first_guard_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$llm_first_guard_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway LLM-first guard smoke OK\n'
+    record_summary "Codex gateway LLM-first guard smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$llm_first_guard_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway LLM-first guard smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex gateway LLM-first guard smoke" "FAIL"
+  fi
+  rm -f "$llm_first_guard_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway LLM-first guard smoke ... SKIP (python3 or gateway_llm_first_guard_smoke.py missing)\n'
+  record_summary "Codex gateway LLM-first guard smoke" "SKIP"
+fi
+
 if [ "${SKIP_FILTER_ROUTE_SMOKE:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex filter route smoke ... SKIP (disabled)\n'
   record_summary "Codex filter route smoke" "SKIP"
@@ -271,6 +293,28 @@ elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/filter_route_smoke.
 else
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex filter route smoke ... SKIP (python3 or filter_route_smoke.py missing)\n'
   record_summary "Codex filter route smoke" "SKIP"
+fi
+
+if [ "${SKIP_OPENWEBUI_FILTER_LLM_FIRST_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI filter LLM-first smoke ... SKIP (disabled)\n'
+  record_summary "OpenWebUI filter LLM-first smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/openwebui_filter_llm_first_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI filter LLM-first smoke ...\n'
+  owui_filter_llm_first_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/openwebui_filter_llm_first_smoke.py" >"$owui_filter_llm_first_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_filter_llm_first_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI filter LLM-first smoke OK\n'
+    record_summary "OpenWebUI filter LLM-first smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$owui_filter_llm_first_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI filter LLM-first smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "OpenWebUI filter LLM-first smoke" "FAIL"
+  fi
+  rm -f "$owui_filter_llm_first_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] OpenWebUI filter LLM-first smoke ... SKIP (python3 or openwebui_filter_llm_first_smoke.py missing)\n'
+  record_summary "OpenWebUI filter LLM-first smoke" "SKIP"
 fi
 
 if [ "${SKIP_WORKSPACE_CONTEXT_REGRESSION_SMOKE:-0}" = "1" ]; then

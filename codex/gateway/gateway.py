@@ -864,7 +864,7 @@ def agent_direct_answer_response(task, intent_class="direct_answer", conversatio
                 "If the user writes Czech, answer Czech. For date/time questions, derive the answer from runtime_context. "
                 "For questions about who you are or what you can do, use runtime_context and the capability summary. "
                 "For simple arithmetic, give the result plainly. For creative writing, write the requested text. "
-                "For follow-ups like 'vypiš výsledky', use recent_conversation_context instead of switching to repository work."
+                "For follow-ups, use recent_conversation_context instead of switching to repository work."
             ),
         },
         {
@@ -1867,209 +1867,33 @@ def agent_capability_human_summary(max_items_per_scope=4):
 
 
 def agent_infer_action_from_task(task):
-    """Legacy fallback only; normal action selection is LLM TaskSpec-driven."""
+    """TaskSpec-only compatibility hook; gateway core does not infer actions from prose."""
     return ""
 
 
 def agent_infer_followup_actions(task):
-    """Legacy fallback only; normal follow-up action selection is LLM TaskSpec-driven."""
+    """TaskSpec-only compatibility hook; follow-up actions must come from planner output."""
     return []
 
 
 def agent_edit_requested(task):
-    """Legacy fallback only; workspace edit intent must come from TaskSpec/capability selection."""
+    """TaskSpec-only compatibility hook; edit intent must come from capability selection."""
     return False
 
 
 def agent_bootstrap_requested(task):
-    """Legacy fallback disabled; bootstrap intent must come from TaskSpec."""
+    """TaskSpec-only compatibility hook; bootstrap intent must come from TaskSpec."""
     return False
 
 
 def agent_ssh_key_show_public_requested(task):
-    """Legacy fallback only; SSH public-key intent must come from TaskSpec/capability selection."""
+    """TaskSpec-only compatibility hook; public-key intent must come from capabilities."""
     return False
 
 
 def agent_ssh_key_create_requested(task):
-    """Legacy fallback only; SSH key intent must come from TaskSpec/capability selection."""
+    """TaskSpec-only compatibility hook; SSH-key intent must come from capabilities."""
     return False
-
-
-def agent_infer_action_from_task_legacy(task):
-    lower = str(task or "").lower()
-    registry = load_workspace_action_registry()
-    for action, spec in registry.items():
-        if not isinstance(spec, dict):
-            continue
-        cues = spec.get("cues") or []
-        if any(isinstance(cue, str) and cue.lower() in lower for cue in cues):
-            return str(action).strip().lower()
-    return ""
-
-
-def agent_infer_followup_actions_legacy(task):
-    lower = str(task or "").lower()
-    registry = load_workspace_action_registry()
-    scored = []
-    heuristic_cues = {
-        "install": (
-            "stahni co je treba",
-            "stáhni co je třeba",
-            "stahni co je potreba",
-            "stáhni co je potřeba",
-            "doinstaluj",
-            "nainstaluj",
-            "install",
-        ),
-        "smoke": (
-            "pust to",
-            "pusť to",
-            "spust to",
-            "spusť to",
-            "rozbehni to",
-            "rozběhni to",
-            "startup smoke",
-            "run it",
-        ),
-        "test": (
-            "otestuj",
-            "spust testy",
-            "spusť testy",
-            "run tests",
-        ),
-        "build": (
-            "build",
-            "sestav to",
-            "postav to",
-        ),
-        "verify": (
-            "over to",
-            "ověř to",
-            "zkontroluj to",
-            "verify",
-        ),
-        "lint": (
-            "lint",
-        ),
-    }
-    seen_actions = set()
-    for action, spec in registry.items():
-        if not isinstance(spec, dict):
-            continue
-        cues = spec.get("cues") or []
-        roadmap_match = any(isinstance(cue, str) and cue.lower() in lower for cue in cues)
-        heuristic_match = any(cue in lower for cue in heuristic_cues.get(str(action).strip().lower(), ()))
-        if not (roadmap_match or heuristic_match):
-            continue
-        normalized_action = str(action).strip().lower()
-        priority = int(spec.get("autopilot_priority", 999) or 999)
-        scored.append((priority, normalized_action))
-        seen_actions.add(normalized_action)
-    default_priority = {
-        "install": 10,
-        "verify": 20,
-        "smoke": 30,
-        "test": 40,
-        "build": 50,
-        "lint": 60,
-    }
-    for action, cues in heuristic_cues.items():
-        if action in seen_actions:
-            continue
-        if any(cue in lower for cue in cues):
-            scored.append((default_priority.get(action, 999), action))
-    scored.sort()
-    seen = set()
-    ordered = []
-    for _, action in scored:
-        if action in AGENT_LOOP_ACTIONS and action not in seen:
-            ordered.append(action)
-            seen.add(action)
-    return ordered
-
-
-def agent_edit_requested_legacy(task):
-    lower = str(task or "").lower()
-    cues = (
-        "uprav",
-        "edituj",
-        "pridej",
-        "přidej",
-        "vytvor soubor",
-        "vytvoř soubor",
-        "vytvor",
-        "vytvoř",
-        "dopln",
-        "doplň",
-        "zmen",
-        "změň",
-        "append",
-        "modify",
-        "update",
-        "create file",
-    )
-    return any(cue in lower for cue in cues)
-
-
-def agent_bootstrap_requested_legacy(task):
-    lower = str(task or "").lower()
-    cues = (
-        "vytvor repo",
-        "vytvoř repo",
-        "vytvor repository",
-        "vytvoř repository",
-        "zaloz repo",
-        "založ repo",
-        "create repo",
-        "create repository",
-        "nove repository",
-        "nové repository",
-        "nove repo",
-        "nové repo",
-        "vytvor workspace",
-        "vytvoř workspace",
-    )
-    return any(cue in lower for cue in cues)
-
-
-def agent_ssh_key_show_public_requested_legacy(task):
-    lower = str(task or "").lower()
-    public_cues = (
-        "public key",
-        "public klic",
-        "public klíč",
-        "vrat mi public key",
-        "vrať mi public key",
-        "ukaz public key",
-        "ukaž public key",
-        "vypis public",
-        "vypiš public",
-        "vypis mi public",
-        "vypiš mi public",
-        "vrat public key",
-        "vrať public key",
-        "ssh-ed25519",
-        "ssh-rsa",
-    )
-    return any(cue in lower for cue in public_cues) or ("public" in lower and any(cue in lower for cue in ("ssh", "klic", "klíč", "key")))
-
-
-def agent_ssh_key_create_requested_legacy(task):
-    lower = str(task or "").lower()
-    create_cues = (
-        "ssh klic",
-        "ssh klíč",
-        "ssh key",
-        "ssh-keygen",
-        "vygeneruj klic",
-        "vygeneruj klíč",
-        "vytvor ssh",
-        "vytvoř ssh",
-        "create ssh",
-        "generate ssh",
-    )
-    return any(cue in lower for cue in create_cues)
 
 
 def normalize_capability_identifier(value):
@@ -2112,7 +1936,7 @@ def agent_target_capability_name_from_task(task):
 
 
 def agent_capability_develop_requested(task):
-    """Legacy fallback only; capability-development intent belongs to TaskSpec."""
+    """TaskSpec-only compatibility hook; capability-development intent belongs to TaskSpec."""
     if agent_target_capability_name_from_task(task):
         return True
     return False
@@ -2149,12 +1973,12 @@ def agent_git_publish_requested(task):
 
 
 def agent_new_workspace_request(task):
-    """Legacy fallback disabled; new workspace intent must come from TaskSpec."""
+    """TaskSpec-only compatibility hook; new workspace intent must come from TaskSpec."""
     return False
 
 
 def agent_executable_task_requested(task):
-    """Legacy fallback disabled; execution intent is TaskSpec/capability-selector work."""
+    """TaskSpec-only compatibility hook; execution intent is capability-selector work."""
     return False
 
 
@@ -2167,32 +1991,32 @@ def agent_public_url_from_task(task):
 
 
 def agent_web_question_requested(task):
-    """Legacy fallback disabled; public-web intent belongs to TaskSpec."""
+    """TaskSpec-only compatibility hook; public-web intent belongs to TaskSpec."""
     return False
 
 
 def agent_capability_help_requested(task):
-    """Legacy fallback disabled; help/capability intent belongs to TaskSpec."""
+    """TaskSpec-only compatibility hook; help/capability intent belongs to TaskSpec."""
     return False
 
 
 def agent_preview_requested(task):
-    """Legacy fallback disabled; preview intent belongs to TaskSpec."""
+    """TaskSpec-only compatibility hook; preview intent belongs to TaskSpec."""
     return False
 
 
 def agent_user_confirmation_requested(task):
-    """Legacy fallback disabled; confirmation checkpoints belong to TaskSpec safety fields."""
+    """TaskSpec-only compatibility hook; confirmation belongs to TaskSpec safety fields."""
     return False
 
 
 def agent_deploy_requested(task):
-    """Legacy fallback disabled; stack deploy intent belongs to TaskSpec/admin capability."""
+    """TaskSpec-only compatibility hook; stack deploy intent belongs to TaskSpec/admin capability."""
     return False
 
 
 def agent_run_requested(task):
-    """Legacy fallback disabled; explicit commands are detected structurally by agent_infer_command_from_task."""
+    """TaskSpec-only compatibility hook; explicit commands are detected structurally."""
     return False
 
 
@@ -2235,62 +2059,24 @@ def agent_infer_command_from_task(task):
 
 
 def agent_meta_capability_from_task(task):
-    """Legacy fallback disabled; meta intents belong to TaskSpec required_capabilities."""
+    """TaskSpec-only compatibility hook; meta intents belong to required_capabilities."""
     return ""
 
 
 def agent_workspace_search_query_from_task(task):
-    """Legacy fallback disabled; repository search query belongs to TaskSpec.search_query."""
+    """TaskSpec-only compatibility hook; repository search query belongs to TaskSpec.search_query."""
     return ""
 
 
 def looks_like_followup_reference(task):
-    """Legacy detector disabled; follow-up references must come from TaskSpec."""
+    """TaskSpec-only compatibility hook; follow-up references must come from TaskSpec."""
     return False
 
 
 def placeholder_followup_text(text):
-    normalized = " ".join(str(text or "").strip().lower().split())
-    placeholders = {
-        "",
-        "to",
-        "tam",
-        "ten projekt",
-        "v nem",
-        "v něm",
-        "do nej",
-        "do něj",
-        "pokracuj",
-        "pokračuj",
-        "vysledky",
-        "výsledky",
-        "vypis vysledky",
-        "vypiš výsledky",
-        "ukaz vysledky",
-        "ukaž výsledky",
-        "show results",
-        "list results",
-        "vyhledej to",
-        "hledej to",
-        "find it",
-        "search it",
-    }
-    if normalized in placeholders:
-        return True
-    prefixes = (
-        "to ",
-        "vyhledej to ",
-        "hledej to ",
-        "vypis vysledky ",
-        "vypiš výsledky ",
-        "ukaz vysledky ",
-        "ukaž výsledky ",
-        "find it ",
-        "search it ",
-        "show results ",
-        "list results ",
-    )
-    return any(normalized.startswith(prefix) for prefix in prefixes)
+    """Return True only for structured planner markers, not human-language prose."""
+    normalized = " ".join(str(text or "").strip().split())
+    return normalized in {"__referent_required__", "__followup_reference__"}
 
 
 def recent_nontrivial_context_message(conversation_context, current_task=""):
@@ -2356,7 +2142,7 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         workflow = "deploy"
     elif bootstrap_requested:
         workflow = "bootstrap"
-        provenance = "fallback:legacy_heuristic"
+        provenance = "fallback:taskspec_required"
     elif workspace_exists and agent_git_publish_requested(task):
         workflow = "workspace_git_publish"
     elif workspace_exists and agent_ssh_key_show_public_requested(task):
@@ -3213,7 +2999,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if "workspace_search" in required_capabilities and not workspace_exists:
         missing_inputs.append("existing_workspace")
     if "public_web_search" in required_capabilities and not (
-        search_query or str(spec.get("question") or "").strip() or str(task or "").strip()
+        search_query or str(spec.get("question") or "").strip() or referent_topic
     ):
         missing_inputs.append("search_query")
     risk_level = str(spec.get("risk_level") or "").strip().lower()
@@ -3253,9 +3039,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if is_new_workspace_request and not followup_actions:
         followup_actions = agent_infer_followup_actions(task)
     unresolved_followup_search = False
-    question = str(spec.get("question") or "").strip() or (
-        str(task or "").strip() if intent_class in {"web_search", "web_fetch"} or agent_web_question_requested(task) else ""
-    )
+    question = str(spec.get("question") or "").strip()
     if placeholder_followup_text(question):
         question = ""
     if not question and referent_topic and intent_class in {"web_search", "web_fetch"}:
@@ -3263,10 +3047,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if intent_class == "web_search" and not search_query:
         if question:
             search_query = question
-        elif placeholder_followup_text(task):
-            unresolved_followup_search = True
         else:
-            search_query = str(task or "").strip()
+            unresolved_followup_search = True
     if unresolved_followup_search and "resolved_search_query" not in missing_inputs:
         missing_inputs.append("resolved_search_query")
     ssh_comment = str(spec.get("ssh_comment") or "").strip() or agent_workspace_ssh_comment(task, target_repo_name or fallback_workspace)
