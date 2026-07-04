@@ -85,6 +85,7 @@ VERIFY_COMMANDS = [
     ["python3", "codex/bin/gateway_recovery_smoke.py"],
     ["python3", "codex/bin/filter_route_smoke.py", "--json"],
     ["python3", "codex/bin/gateway_admin_filter_passthrough_smoke.py"],
+    ["python3", "codex/bin/gateway_admin_self_improve_smoke.py"],
     ["python3", "codex/bin/gateway_runtime_health_smoke.py"],
 ]
 

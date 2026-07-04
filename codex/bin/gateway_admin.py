@@ -167,6 +167,9 @@ def parse_args() -> argparse.Namespace:
     self_improve.add_argument("--failure-marker", default="")
     self_improve.add_argument("--expected-behavior", default="")
     self_improve.add_argument("--mode", default="diagnose")
+    self_improve.add_argument("--prompt", default="")
+    self_improve.add_argument("--patch-file", default="")
+    self_improve.add_argument("--e2e-prompt", default="")
     self_improve.add_argument("--capability-name", default="")
     self_improve.add_argument("--target-capability-name", default="")
     self_improve.add_argument("--feature-request", default="")
@@ -242,6 +245,9 @@ def main() -> int:
                 "failure_marker": args.failure_marker,
                 "expected_behavior": args.expected_behavior,
                 "mode": args.mode,
+                "prompt": args.prompt,
+                "patch_file": args.patch_file,
+                "e2e_prompt": args.e2e_prompt,
                 "capability_name": args.capability_name,
                 "target_capability_name": args.target_capability_name,
                 "feature_request": args.feature_request,

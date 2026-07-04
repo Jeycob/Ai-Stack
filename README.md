@@ -436,6 +436,8 @@ Přes gateway existuje stejná capability jako `agent_self_improve` a přímý e
 
     python3 codex/bin/gateway_admin.py self-improve --workspace ai-stack --chat-url http://192.168.0.48:9090/c/<id>
 
+CLI nově přenáší i `--prompt`, `--patch-file` a `--e2e-prompt`, takže audited escalation path nemusí při patch/apply/E2E režimech obcházet `gateway_admin.py` a sahat rovnou na helper skript.
+
 Rutina je silná, ale není neomezený shell. Nikdy nevypisuje tokeny, `.env` ani private SSH key, patch aplikuje jen z explicitně dodaného patch souboru, nejdřív kontroluje povolené cesty a `git apply --check`, a nikdy nenasazuje po selhaných smoke testech. Před živým E2E/deploy navíc povinně běží `gateway_runtime_fingerprint_check.py`; pokud live `/health` nehlásí stejný source epoch/fingerprint jako checkout, self-improve vrátí recovery místo falešného OK. Typické failure patterns jako `kde ted jsi?`, `jake mas capability?`, `vytvor tam ssh klic a vypis mi public`, bounded repo search, `max_cycles`, patch proposal, capability-development artifact, runtime gate a unikátní paralelní artefakty jsou pokryté `codex/bin/agent_self_improve_smoke.py`.
 
 Deploy-side drift blocker se teď navíc testuje samostatně vedle E2E gate, takže fingerprint/source-epoch ochrana je ověřená z obou směrů, ne jen při chat replay.
