@@ -379,6 +379,12 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected capability workflow mapping in promotable runtime patch diff:\n{promotable_runtime_patch_text}")
         if '"implemented": False' not in promotable_runtime_patch_text:
             raise SystemExit(f"expected promotable runtime patch to stay in draft state:\n{promotable_runtime_patch_text}")
+        if "def run_workspace_profile_capability(task_spec, workspace):" not in promotable_runtime_patch_text:
+            raise SystemExit(f"expected promotable runtime patch to carry a concrete handler stub:\n{promotable_runtime_patch_text}")
+        if '"status": "draft_only"' not in promotable_runtime_patch_text:
+            raise SystemExit(f"expected promotable runtime patch to keep the handler in draft-only mode:\n{promotable_runtime_patch_text}")
+        if '"target_capability_name"' not in promotable_runtime_patch_text:
+            raise SystemExit(f"expected promotable runtime patch to preserve target_capability_name wiring:\n{promotable_runtime_patch_text}")
         print("AGENT_SELF_IMPROVE_CAPABILITY_DEVELOP_OK")
 
 
