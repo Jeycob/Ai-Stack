@@ -540,29 +540,17 @@ def codex_preflight_guard(args: argparse.Namespace, technical_prompt: str = "") 
             "Nasad a restartuj aktuální ai-stack runtime; /health musí vracet runtime_fingerprint.",
             details={"gateway_health": health, "local_runtime_fingerprint": local_fingerprint, "checkout": checkout},
         )
-    if bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint and not same_commit:
-        return codex_preflight_failure_text(
-            "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
-            "Běží starý gateway/runtime proces nad novějším repem. Restartuj stack přes codex/bin/start_codex_stack.sh nebo codex/bin/deploy_ai_stack.sh.",
-            details={
-                "gateway_health": health,
-                "local_runtime_fingerprint": local_fingerprint,
-                "remote_runtime_fingerprint": remote_fingerprint,
-                "checkout": checkout,
-            },
-        )
-    if not bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint:
-        if not same_commit:
-            deploy_allowed, deploy_details = deploy_drift_recovery_allowed(technical_prompt, health, checkout)
-            if deploy_allowed:
-                return None
+    if local_fingerprint and remote_fingerprint != local_fingerprint:
+        deploy_allowed, deploy_details = deploy_drift_recovery_allowed(technical_prompt, health, checkout)
+        if deploy_allowed:
+            return None
+        if bool(checkout.get("same_checkout")) or same_commit:
             return codex_preflight_failure_text(
-                "CODEX_LOCAL_RUNTIME_CLONE_DRIFT",
+                "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN",
                 (
-                    "Lokální clone není na stejném commitu jako běžící runtime. "
-                    "Běžný chat/E2E je blokovaný. Pro nasazení použij explicitní "
-                    "GATEWAY_ADMIN_DEPLOY_STACK z čistého checkoutu, jehož HEAD odpovídá origin/main, "
-                    "nebo helper spusť z live runtime checkoutu."
+                    "Runtime commit může sedět, ale běžící gateway vrací jiný runtime_fingerprint. "
+                    "Běžný chat/E2E je blokovaný, protože pravděpodobně běží starý gateway proces. "
+                    "Restartuj stack přes codex/bin/start_codex_stack.sh nebo codex/bin/deploy_ai_stack.sh."
                 ),
                 details={
                     "gateway_health": health,
@@ -572,6 +560,22 @@ def codex_preflight_guard(args: argparse.Namespace, technical_prompt: str = "") 
                     "deploy_drift_recovery": deploy_details,
                 },
             )
+        return codex_preflight_failure_text(
+            "CODEX_LOCAL_RUNTIME_CLONE_DRIFT",
+            (
+                "Lokální clone není stejný jako běžící runtime a runtime_fingerprint se liší. "
+                "Běžný chat/E2E je blokovaný. Pro nasazení použij explicitní "
+                "GATEWAY_ADMIN_DEPLOY_STACK z čistého checkoutu, jehož HEAD odpovídá origin/main, "
+                "nebo helper spusť z live runtime checkoutu."
+            ),
+            details={
+                "gateway_health": health,
+                "local_runtime_fingerprint": local_fingerprint,
+                "remote_runtime_fingerprint": remote_fingerprint,
+                "checkout": checkout,
+                "deploy_drift_recovery": deploy_details,
+            },
+        )
 
     reconcile = run_codex_reconcile_check(args)
     if not bool(reconcile.get("ok")):

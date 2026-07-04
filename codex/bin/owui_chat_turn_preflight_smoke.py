@@ -231,14 +231,12 @@ def assert_runtime_split_brain_short_circuits(turn) -> None:
     print("OWUI_PREFLIGHT_RUNTIME_SPLIT_BRAIN_OK")
 
 
-def assert_same_checkout_same_commit_ignores_fingerprint_warning(turn) -> None:
+def assert_same_checkout_same_commit_blocks_fingerprint_mismatch(turn) -> None:
     calls: list[tuple[str, str]] = []
 
     def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
         calls.append((method, path))
-        if path != "/api/chat/completions":
-            raise AssertionError(f"same-checkout warning path touched unexpected endpoint: {method} {path}")
-        return 200, {"choices": [{"message": {"content": "SAME_CHECKOUT_COMMIT_OK"}}]}
+        raise AssertionError("completion endpoint should not be reached when same-commit runtime fingerprint mismatches")
 
     def fake_health(_args):
         return {
@@ -261,23 +259,21 @@ def assert_same_checkout_same_commit_ignores_fingerprint_warning(turn) -> None:
 
     rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
     joined = "\n".join(text_chunks)
-    if rc != 0:
-        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_FAILED\nreason=unexpected exit code {rc}")
-    if "SAME_CHECKOUT_COMMIT_OK" not in joined:
-        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_FAILED\nreason=missing completion text in {joined!r}")
-    if calls != [("POST", "/api/chat/completions")]:
-        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_FAILED\nreason=unexpected HTTP calls {calls!r}")
-    print("OWUI_PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_OK")
+    if rc != 23:
+        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_BLOCK_FAILED\nreason=unexpected exit code {rc}")
+    if "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN" not in joined:
+        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_BLOCK_FAILED\nreason=missing marker in {joined!r}")
+    if calls:
+        raise SystemExit(f"PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_BLOCK_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_SAME_CHECKOUT_SAME_COMMIT_BLOCK_OK")
 
 
-def assert_foreign_clone_same_commit_reaches_completion(turn) -> None:
+def assert_foreign_clone_same_commit_blocks_fingerprint_mismatch(turn) -> None:
     calls: list[tuple[str, str]] = []
 
     def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
         calls.append((method, path))
-        if path != "/api/chat/completions":
-            raise AssertionError(f"foreign clone path touched unexpected endpoint: {method} {path}")
-        return 200, {"choices": [{"message": {"content": "FOREIGN_CLONE_OK"}}]}
+        raise AssertionError("completion endpoint should not be reached when foreign-clone runtime fingerprint mismatches")
 
     turn.http_request = fake_http
     turn.gateway_health_status = lambda _args: {
@@ -300,13 +296,13 @@ def assert_foreign_clone_same_commit_reaches_completion(turn) -> None:
 
     rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
     joined = "\n".join(text_chunks)
-    if rc != 0:
-        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_FAILED\nreason=unexpected exit code {rc}")
-    if "FOREIGN_CLONE_OK" not in joined:
-        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_FAILED\nreason=missing completion text in {joined!r}")
-    if calls != [("POST", "/api/chat/completions")]:
-        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_FAILED\nreason=unexpected HTTP calls {calls!r}")
-    print("OWUI_PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_OK")
+    if rc != 23:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_BLOCK_FAILED\nreason=unexpected exit code {rc}")
+    if "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN" not in joined:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_BLOCK_FAILED\nreason=missing marker in {joined!r}")
+    if calls:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_BLOCK_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_BLOCK_OK")
 
 
 def assert_foreign_clone_different_commit_blocks_regular_chat(turn) -> None:
@@ -444,9 +440,9 @@ def main() -> int:
     turn = load_turn_module()
     assert_runtime_split_brain_short_circuits(turn)
     turn = load_turn_module()
-    assert_same_checkout_same_commit_ignores_fingerprint_warning(turn)
+    assert_same_checkout_same_commit_blocks_fingerprint_mismatch(turn)
     turn = load_turn_module()
-    assert_foreign_clone_same_commit_reaches_completion(turn)
+    assert_foreign_clone_same_commit_blocks_fingerprint_mismatch(turn)
     turn = load_turn_module()
     assert_foreign_clone_different_commit_blocks_regular_chat(turn)
     turn = load_turn_module()

@@ -146,7 +146,7 @@ def main() -> int:
         and natural_route == "agent_loop"
         and source_epoch_match
         and bool(remote_fingerprint)
-        and (fingerprint_match if same_checkout else (same_commit or fingerprint_match))
+        and fingerprint_match
     )
     result = {
         "ok": ok,
@@ -177,14 +177,17 @@ def main() -> int:
     elif not remote_fingerprint:
         result["marker"] = "CODEX_LOCAL_RUNTIME_FINGERPRINT_MISSING"
         result["recovery"] = "Nasad a restartuj aktuální ai-stack runtime; /health musí vracet runtime_fingerprint."
-    elif same_checkout and not fingerprint_match:
+    elif (same_checkout or same_commit) and not fingerprint_match:
         result["marker"] = "CODEX_LOCAL_RUNTIME_SPLIT_BRAIN"
-        result["recovery"] = "Stejný checkout vrací jiný runtime_fingerprint; běží starý proces. Restartuj stack a znovu ověř /health."
-    elif same_commit and not fingerprint_match:
-        result["marker"] = "CODEX_LOCAL_RUNTIME_FINGERPRINT_WARNING"
         result["recovery"] = (
-            "Runtime běží na správném commitu, ale fingerprint helperu se liší. "
-            "Ber to jako diagnostické varování; pokud se objeví skutečné chování starého runtime, restartuj stack."
+            "Runtime commit může sedět, ale běžící gateway vrací jiný runtime_fingerprint. "
+            "Běží starý proces nebo jiný načtený source. Restartuj stack a znovu ověř /health."
+        )
+    elif not fingerprint_match:
+        result["marker"] = "CODEX_LOCAL_RUNTIME_CLONE_DRIFT"
+        result["recovery"] = (
+            "Tento check běží z jiného checkoutu než live runtime a runtime_fingerprint se liší. "
+            "Synchronizuj clone, spusť check v runtime checkoutu, nebo deployni aktuální ai-stack."
         )
     elif not same_checkout and not same_commit:
         result["marker"] = "CODEX_LOCAL_RUNTIME_CLONE_DRIFT"
