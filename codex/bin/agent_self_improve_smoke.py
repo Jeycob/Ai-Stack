@@ -184,6 +184,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected capability wiring blueprint file in generated diff:\n{patch_text}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in patch_text:
             raise SystemExit(f"expected capability executor scaffold in generated diff:\n{patch_text}")
+        if "codex/bin/capability_drafts/workspace_profile_runtime_hook_stub.py" not in patch_text:
+            raise SystemExit(f"expected capability runtime hook scaffold in generated diff:\n{patch_text}")
         if "codex/bin/capability_drafts/workspace_profile_smoke.py" not in patch_text:
             raise SystemExit(f"expected capability smoke scaffold in generated diff:\n{patch_text}")
         if "docs/codex-local-capability-roadmap.json" not in patch_text:
@@ -200,6 +202,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected touchpoints metadata in generated diff:\n{patch_text}")
         if "CAPABILITY_NAME = 'workspace_profile'" not in patch_text:
             raise SystemExit(f"expected executor stub capability constant in generated diff:\n{patch_text}")
+        if "CAPABILITY_RUNTIME_HOOK_STUB" not in patch_text:
+            raise SystemExit(f"expected runtime hook scaffold marker in generated diff:\n{patch_text}")
         if "CAPABILITY_DRAFT_SMOKE_SCAFFOLD" not in patch_text:
             raise SystemExit(f"expected smoke scaffold marker in generated diff:\n{patch_text}")
         print("AGENT_SELF_IMPROVE_CAPABILITY_DEVELOP_OK")
@@ -235,6 +239,8 @@ def run_generate_unified_diff_mode() -> None:
             raise SystemExit(f"expected capability wiring blueprint path in generated diff, got {generated!r}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in paths:
             raise SystemExit(f"expected capability executor scaffold path in generated diff, got {generated!r}")
+        if "codex/bin/capability_drafts/workspace_profile_runtime_hook_stub.py" not in paths:
+            raise SystemExit(f"expected capability runtime hook scaffold path in generated diff, got {generated!r}")
         if "codex/bin/capability_drafts/workspace_profile_smoke.py" not in paths:
             raise SystemExit(f"expected capability smoke scaffold path in generated diff, got {generated!r}")
         if "docs/codex-local-capability-roadmap.json" not in paths:
