@@ -293,6 +293,17 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected execution packet kind, got {packet!r}")
         if packet.get("target_capability_name") != "workspace_profile":
             raise SystemExit(f"expected execution packet target capability, got {packet!r}")
+        decision = packet.get("decision") or {}
+        if decision.get("execution_state") != "ready_for_review_then_apply":
+            raise SystemExit(f"expected review-then-apply execution state, got {packet!r}")
+        if decision.get("next_actor") != "senior_codex":
+            raise SystemExit(f"expected senior_codex next actor for runtime review packet, got {packet!r}")
+        if decision.get("next_step") != "review_runtime_patch_candidate":
+            raise SystemExit(f"expected runtime review next step, got {packet!r}")
+        if decision.get("ready_for_safe_apply") is not True:
+            raise SystemExit(f"expected safe apply readiness in execution packet, got {packet!r}")
+        if decision.get("ready_for_runtime_promotion_review") is not True:
+            raise SystemExit(f"expected runtime promotion review readiness in execution packet, got {packet!r}")
         if "repository exploration" not in ((packet.get("offload") or {}).get("safe_to_codex_local") or []):
             raise SystemExit(f"expected codex-local offload packet, got {packet!r}")
         if "applying runtime patches" not in ((packet.get("offload") or {}).get("requires_senior_codex") or []):
@@ -598,6 +609,12 @@ def run_runtime_drift_blocks_e2e() -> None:
             raise SystemExit(f"expected blocked e2e runtime gate status, got {payload!r}")
         if not e2e_gate.get("marker"):
             raise SystemExit(f"expected runtime gate marker in report, got {payload!r}")
+        packet = json.loads((Path(payload["artifact_dir"]) / "execution-packet.json").read_text(encoding="utf-8"))
+        decision = packet.get("decision") or {}
+        if decision.get("execution_state") != "blocked_runtime_drift":
+            raise SystemExit(f"expected blocked runtime drift execution state, got {packet!r}")
+        if "e2e" not in (decision.get("blocked_runtime_gate_phases") or []):
+            raise SystemExit(f"expected blocked e2e phase in execution packet, got {packet!r}")
         print("AGENT_SELF_IMPROVE_RUNTIME_GATE_BLOCKS_E2E_OK")
 
 
@@ -634,6 +651,12 @@ def run_runtime_drift_blocks_deploy() -> None:
             raise SystemExit(f"expected blocked deploy runtime gate status, got {payload!r}")
         if not deploy_gate.get("marker"):
             raise SystemExit(f"expected deploy runtime gate marker in report, got {payload!r}")
+        packet = json.loads((Path(payload["artifact_dir"]) / "execution-packet.json").read_text(encoding="utf-8"))
+        decision = packet.get("decision") or {}
+        if decision.get("execution_state") != "blocked_runtime_drift":
+            raise SystemExit(f"expected blocked runtime drift execution state for deploy, got {packet!r}")
+        if "deploy" not in (decision.get("blocked_runtime_gate_phases") or []):
+            raise SystemExit(f"expected blocked deploy phase in execution packet, got {packet!r}")
         print("AGENT_SELF_IMPROVE_RUNTIME_GATE_BLOCKS_DEPLOY_OK")
 
 
@@ -706,6 +729,9 @@ def run_verify_dry_run() -> None:
             raise SystemExit(f"expected execution packet in verify dry-run, got {packet!r}")
         if packet.get("verify", {}).get("all_green") is not True:
             raise SystemExit(f"expected verify summary in execution packet, got {packet!r}")
+        decision = packet.get("decision") or {}
+        if decision.get("execution_state") not in {"ready_for_guarded_apply", "ready_for_review_then_apply", "verified_no_apply_candidate"}:
+            raise SystemExit(f"expected actionable execution packet state in verify dry-run, got {packet!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
 
 

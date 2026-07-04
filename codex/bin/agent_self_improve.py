@@ -3966,6 +3966,43 @@ def build_execution_packet(
         }
     verify_summary = report.get("verify_summary") or {}
     acceptance_evidence = report.get("acceptance_evidence_status") or []
+    runtime_gate_status = manifest.get("runtime_gate_status") or {}
+    deploy_gate = runtime_gate_status.get("deploy") or {}
+    e2e_gate = runtime_gate_status.get("e2e") or {}
+    apply_decision = str(manifest.get("decision") or "")
+    blocked_runtime_gate_phases = [
+        phase
+        for phase, info in runtime_gate_status.items()
+        if isinstance(info, dict) and info.get("status") == "blocked"
+    ]
+    if blocked_runtime_gate_phases:
+        execution_state = "blocked_runtime_drift"
+        next_actor = "senior_codex"
+        next_step = "fix_runtime_drift"
+    elif apply_decision == "blocked_paths":
+        execution_state = "blocked_guardrails"
+        next_actor = "senior_codex"
+        next_step = "narrow_patch_scope"
+    elif apply_decision == "safe_apply_candidate_with_runtime_review":
+        execution_state = "ready_for_review_then_apply"
+        next_actor = "senior_codex"
+        next_step = "review_runtime_patch_candidate"
+    elif apply_decision == "safe_apply_candidate" and summary.get("dry_run"):
+        execution_state = "ready_for_guarded_apply"
+        next_actor = "senior_codex"
+        next_step = "approve_guarded_apply"
+    elif apply_decision == "safe_apply_candidate":
+        execution_state = "ready_for_codex_local_execution"
+        next_actor = "codex_local"
+        next_step = "apply_guarded_patch"
+    elif verify_summary.get("all_green") is True:
+        execution_state = "verified_no_apply_candidate"
+        next_actor = "codex_local"
+        next_step = "prepare_followup_patch"
+    else:
+        execution_state = "needs_repair_cycle"
+        next_actor = "codex_local"
+        next_step = "run_next_cycle"
     return {
         "kind": "codex-local-execution-packet",
         "workspace": str(summary.get("workspace") or ""),
@@ -3980,6 +4017,22 @@ def build_execution_packet(
             "completed_this_run": report.get("completed_by_codex_local_in_this_run") or [],
             "pending_codex_local": report.get("pending_codex_local_work") or [],
             "requires_senior_codex": report.get("codex_senior_review_required_for") or [],
+        },
+        "decision": {
+            "execution_state": execution_state,
+            "next_actor": next_actor,
+            "next_step": next_step,
+            "blocked_runtime_gate_phases": blocked_runtime_gate_phases,
+            "ready_for_safe_apply": apply_decision in {"safe_apply_candidate", "safe_apply_candidate_with_runtime_review"},
+            "ready_for_runtime_promotion_review": bool(manifest.get("promotable_runtime_patch_file")),
+            "ready_for_deploy": bool(
+                verify_summary.get("all_green") is True
+                and deploy_gate.get("status") in {"passed", "not_run", "not_recorded"}
+            ),
+            "ready_for_e2e": bool(
+                verify_summary.get("all_green") is True
+                and e2e_gate.get("status") in {"passed", "not_run", "not_recorded"}
+            ),
         },
         "apply_path": {
             "decision": manifest.get("decision"),
@@ -4160,6 +4213,10 @@ def write_final_report(
         lines.append(f"- `{item}`")
     lines.extend(["", "## Execution Packet", ""])
     lines.append("- file: `execution-packet.json`")
+    if packet.get("decision"):
+        lines.append(f"- execution_state: `{packet['decision'].get('execution_state')}`")
+        lines.append(f"- next_actor: `{packet['decision'].get('next_actor')}`")
+        lines.append(f"- next_step: `{packet['decision'].get('next_step')}`")
     if packet.get("offload", {}).get("safe_to_codex_local"):
         lines.append("- codex-local work packet:")
         for item in packet["offload"]["safe_to_codex_local"]:
