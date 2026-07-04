@@ -398,6 +398,163 @@ def classify_failure(text: str, expected_behavior: str, failure_marker: str) -> 
     }
 
 
+SELF_IMPROVE_DIAGNOSIS_CATEGORIES = {
+    "unknown",
+    "capability_alias_or_registry_bug",
+    "false_executor_or_recursion_bug",
+    "transport_timeout_or_streaming_bug",
+    "runtime_drift",
+    "meta_capability_routing_bug",
+    "expected_behavior_regression",
+}
+
+
+def self_improve_diagnosis_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "category": {
+                "type": "string",
+                "enum": sorted(SELF_IMPROVE_DIAGNOSIS_CATEGORIES),
+            },
+            "root_cause": {"type": "string"},
+            "patch_scope": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "recovery": {"type": "string"},
+            "confidence": {"type": "string"},
+        },
+        "required": ["category", "root_cause", "patch_scope", "recovery"],
+    }
+
+
+def normalize_diagnosis_patch_scope(paths: Any, fallback_scope: list[str]) -> list[str]:
+    selected: list[str] = []
+    for item in paths or []:
+        rel = str(item or "").strip()
+        if rel and patch_path_allowed(rel) and rel not in selected:
+            selected.append(rel)
+    return selected or list(fallback_scope)
+
+
+def self_improve_diagnosis_messages(
+    transcript: dict[str, Any],
+    fallback: dict[str, Any],
+    args: argparse.Namespace,
+) -> list[dict[str, str]]:
+    transcript_excerpt = transcript_text(transcript)
+    if len(transcript_excerpt) > 12000:
+        transcript_excerpt = transcript_excerpt[-12000:]
+    prompt = args.prompt or last_user_prompt(transcript) or ""
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the diagnosis mode for codex-local agent_self_improve. "
+                "Return JSON only. Do not explain. "
+                "Infer the most likely failure category, smallest correct patch scope, and bounded recovery. "
+                "Do not widen scope beyond allowed ai-stack runtime/docs/test paths. "
+                "Do not propose prompt-specific keyword routing patches."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Latest user prompt:\n{prompt}\n\n"
+                f"Expected behavior: {args.expected_behavior or fallback.get('expected_behavior')}\n"
+                f"Failure marker: {args.failure_marker}\n"
+                f"Observed markers: {json.dumps(extract_markers(transcript_excerpt), ensure_ascii=False)}\n"
+                f"Fallback diagnosis:\n{json.dumps(fallback, ensure_ascii=False)}\n\n"
+                f"Transcript excerpt:\n{transcript_excerpt}"
+            ),
+        },
+    ]
+
+
+def merge_reasoning_diagnosis(candidate: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(fallback)
+    normalized = candidate if isinstance(candidate, dict) else {}
+    category = str(normalized.get("category") or "").strip()
+    if category in SELF_IMPROVE_DIAGNOSIS_CATEGORIES:
+        merged["category"] = category
+    root_cause = str(normalized.get("root_cause") or "").strip()
+    if root_cause:
+        merged["root_cause"] = root_cause
+    recovery = str(normalized.get("recovery") or "").strip()
+    if recovery:
+        merged["recovery"] = recovery
+    merged["patch_scope"] = normalize_diagnosis_patch_scope(
+        normalized.get("patch_scope"),
+        list(fallback.get("patch_scope") or []),
+    )
+    confidence = str(normalized.get("confidence") or "").strip()
+    if confidence:
+        merged["confidence"] = confidence
+    return merged
+
+
+def llm_reasoning_diagnosis(transcript: dict[str, Any], args: argparse.Namespace, fallback: dict[str, Any]) -> dict[str, Any]:
+    helpers = gateway_reasoning_helpers()
+    if not helpers.get("ok"):
+        return {
+            "ok": False,
+            "planner": "llm_diagnosis_runtime",
+            "error": helpers.get("error") or "gateway_reasoning_helpers_unavailable",
+        }
+    prompt = args.prompt or last_user_prompt(transcript) or ""
+    messages = self_improve_diagnosis_messages(transcript, fallback, args)
+    model_id = helpers["codex_local_runtime_model_name"](task=prompt, role=helpers["ROLE_PLANNER"])
+    try:
+        parsed, raw, _meta = helpers["structured_json_chat"](
+            model_id,
+            messages,
+            "agent_self_improve_diagnosis",
+            self_improve_diagnosis_schema(),
+            timeout=min(args.command_timeout, 60),
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "planner": "llm_diagnosis_runtime",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "ok": True,
+        "planner": "llm_diagnosis_runtime",
+        "raw": raw,
+        "diagnosis": merge_reasoning_diagnosis(parsed, fallback),
+    }
+
+
+def build_diagnosis(args: argparse.Namespace, transcript: dict[str, Any]) -> dict[str, Any]:
+    text = transcript_text(transcript)
+    if args.prompt:
+        text = text + "\n\nuser: " + args.prompt
+    fallback = classify_failure(text, args.expected_behavior, args.failure_marker)
+    source = "deterministic_fallback"
+    llm_raw = ""
+    llm_error = ""
+    diagnosis = dict(fallback)
+    use_llm_diagnosis = not env_truthy("AGENT_SELF_IMPROVE_SMOKE_RUNNING") and not env_truthy("AGENT_SELF_IMPROVE_DISABLE_LLM_DIAGNOSIS")
+    if use_llm_diagnosis:
+        llm_result = llm_reasoning_diagnosis(transcript, args, fallback)
+        if llm_result.get("ok"):
+            diagnosis = llm_result.get("diagnosis") or fallback
+            source = str(llm_result.get("planner") or "llm_diagnosis_runtime")
+            llm_raw = str(llm_result.get("raw") or "")
+        else:
+            source = "structured_diagnosis_runtime_fallback"
+            llm_error = str(llm_result.get("error") or "")
+    diagnosis["source"] = source
+    if llm_raw:
+        diagnosis["llm_raw"] = llm_raw
+    if llm_error:
+        diagnosis["llm_error"] = llm_error
+    return diagnosis
+
+
 def infer_regression(transcript: dict[str, Any], diagnosis: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     prompt = args.prompt or last_user_prompt(transcript)
     text = transcript_text(transcript)
@@ -3164,6 +3321,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
     evidence_status = acceptance_evidence_status(summary, proposal_result, generated_diff_result)
     readiness = capability_patch_readiness(summary, proposal_result, generated_diff_result, evidence_status)
     report = {
+        "diagnosis_source": summary.get("diagnosis_source") or "",
         "safe_to_offload_to_codex_local": codex_local_offload,
         "completed_by_codex_local_in_this_run": completed_offload,
         "pending_codex_local_work": pending_offload,
@@ -3332,6 +3490,7 @@ def write_final_report(
         f"- mode: `{summary.get('mode')}`",
         f"- dry_run: `{summary.get('dry_run')}`",
         f"- diagnosis_category: `{summary.get('diagnosis_category')}`",
+        f"- diagnosis_source: `{report.get('diagnosis_source') or '-'}`",
         f"- root_cause: `{summary.get('root_cause')}`",
         f"- cycles_completed: `{summary.get('cycles_completed')}` / `{summary.get('cycles_requested')}`",
         f"- target_capability_name: `{report.get('target_capability_name') or '-'}'",
@@ -3657,7 +3816,7 @@ def main() -> int:
     if args.prompt:
         text = text + "\n\nuser: " + args.prompt
     markers = extract_markers(text)
-    diagnosis = classify_failure(text, args.expected_behavior, args.failure_marker)
+    diagnosis = build_diagnosis(args, transcript)
     diagnosis.update(
         {
             "workspace": args.workspace,
@@ -3827,6 +3986,7 @@ def main() -> int:
         "cycles_completed": len(cycle_results),
         "cycles": cycle_results,
         "diagnosis_category": diagnosis.get("category"),
+        "diagnosis_source": diagnosis.get("source") or "",
         "root_cause": diagnosis.get("root_cause"),
         "patch_scope": diagnosis.get("patch_scope"),
         "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],

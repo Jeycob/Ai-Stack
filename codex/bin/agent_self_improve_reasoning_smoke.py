@@ -135,6 +135,101 @@ def run_llm_reasoning_uses_gateway_normalizer() -> None:
     with_gateway_helpers(helpers, run)
 
 
+def run_llm_diagnosis_uses_runtime_output() -> None:
+    transcript = {
+        "id": "chat-diagnosis",
+        "messages": [
+            {"role": "user", "content": "repo: Test2\nkde ted jsi?"},
+            {"role": "assistant", "content": "WORKSPACE_RUN_FAILED timeout recurse"},
+        ],
+    }
+    args = make_args(prompt="repo: Test2\nkde ted jsi?")
+
+    def fake_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
+        return (
+            {
+                "category": "meta_capability_routing_bug",
+                "root_cause": "Meta intent fell through to executor recursion instead of deterministic workspace context capability.",
+                "patch_scope": [
+                    "codex/gateway/gateway.py",
+                    "codex/bin/gateway_recovery_smoke.py",
+                    ".env",
+                ],
+                "recovery": "Route the request through workspace_context_status and keep workspace run out of the loop.",
+                "confidence": "high",
+            },
+            '{"category":"meta_capability_routing_bug"}',
+            {},
+        )
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": fake_structured_json_chat,
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "workspace_context_status",
+        "extract_unified_diff": lambda text: text,
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        result = asi.build_diagnosis(args, transcript)
+        if result.get("source") != "llm_diagnosis_runtime":
+            raise SystemExit(f"expected llm diagnosis source, got {result!r}")
+        if result.get("category") != "meta_capability_routing_bug":
+            raise SystemExit(f"expected llm diagnosis category, got {result!r}")
+        if result.get("patch_scope") != [
+            "codex/gateway/gateway.py",
+            "codex/bin/gateway_recovery_smoke.py",
+        ]:
+            raise SystemExit(f"expected patch scope filtering to drop blocked paths, got {result!r}")
+        if not result.get("llm_raw"):
+            raise SystemExit(f"expected llm raw diagnosis artifact, got {result!r}")
+        print("AGENT_SELF_IMPROVE_LLM_DIAGNOSIS_OK")
+
+    with_gateway_helpers(helpers, run)
+
+
+def run_llm_diagnosis_falls_back_cleanly() -> None:
+    transcript = {
+        "id": "chat-diagnosis-fallback",
+        "messages": [
+            {"role": "user", "content": "repo: Test2\nvytvor tam ssh klic a vypis mi public"},
+            {"role": "assistant", "content": "unsupported capability workspace_ssh_key_create"},
+        ],
+    }
+    args = make_args(prompt="repo: Test2\nvytvor tam ssh klic a vypis mi public")
+
+    def failing_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
+        raise RuntimeError("diagnosis backend unavailable")
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": failing_structured_json_chat,
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "ssh_key_show_public",
+        "extract_unified_diff": lambda text: text,
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        result = asi.build_diagnosis(args, transcript)
+        if result.get("source") != "structured_diagnosis_runtime_fallback":
+            raise SystemExit(f"expected diagnosis fallback marker, got {result!r}")
+        if result.get("category") != "capability_alias_or_registry_bug":
+            raise SystemExit(f"expected deterministic diagnosis fallback category, got {result!r}")
+        if "diagnosis backend unavailable" not in str(result.get("llm_error") or ""):
+            raise SystemExit(f"expected diagnosis fallback error detail, got {result!r}")
+        print("AGENT_SELF_IMPROVE_LLM_DIAGNOSIS_FALLBACK_OK")
+
+    with_gateway_helpers(helpers, run)
+
+
 def run_llm_reasoning_falls_back_cleanly() -> None:
     transcript = {
         "id": "chat-test",
@@ -285,6 +380,8 @@ def run_llm_diff_generation_uses_runtime_draft() -> None:
 
 
 def main() -> int:
+    run_llm_diagnosis_uses_runtime_output()
+    run_llm_diagnosis_falls_back_cleanly()
     run_llm_reasoning_uses_gateway_normalizer()
     run_llm_reasoning_falls_back_cleanly()
     run_llm_diff_generation_uses_runtime_draft()
