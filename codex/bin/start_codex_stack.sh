@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-AI_USER="${AI_USER:-sklenik}"
-REPO_ROOT="/mnt/c/Repositories/ai-stack"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+DEFAULT_REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="${AI_STACK_REPO_ROOT:-${REPO_ROOT:-$DEFAULT_REPO_ROOT}}"
 CODEX_ROOT="$REPO_ROOT/codex"
 WORKSPACES_FILE="$CODEX_ROOT/workspaces.json"
 CONFIG_FILE="$CODEX_ROOT/opencode-default.json"
@@ -12,6 +14,72 @@ AUDIT_ROOT="$CODEX_ROOT/audit"
 PASS_FILE="$STATE_ROOT/opencode-smoke.pass"
 ADMIN_TOKEN_FILE="$STATE_ROOT/codex-gateway-admin.token"
 IMAGE="ghcr.io/anomalyco/opencode"
+
+resolve_ai_user() {
+  local requested="${AI_USER:-}"
+  local repo_owner=""
+  local current_user=""
+  if repo_owner="$(stat -c '%U' "$REPO_ROOT" 2>/dev/null)"; then
+    :
+  else
+    repo_owner=""
+  fi
+  current_user="$(id -un 2>/dev/null || true)"
+
+  local candidates=(
+    "$requested"
+    "${SUDO_USER:-}"
+    "${USER:-}"
+    "$repo_owner"
+    "$current_user"
+  )
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    candidate="${candidate:-}"
+    [ -n "$candidate" ] || continue
+    [ "$candidate" = "UNKNOWN" ] && continue
+    if id -u "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+AI_USER="${AI_USER:-}"
+if ! AI_USER="$(resolve_ai_user)"; then
+  echo "CODEX_STACK_USER_RESOLUTION_FAILED" >&2
+  echo "repo_root=$REPO_ROOT" >&2
+  echo "requested_ai_user=${AI_USER:-}" >&2
+  echo "sudo_user=${SUDO_USER:-}" >&2
+  echo "current_user=$(id -un 2>/dev/null || true)" >&2
+  exit 2
+fi
+
+if [ "${1:-}" = "--print-config" ]; then
+  python3 - <<PY
+import json
+print(json.dumps({
+    "script_path": ${SCRIPT_PATH@Q},
+    "repo_root": ${REPO_ROOT@Q},
+    "code_root": ${CODEX_ROOT@Q},
+    "workspace_file": ${WORKSPACES_FILE@Q},
+    "state_root": ${STATE_ROOT@Q},
+    "audit_root": ${AUDIT_ROOT@Q},
+    "ai_user": ${AI_USER@Q},
+}, ensure_ascii=False, indent=2))
+PY
+  exit 0
+fi
+
+launch_gateway() {
+  local command="PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
+  if [ "$AI_USER" = "root" ] || [ "$(id -u)" -ne 0 ]; then
+    bash -lc "$command"
+  else
+    runuser -u "$AI_USER" -- bash -lc "$command"
+  fi
+}
 
 gateway_diag() {
   echo "GATEWAY_START_FAILED" >&2
@@ -294,7 +362,7 @@ fi
 pkill -f "$GATEWAY" >/dev/null 2>&1 || true
 kill_gateway_port_owner
 
-runuser -u "$AI_USER" -- bash -lc "PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
+launch_gateway
 
 gateway_pid="$(cat "$STATE_ROOT/codex-gateway.pid" 2>/dev/null || true)"
 for i in {1..30}; do
