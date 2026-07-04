@@ -195,7 +195,8 @@ def http_request(
 
 
 def is_codex_local_model(model: str) -> bool:
-    return str(model or "").startswith("codex-local-")
+    model_id = str(model or "").strip()
+    return model_id == "codex-local" or model_id.startswith("codex-local-")
 
 
 def default_gateway_base_url(base_url: str) -> str:
