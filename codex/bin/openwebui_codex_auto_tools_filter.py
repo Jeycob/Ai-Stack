@@ -1,8 +1,8 @@
 """
 title: Codex Auto Tools Filter
 author: OpenAI Codex
-version: 0.1.9
-description: Dynamically attaches Codex toolsets and routes broader codex-local natural-language admin intents with wider autonomous capability mapping.
+version: 0.1.10
+description: Dynamically attaches Codex toolsets and delegates codex-local prompts to the gateway TaskSpec agent loop.
 """
 
 import re
@@ -88,9 +88,13 @@ class Filter:
             default="/data/repositories/ai-stack,/app/backend/data/repositories/ai-stack,/Repositories/ai-stack,/mnt/c/Repositories/ai-stack",
             description="Comma-separated fallback ai-stack paths.",
         )
+        enable_codex_local_agent_loop_bridge: bool = Field(
+            default=True,
+            description="Wrap codex-local prompts in GATEWAY_ADMIN_AGENT_LOOP; intent reasoning stays in the gateway TaskSpec planner.",
+        )
         enable_codex_local_intent_router: bool = Field(
             default=True,
-            description="Translate narrow natural-language codex-local ai-stack admin intents into explicit gateway admin commands.",
+            description="Deprecated alias for enable_codex_local_agent_loop_bridge.",
         )
         pass
 
@@ -109,7 +113,11 @@ class Filter:
         if not model:
             return body
 
-        if self.valves.enable_codex_local_intent_router and str(model).startswith("codex-local"):
+        bridge_enabled = (
+            self.valves.enable_codex_local_agent_loop_bridge
+            and self.valves.enable_codex_local_intent_router
+        )
+        if bridge_enabled and str(model).startswith("codex-local"):
             routed = self._route_codex_local_admin_intent(body)
             if routed:
                 return routed

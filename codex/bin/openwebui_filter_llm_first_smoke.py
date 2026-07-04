@@ -10,6 +10,7 @@ task.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
 import tempfile
 from pathlib import Path
@@ -110,6 +111,39 @@ def assert_codex_local_always_delegates_to_agent_loop() -> None:
     print("CODEX_LOCAL_FILTER_AGENT_LOOP_ONLY_OK")
 
 
+def assert_live_codex_local_path_has_no_keyword_router_calls() -> None:
+    with tempfile.TemporaryDirectory(prefix="owui-filter-llm-first-") as raw_tmp:
+        workspaces = build_workspaces(Path(raw_tmp))
+        module = load_filter_module(workspaces)
+        filter_cls = module.Filter
+        live_sources = {
+            "inlet": inspect.getsource(filter_cls.inlet),
+            "_route_codex_local_admin_intent": inspect.getsource(filter_cls._route_codex_local_admin_intent),
+            "_agent_loop_task_text": inspect.getsource(filter_cls._agent_loop_task_text),
+        }
+
+    joined = "\n".join(live_sources.values())
+    forbidden_fragments = (
+        "_natural_",
+        "GATEWAY_ADMIN_CREATE_LOCAL_REPO",
+        "GATEWAY_ADMIN_SSH_KEYGEN",
+        "GATEWAY_ADMIN_WEB_ANSWER",
+        "GATEWAY_ADMIN_DEPLOY_STACK",
+        "GATEWAY_ADMIN_GIT_PUSH",
+        "GATEWAY_ADMIN_WORKSPACE_ACTION",
+        "GATEWAY_ADMIN_WORKSPACE_AUTOPILOT",
+    )
+    found = [fragment for fragment in forbidden_fragments if fragment in joined]
+    if found:
+        fail(
+            "live codex-local filter path contains pre-TaskSpec routing fragments "
+            f"{found!r}; keep natural language reasoning inside gateway TaskSpec planner"
+        )
+    if "GATEWAY_ADMIN_AGENT_LOOP" not in joined:
+        fail("live codex-local filter path no longer delegates to GATEWAY_ADMIN_AGENT_LOOP")
+    print("LIVE_CODEX_LOCAL_FILTER_PATH_SOURCE_OK")
+
+
 def assert_non_codex_not_forced_by_keywords() -> None:
     with tempfile.TemporaryDirectory(prefix="owui-filter-llm-first-") as raw_tmp:
         workspaces = build_workspaces(Path(raw_tmp))
@@ -124,6 +158,7 @@ def assert_non_codex_not_forced_by_keywords() -> None:
 
 def main() -> int:
     assert_codex_local_always_delegates_to_agent_loop()
+    assert_live_codex_local_path_has_no_keyword_router_calls()
     assert_non_codex_not_forced_by_keywords()
     print("OPENWEBUI_FILTER_LLM_FIRST_SMOKE_OK")
     return 0
