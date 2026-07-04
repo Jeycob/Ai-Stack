@@ -136,6 +136,8 @@ def run_proposal_mode() -> None:
             raise SystemExit(f"expected self-improve smoke contract file in generated diff, got {generated!r}")
         if "docs/self-improve-cases/ssh_public_key_alias_test2.patch.md" not in paths:
             raise SystemExit(f"expected self-improve patch fragment file in generated diff, got {generated!r}")
+        if "docs/self-improve-cases/ssh_public_key_alias_test2.runtime.patch.diff" not in paths:
+            raise SystemExit(f"expected self-improve runtime patch candidate in generated diff, got {generated!r}")
         if "codex/bin/self_improve_cases/ssh_public_key_alias_test2_smoke.py" not in paths:
             raise SystemExit(f"expected self-improve smoke scaffold in generated diff, got {generated!r}")
         patch_file = Path(generated["patch_file"])
@@ -144,6 +146,7 @@ def run_proposal_mode() -> None:
             '"kind": "codex-local-self-improve-case"',
             '"kind": "codex-local-self-improve-case-smoke"',
             "codex-local-self-improve-patch-fragment",
+            "codex-local-self-improve-runtime-patch-candidate",
             "SELF_IMPROVE_CASE_SMOKE_SCAFFOLD",
         ):
             if marker not in patch_text:
@@ -202,6 +205,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected capability gateway integration draft file in generated diff:\n{patch_text}")
         if "docs/capability-drafts/workspace_profile.gateway.patch.md" not in patch_text:
             raise SystemExit(f"expected capability gateway patch fragment file in generated diff:\n{patch_text}")
+        if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in patch_text:
+            raise SystemExit(f"expected capability runtime patch candidate file in generated diff:\n{patch_text}")
         if "docs/capability-drafts/workspace_profile.wiring.json" not in patch_text:
             raise SystemExit(f"expected capability wiring blueprint file in generated diff:\n{patch_text}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in patch_text:
@@ -224,6 +229,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected gateway integration draft metadata in generated diff:\n{patch_text}")
         if "codex-local-capability-gateway-patch-fragment" not in patch_text:
             raise SystemExit(f"expected gateway patch fragment metadata in generated diff:\n{patch_text}")
+        if "codex-local-capability-runtime-patch-candidate" not in patch_text:
+            raise SystemExit(f"expected runtime patch candidate metadata in generated diff:\n{patch_text}")
         if "@@ AGENT_CAPABILITY_TO_WORKFLOW @@" not in patch_text:
             raise SystemExit(f"expected gateway workflow patch fragment in generated diff:\n{patch_text}")
         if '"integration_order": [' not in patch_text:
@@ -269,6 +276,8 @@ def run_generate_unified_diff_mode() -> None:
             raise SystemExit(f"expected capability gateway integration draft path in generated diff, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.gateway.patch.md" not in paths:
             raise SystemExit(f"expected capability gateway patch fragment path in generated diff, got {generated!r}")
+        if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in paths:
+            raise SystemExit(f"expected capability runtime patch candidate path in generated diff, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.wiring.json" not in paths:
             raise SystemExit(f"expected capability wiring blueprint path in generated diff, got {generated!r}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in paths:

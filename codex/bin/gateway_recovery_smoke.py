@@ -932,6 +932,7 @@ def assert_capability_draft_contracts() -> None:
         markers = contract.get("verifier_expectations", {}).get("required_markers") or {}
         gateway_integration_path = ROOT / f"docs/capability-drafts/{capability}.gateway-integration.json"
         gateway_patch_fragment_path = ROOT / f"docs/capability-drafts/{capability}.gateway.patch.md"
+        gateway_runtime_patch_candidate_path = ROOT / f"docs/capability-drafts/{capability}.runtime.patch.diff"
         wiring_path = ROOT / f"docs/capability-drafts/{capability}.wiring.json"
         executor_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_executor_stub.py"
         runtime_hook_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py"
@@ -956,6 +957,18 @@ def assert_capability_draft_contracts() -> None:
             ):
                 if required not in patch_fragment_text:
                     raise SystemExit(f"gateway patch fragment missing {required!r} for {capability}: {gateway_patch_fragment_path}")
+        if gateway_runtime_patch_candidate_path.is_file():
+            runtime_patch_candidate_text = gateway_runtime_patch_candidate_path.read_text(encoding="utf-8")
+            if str(markers.get("runtime_patch_candidate_marker") or "").strip() not in runtime_patch_candidate_text:
+                raise SystemExit(f"runtime patch candidate marker mismatch for {capability}: {gateway_runtime_patch_candidate_path}")
+            for required in (
+                "diff --git a/codex/gateway/gateway.py b/codex/gateway/gateway.py",
+                "@@ AGENT_CAPABILITY_TO_WORKFLOW @@",
+                "@@ CANONICAL_AGENT_CAPABILITY_ALIASES @@",
+                "@@ agent_capability_registry @@",
+            ):
+                if required not in runtime_patch_candidate_text:
+                    raise SystemExit(f"runtime patch candidate missing {required!r} for {capability}: {gateway_runtime_patch_candidate_path}")
         if wiring_path.is_file():
             wiring = json.loads(wiring_path.read_text(encoding="utf-8"))
             if str(wiring.get("kind") or "") != str(markers.get("wiring_kind") or ""):

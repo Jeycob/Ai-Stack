@@ -779,6 +779,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
                 f"docs/capability-drafts/{capability}.json",
                 f"docs/capability-drafts/{capability}.gateway-integration.json",
                 f"docs/capability-drafts/{capability}.gateway.patch.md",
+                f"docs/capability-drafts/{capability}.runtime.patch.diff",
                 f"docs/capability-drafts/{capability}.wiring.json",
                 f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
@@ -788,6 +789,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
             "required_markers": {
                 "gateway_integration_kind": "codex-local-capability-gateway-integration-draft",
                 "gateway_patch_fragment_marker": "codex-local-capability-gateway-patch-fragment",
+                "runtime_patch_candidate_marker": "codex-local-capability-runtime-patch-candidate",
                 "wiring_kind": "codex-local-capability-wiring-blueprint",
                 "runtime_hook_marker": "CAPABILITY_RUNTIME_HOOK_STUB",
                 "executor_capability_constant": capability,
@@ -1024,6 +1026,41 @@ def capability_gateway_patch_fragment_file(capability: str, feature_request: str
     return rel, unified_diff_for_file(rel, before, after)
 
 
+def capability_runtime_patch_candidate_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.runtime.patch.diff"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    planned_workflow = "self_improve" if capability.startswith("agent_") else shape["workflow"]
+    alias_lines = "\n".join(f'+    "{alias}": "{capability}",' for alias in shape["aliases"])
+    after = (
+        "### codex-local-capability-runtime-patch-candidate\n"
+        "diff --git a/codex/gateway/gateway.py b/codex/gateway/gateway.py\n"
+        "--- a/codex/gateway/gateway.py\n"
+        "+++ b/codex/gateway/gateway.py\n"
+        "@@ AGENT_CAPABILITY_TO_WORKFLOW @@\n"
+        f'+    "{capability}": "{planned_workflow}",\n'
+        "@@ CANONICAL_AGENT_CAPABILITY_ALIASES @@\n"
+        f"{alias_lines}\n"
+        "@@ agent_capability_registry @@\n"
+        f'+    "{capability}": {{\n'
+        f'+        "workflow": "{planned_workflow}",\n'
+        f'+        "scope": "{shape["scope"]}",\n'
+        '+        "implemented": False,\n'
+        '+        "draft": True,\n'
+        f'+        "executor": "{shape["executor"]}",\n'
+        f'+        "summary": "{shape["summary"]}",\n'
+        "+    },\n"
+        "@@ agent_taskspec_to_plan @@\n"
+        f'+    # target_capability_name={capability}\n'
+        f'+    # desired_end_state={task_spec.get("desired_end_state") or ""}\n'
+        "@@ executor_or_admin_handler @@\n"
+        f'+    # runtime_patch_candidate for {capability} using {shape["executor"]}\n'
+    )
+    return rel, unified_diff_for_file(rel, before, after)
+
+
 def capability_executor_stub_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
     rel = f"codex/bin/capability_drafts/{capability}_executor_stub.py"
     path = ROOT / rel
@@ -1225,11 +1262,13 @@ def failure_regression_smoke_contract_file(
         "required_paths": [
             f"docs/self-improve-cases/{regression_slug}.json",
             f"docs/self-improve-cases/{regression_slug}.patch.md",
+            f"docs/self-improve-cases/{regression_slug}.runtime.patch.diff",
             f"codex/bin/self_improve_cases/{regression_slug}_smoke.py",
         ],
         "required_markers": {
             "case_kind": "codex-local-self-improve-case",
             "patch_fragment_kind": "codex-local-self-improve-patch-fragment",
+            "runtime_patch_candidate_marker": "codex-local-self-improve-runtime-patch-candidate",
             "smoke_stub_marker": "SELF_IMPROVE_CASE_SMOKE_SCAFFOLD",
         },
         "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
@@ -1278,6 +1317,36 @@ def failure_regression_patch_fragment_file(
         f"+# root_cause: {diagnosis.get('root_cause') or ''}\n"
         f"+# recovery: {diagnosis.get('recovery') or ''}\n"
         "```\n"
+    )
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def failure_regression_runtime_patch_candidate_file(
+    regression_slug: str,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> tuple[str, str]:
+    rel = f"docs/self-improve-cases/{regression_slug}.runtime.patch.diff"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    first_case = next((case for case in (regression.get("cases") or []) if isinstance(case, dict)), {})
+    after = (
+        "### codex-local-self-improve-runtime-patch-candidate\n"
+        "diff --git a/codex/gateway/gateway.py b/codex/gateway/gateway.py\n"
+        "--- a/codex/gateway/gateway.py\n"
+        "+++ b/codex/gateway/gateway.py\n"
+        "@@ planner or capability canonicalization layer @@\n"
+        f'+    # case={regression_slug}\n'
+        f'+    # expected_workflow={first_case.get("expected_workflow") or ""}\n'
+        f'+    # expected_capability={first_case.get("expected_capability") or ""}\n'
+        "@@ failure recovery output @@\n"
+        f'+    # root_cause={diagnosis.get("root_cause") or ""}\n'
+        f'+    # recovery={diagnosis.get("recovery") or ""}\n'
+        "@@ regression binding @@\n"
+        f'+    # desired_end_state={task_spec.get("desired_end_state") or ""}\n'
+        "+    # keep user intent stable; do not widen into unrelated fallback\n"
     )
     return rel, unified_diff_for_file(rel, before, after)
 
@@ -1380,6 +1449,7 @@ def generate_unified_diff(
                 capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_gateway_integration_file(capability, feature_request, reasoning),
                 capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
+                capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
                 capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_stub_file(capability, feature_request, reasoning),
                 capability_runtime_hook_stub_file(capability, feature_request, reasoning),
@@ -1394,6 +1464,7 @@ def generate_unified_diff(
                 failure_regression_case_file(regression_slug, diagnosis, regression, reasoning),
                 failure_regression_smoke_contract_file(regression_slug, diagnosis, regression, reasoning),
                 failure_regression_patch_fragment_file(regression_slug, diagnosis, regression, reasoning),
+                failure_regression_runtime_patch_candidate_file(regression_slug, diagnosis, regression, reasoning),
                 failure_regression_smoke_stub_file(regression_slug, diagnosis, regression, reasoning),
             ):
                 if diff:
