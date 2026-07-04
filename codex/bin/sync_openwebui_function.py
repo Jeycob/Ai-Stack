@@ -63,6 +63,10 @@ def openwebui_api_key(args: argparse.Namespace) -> str:
     )
 
 
+def opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def request_json(args: argparse.Namespace, method: str, path: str, body: dict | None = None) -> dict:
     token = openwebui_api_key(args)
     url = f"{args.base_url.rstrip('/')}/{path.lstrip('/')}"
@@ -76,7 +80,7 @@ def request_json(args: argparse.Namespace, method: str, path: str, body: dict | 
     for attempt in range(1, args.attempts + 1):
         req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
         try:
-            with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+            with opener().open(req, timeout=args.timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 return json.loads(raw or "{}")
         except urllib.error.HTTPError as exc:

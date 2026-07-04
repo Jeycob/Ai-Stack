@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TURN_PATH = ROOT / "codex/bin/owui_chat_turn.py"
+SYNC_PATH = ROOT / "codex/bin/sync_openwebui_function.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,6 +31,13 @@ def load_turn_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def assert_sync_helper_disables_proxy() -> None:
+    text = SYNC_PATH.read_text(encoding="utf-8")
+    if "ProxyHandler({})" not in text or ".open(req, timeout=args.timeout)" not in text:
+        raise SystemExit("OWUI_SYNC_PROXY_GUARD_FAILED\nreason=sync helper must use an explicit no-proxy opener")
+    print("OWUI_SYNC_PROXY_GUARD_OK")
 
 
 class SmokeArgs:
@@ -428,6 +436,7 @@ def assert_deploy_status_allowed_during_foreign_clone_drift(turn) -> None:
 
 def main() -> int:
     _args = parse_args()
+    assert_sync_helper_disables_proxy()
     turn = load_turn_module()
     assert_token_missing_short_circuits(turn)
     turn = load_turn_module()
