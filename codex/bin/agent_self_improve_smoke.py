@@ -78,6 +78,81 @@ def run_case(name: str, prompt: str, expected_case: str) -> None:
         print(f"AGENT_SELF_IMPROVE_CASE_OK name={name} case={expected_case}")
 
 
+def run_transcript_schema_variants() -> None:
+    with tempfile.TemporaryDirectory(prefix="asi-transcript-schema-") as tmp:
+        tmp_path = Path(tmp)
+        transcript = {
+            "chat": {
+                "id": "chat-output-schema",
+                "history": {
+                    "messages": {
+                        "u1": {"role": "user", "content": "repo: Test2\nvytvor tam ssh klic", "created": 1},
+                        "a1": {
+                            "role": "assistant",
+                            "content": "",
+                            "created": 2,
+                            "output": [
+                                {
+                                    "content": [
+                                        {
+                                            "type": "output_text",
+                                            "text": "NEEDS_ATTENTION: TaskSpec requested unsupported capability workspace_ssh_key_create",
+                                        }
+                                    ]
+                                }
+                            ],
+                        },
+                    }
+                },
+            }
+        }
+        transcript_file = tmp_path / "transcript-output-schema.json"
+        transcript_file.write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
+        payload = run_self_improve(
+            [
+                "--workspace",
+                "ai-stack",
+                "--transcript-file",
+                str(transcript_file),
+                "--mode",
+                "diagnose",
+                "--dry-run",
+                "--audit-root",
+                str(tmp_path / "audit"),
+            ],
+            timeout=60,
+        )
+        normalized = json.loads((Path(payload["artifact_dir"]) / "transcript.json").read_text(encoding="utf-8"))
+        assistant_text = "\n".join(
+            str(item.get("content") or "")
+            for item in normalized.get("messages") or []
+            if item.get("role") == "assistant"
+        )
+        if "workspace_ssh_key_create" not in assistant_text:
+            raise SystemExit(f"expected assistant text from output[].content[].text, got {normalized!r}")
+
+        empty_file = tmp_path / "empty-transcript.json"
+        empty_file.write_text(json.dumps({"messages": []}, ensure_ascii=False), encoding="utf-8")
+        failed = run_self_improve(
+            [
+                "--workspace",
+                "ai-stack",
+                "--transcript-file",
+                str(empty_file),
+                "--mode",
+                "diagnose",
+                "--dry-run",
+                "--audit-root",
+                str(tmp_path / "audit-empty"),
+            ],
+            timeout=60,
+            expect_ok=False,
+        )
+        if failed.get("status") != "TRANSCRIPT_EMPTY":
+            raise SystemExit(f"expected TRANSCRIPT_EMPTY failure, got {failed!r}")
+        print("AGENT_SELF_IMPROVE_TRANSCRIPT_SCHEMA_OK")
+
+
 def run_reproduce_mode() -> None:
     with tempfile.TemporaryDirectory(prefix="asi-repro-") as tmp:
         payload = run_self_improve(
@@ -737,6 +812,7 @@ def run_verify_dry_run() -> None:
 
 def main() -> int:
     os.environ.setdefault("AGENT_SELF_IMPROVE_SMOKE_RUNNING", "1")
+    run_transcript_schema_variants()
     run_case("context-status", "repo: Test2\nkde ted jsi?", "meta_workspace_status_test2")
     run_case("capability-catalog", "repo: Test2\njake mas capability?", "meta_capability_catalog_test2")
     run_case("ssh-public", "repo: Test2\nvytvor tam ssh klic a vypis mi public", "ssh_public_key_alias_test2")

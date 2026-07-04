@@ -37,6 +37,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 DEFAULT_AUDIT_ROOT = ROOT / "codex/audit/self-improve"
 DEFAULT_OPENWEBUI_BASE_URL = "http://192.168.0.48:9090"
 DEFAULT_OPENWEBUI_KEY_FILE = ROOT / "codex/state/openwebui-api.key"
@@ -215,6 +217,42 @@ def http_json(method: str, url: str, token: str, payload: dict[str, Any] | None,
         return json.loads(raw or "{}")
 
 
+def extract_openwebui_text(value: Any) -> str:
+    """Extract user/assistant text across OpenWebUI and OpenAI-ish schemas."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [extract_openwebui_text(item).strip() for item in value]
+        return "\n".join(part for part in parts if part)
+    if not isinstance(value, dict):
+        return ""
+
+    # OpenAI Responses-style assistant output:
+    # {"output": [{"content": [{"type": "output_text", "text": "..."}]}]}
+    for key in ("content", "text", "output_text", "response", "answer", "value"):
+        if key in value:
+            text = extract_openwebui_text(value.get(key)).strip()
+            if text:
+                return text
+    for key in ("message", "delta"):
+        nested = value.get(key)
+        if isinstance(nested, dict):
+            text = extract_openwebui_text(nested).strip()
+            if text:
+                return text
+    for key in ("output", "outputs", "parts"):
+        nested = value.get(key)
+        if isinstance(nested, list):
+            text = extract_openwebui_text(nested).strip()
+            if text:
+                return text
+    return ""
+
+
 def normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
     chat = payload.get("chat") if isinstance(payload.get("chat"), dict) else payload
     history = chat.get("history") if isinstance(chat.get("history"), dict) else {}
@@ -228,14 +266,29 @@ def normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             return 0
 
-    for msg_id, message in messages.items():
+    raw_messages: list[tuple[str, dict[str, Any]]] = []
+    if messages:
+        raw_messages.extend((str(msg_id), message) for msg_id, message in messages.items() if isinstance(message, dict))
+    for container in (history, chat, payload):
+        maybe_list = container.get("messages") if isinstance(container, dict) else None
+        if isinstance(maybe_list, list):
+            for idx, message in enumerate(maybe_list):
+                if isinstance(message, dict):
+                    raw_messages.append((str(message.get("id") or idx), message))
+
+    seen_ids = set()
+    for msg_id, message in raw_messages:
         if not isinstance(message, dict):
             continue
+        stable_id = str(message.get("id") or msg_id)
+        if stable_id in seen_ids:
+            continue
+        seen_ids.add(stable_id)
         ordered.append(
             {
-                "id": msg_id,
+                "id": stable_id,
                 "role": str(message.get("role") or ""),
-                "content": str(message.get("content") or ""),
+                "content": extract_openwebui_text(message),
                 "created": created(message),
                 "model": str(message.get("model") or ""),
             }
@@ -252,8 +305,6 @@ def normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def collect_transcript(args: argparse.Namespace) -> dict[str, Any]:
     if args.transcript_file:
         payload = json.loads(read_text(Path(args.transcript_file)))
-        if "messages" in payload:
-            return payload
         return normalize_chat_payload(payload)
 
     chat_id = parse_chat_id(args.chat_id or args.chat_url)
@@ -288,6 +339,10 @@ def collect_transcript(args: argparse.Namespace) -> dict[str, Any]:
     transcript = normalize_chat_payload(payload)
     transcript["chat_id"] = chat_id
     return transcript
+
+
+def transcript_source_requested(args: argparse.Namespace) -> bool:
+    return bool(args.transcript_file or args.chat_id or args.chat_url)
 
 
 def transcript_text(transcript: dict[str, Any]) -> str:
@@ -4137,7 +4192,7 @@ def write_final_report(
         f"- regression_source: `{report.get('regression_source') or '-'}`",
         f"- root_cause: `{summary.get('root_cause')}`",
         f"- cycles_completed: `{summary.get('cycles_completed')}` / `{summary.get('cycles_requested')}`",
-        f"- target_capability_name: `{report.get('target_capability_name') or '-'}'",
+        f"- target_capability_name: `{report.get('target_capability_name') or '-'}`",
         f"- patch_application_decision: `{report.get('patch_application_decision')}`",
         f"- guarded_apply_decision: `{manifest.get('decision')}`",
         f"- offload_ratio_percent: `{report.get('offload_ratio_percent')}`",
@@ -4483,6 +4538,49 @@ def main() -> int:
 
     transcript = collect_transcript(args)
     write_json(audit_dir / "transcript.json", transcript)
+    requested_transcript = transcript_source_requested(args)
+    if requested_transcript and transcript.get("degraded"):
+        failure = {
+            "ok": False,
+            "status": "TRANSCRIPT_FETCH_FAILED",
+            "artifact_dir": str(audit_dir),
+            "workspace": args.workspace,
+            "mode": args.mode,
+            "reason": transcript.get("reason") or "transcript_fetch_failed",
+            "error": transcript.get("error") or "",
+            "recovery": (
+                "Ověř OpenWebUI API key/base URL/chat_id a spusť self-improve znovu. "
+                "Bez transcriptu nesmím incident označit jako opravený."
+            ),
+        }
+        write_json(audit_dir / "summary.json", failure)
+        if args.json:
+            print(json.dumps(redact(failure), ensure_ascii=False, indent=2))
+        else:
+            print("TRANSCRIPT_FETCH_FAILED")
+            print(f"artifact_dir={audit_dir}")
+            print(f"reason={failure['reason']}")
+        return 1
+    if requested_transcript and (not transcript.get("messages") or not transcript_text(transcript).strip()):
+        failure = {
+            "ok": False,
+            "status": "TRANSCRIPT_EMPTY",
+            "artifact_dir": str(audit_dir),
+            "workspace": args.workspace,
+            "mode": args.mode,
+            "reason": "transcript_contains_no_readable_messages",
+            "recovery": (
+                "Zkontroluj schema exportu/OpenWebUI API odpovědi. Parser čeká text v content, "
+                "output[].content[].text nebo kompatibilních message polích."
+            ),
+        }
+        write_json(audit_dir / "summary.json", failure)
+        if args.json:
+            print(json.dumps(redact(failure), ensure_ascii=False, indent=2))
+        else:
+            print("TRANSCRIPT_EMPTY")
+            print(f"artifact_dir={audit_dir}")
+        return 1
 
     text = transcript_text(transcript)
     if args.prompt:

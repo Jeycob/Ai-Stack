@@ -816,7 +816,111 @@ def admin_web_answer(payload):
     return result
 
 
+def agent_direct_answer_response(task, intent_class="direct_answer"):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Answer the user's ordinary chat request directly and concisely. "
+                "Do not inspect repositories, do not mention missing workspace capabilities, and do not invent tool execution. "
+                "If the user writes Czech, answer Czech. For simple arithmetic, give the result plainly. "
+                "For creative writing, write the requested text."
+            ),
+        },
+        {"role": "user", "content": str(task or "").strip()},
+    ]
+    response = ollama_chat(codex_local_runtime_model_name(task=task, role=ROLE_DIRECT), messages, timeout=120)
+    answer = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    return {
+        "ok": bool(answer),
+        "action": intent_class or "direct_answer",
+        "answer": answer or "Model nevrátil přímou odpověď.",
+        "usage": response.get("usage", {}),
+    }
+
+
+def parse_search_results_from_html(source, limit=5):
+    results = []
+    for match in re.finditer(r'(?is)<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', source or ""):
+        href = html.unescape(match.group(1)).strip()
+        title = re.sub(r"(?s)<[^>]+>", " ", match.group(2))
+        title = re.sub(r"\s+", " ", html.unescape(title)).strip()
+        if not href or not title:
+            continue
+        if href.startswith("//"):
+            href = "https:" + href
+        if href.startswith("/l/?kh=") or "uddg=" in href:
+            parsed = urllib.parse.urlparse(href)
+            params = urllib.parse.parse_qs(parsed.query)
+            if params.get("uddg"):
+                href = params["uddg"][0]
+        if not href.startswith(("http://", "https://")):
+            continue
+        try:
+            assert_public_web_url(href)
+        except Exception:
+            continue
+        if any(item["url"] == href for item in results):
+            continue
+        results.append({"title": title[:180], "url": href})
+        if len(results) >= limit:
+            break
+    return results
+
+
+def admin_public_web_search(payload):
+    query = str(payload.get("query") or payload.get("question") or "").strip()
+    if not query or len(query) > 300:
+        raise ValueError("PUBLIC_WEB_SEARCH_QUERY_REQUIRED")
+    search_url = "https://duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
+    try:
+        fetch = admin_web_fetch({"url": search_url, "max_bytes": 400_000, "text_limit": 30_000, "timeout": 20})
+    except Exception as exc:
+        return {
+            "ok": False,
+            "action": "public_web_search",
+            "query": query,
+            "search_url": search_url,
+            "error": f"{type(exc).__name__}: {exc}",
+            "recovery": "Zkontroluj outbound HTTP z gateway runtime nebo nastav alternativní veřejný search provider.",
+        }
+    raw_html = ""
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirectHandler)
+        req = urllib.request.Request(
+            search_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; CodexLocalGateway/1.0)",
+                "Accept": "text/html,*/*;q=0.5",
+            },
+        )
+        with opener.open(req, timeout=20) as resp:
+            raw_html = resp.read(400_000).decode("utf-8", "replace")
+    except Exception:
+        raw_html = ""
+    results = parse_search_results_from_html(raw_html, limit=5)
+    if not results:
+        text = str(fetch.get("text") or "").strip()
+        if text:
+            results = [{"title": preview_text(text, 160), "url": search_url}]
+    answer = ""
+    if results:
+        bullets = "\n".join(f"- {item['title']}: {item['url']}" for item in results)
+        answer = f"Našel jsem veřejné výsledky pro `{query}`:\n{bullets}"
+    else:
+        answer = f"Veřejné vyhledání pro `{query}` nevrátilo parsovatelné výsledky."
+    return {
+        "ok": bool(results),
+        "action": "public_web_search",
+        "query": query,
+        "search_url": search_url,
+        "results": results,
+        "answer": answer,
+    }
+
+
 AGENT_LOOP_WORKFLOWS = {
+    "direct_answer",
     "meta",
     "workspace_search",
     "review",
@@ -830,12 +934,15 @@ AGENT_LOOP_WORKFLOWS = {
     "ssh_key_show_public",
     "web_answer",
     "web_fetch",
+    "web_search",
     "self_improve",
     "deploy",
     "clarify",
 }
 AGENT_LOOP_ACTIONS = {"install", "verify", "smoke", "test", "build", "lint"}
 AGENT_CAPABILITY_TO_WORKFLOW = {
+    "direct_answer": "direct_answer",
+    "creative_answer": "direct_answer",
     "workspace_context_set": "meta",
     "workspace_context_status": "meta",
     "capability_catalog_show": "meta",
@@ -854,6 +961,7 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "ssh_key_create": "ssh_key_create",
     "ssh_key_show_public": "ssh_key_show_public",
     "public_web_access": "web_answer",
+    "public_web_search": "web_search",
     "web_answer": "web_answer",
     "web_fetch": "web_fetch",
     "agent_self_improve": "self_improve",
@@ -862,10 +970,25 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "self_improve": "self_improve",
     "stack_deploy": "deploy",
     "deploy": "deploy",
+    "workspace_action_chain": "autopilot",
+    "workspace_expose_preview": "autopilot",
+    "await_user_confirmation": "clarify",
     "clarify_or_infer_capability": "clarify",
     "clarify": "clarify",
 }
 CORE_AGENT_CAPABILITIES = {
+    "direct_answer": {
+        "workflow": "direct_answer",
+        "summary": "Answer ordinary non-workspace questions directly without repository review or tool execution.",
+        "scope": "conversation",
+        "implemented": True,
+    },
+    "creative_answer": {
+        "workflow": "direct_answer",
+        "summary": "Generate creative prose directly without treating it as repository work.",
+        "scope": "conversation",
+        "implemented": True,
+    },
     "workspace_context_set": {
         "workflow": "meta",
         "summary": "Deterministically acknowledge or report requested workspace context.",
@@ -974,6 +1097,12 @@ CORE_AGENT_CAPABILITIES = {
         "scope": "public_web",
         "implemented": True,
     },
+    "public_web_search": {
+        "workflow": "web_search",
+        "summary": "Bounded public web search for a query when no concrete URL was provided.",
+        "scope": "public_web",
+        "implemented": True,
+    },
     "web_answer": {
         "workflow": "web_answer",
         "summary": "Alias for public web answer capability.",
@@ -1010,6 +1139,24 @@ CORE_AGENT_CAPABILITIES = {
         "scope": "stack_runtime",
         "implemented": True,
     },
+    "workspace_action_chain": {
+        "workflow": "autopilot",
+        "summary": "Plan and run a bounded install/build/test/smoke style workspace action chain.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "workspace_expose_preview": {
+        "workflow": "autopilot",
+        "summary": "Prepare a safe local app preview/expose step through the existing workspace runtime.",
+        "scope": "workspace_runtime",
+        "implemented": True,
+    },
+    "await_user_confirmation": {
+        "workflow": "clarify",
+        "summary": "Stop before push/deploy or another checkpoint and ask for explicit user confirmation.",
+        "scope": "mentoring",
+        "implemented": True,
+    },
     "stack_deploy": {
         "workflow": "deploy",
         "summary": "Audited ai-stack deploy/restart flow.",
@@ -1031,6 +1178,15 @@ CORE_AGENT_CAPABILITIES = {
 }
 
 CANONICAL_AGENT_CAPABILITY_ALIASES = {
+    "answer": "direct_answer",
+    "direct": "direct_answer",
+    "direct_answer": "direct_answer",
+    "ordinary_answer": "direct_answer",
+    "chat_answer": "direct_answer",
+    "creative": "creative_answer",
+    "creative_answer": "creative_answer",
+    "story": "creative_answer",
+    "write_story": "creative_answer",
     "analyze": "review",
     "analysis": "review",
     "audit": "review",
@@ -1096,6 +1252,11 @@ CANONICAL_AGENT_CAPABILITY_ALIASES = {
     "web_fetch": "public_web_access",
     "fetch_web": "public_web_access",
     "download_web": "public_web_access",
+    "public_web_search": "public_web_search",
+    "web_search": "public_web_search",
+    "internet_search": "public_web_search",
+    "search_web": "public_web_search",
+    "search_internet": "public_web_search",
     "agent_self_improve": "agent_self_improve",
     "agent_capability_develop": "agent_capability_develop",
     "capability_develop": "agent_capability_develop",
@@ -1136,6 +1297,15 @@ CANONICAL_AGENT_CAPABILITY_ALIASES = {
     "shell": "workspace_run",
     "workspace_autopilot": "workspace_autopilot",
     "autopilot": "workspace_autopilot",
+    "workspace_action_chain": "workspace_action_chain",
+    "action_chain": "workspace_action_chain",
+    "install_build_test": "workspace_action_chain",
+    "workspace_expose_preview": "workspace_expose_preview",
+    "expose_preview": "workspace_expose_preview",
+    "preview": "workspace_expose_preview",
+    "await_user_confirmation": "await_user_confirmation",
+    "user_confirmation": "await_user_confirmation",
+    "confirm_before_continue": "await_user_confirmation",
     "clarify": "clarify_or_infer_capability",
     "clarify_or_infer_capability": "clarify_or_infer_capability",
 }
@@ -1176,13 +1346,16 @@ def canonicalize_agent_capability(value):
     if not raw:
         return ""
     key = capability_key(raw)
+    alias = CANONICAL_AGENT_CAPABILITY_ALIASES.get(key) or load_dynamic_capability_aliases().get(key)
+    if alias:
+        return alias
     if key.startswith("workspace_action:"):
         action = canonicalize_workspace_action(key.split(":", 1)[1])
         return f"workspace_action:{action}" if action else ""
     if key.startswith("workspace_action_"):
         action = canonicalize_workspace_action(key.removeprefix("workspace_action_"))
         return f"workspace_action:{action}" if action else ""
-    return CANONICAL_AGENT_CAPABILITY_ALIASES.get(key) or load_dynamic_capability_aliases().get(key) or raw
+    return raw
 
 
 def canonicalize_agent_capabilities(capabilities):
@@ -2325,7 +2498,24 @@ def agent_taskspec_schema():
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "intent_class": {
+                "type": "string",
+                "enum": [
+                    "direct_answer",
+                    "creative_answer",
+                    "workspace_bootstrap",
+                    "workspace_edit",
+                    "workspace_action_chain",
+                    "web_search",
+                    "web_fetch",
+                    "capability_help",
+                    "self_improve",
+                    "clarify",
+                ],
+            },
+            "referents": {"type": "object"},
             "current_workspace": {"type": "string"},
+            "target_workspace": {"type": "string"},
             "user_goal": {"type": "string"},
             "is_new_workspace_request": {"type": "boolean"},
             "is_existing_workspace_task": {"type": "boolean"},
@@ -2342,14 +2532,20 @@ def agent_taskspec_schema():
             "action": {"type": "string"},
             "run_after": {"type": "string"},
             "followup_actions": {"type": "array", "items": {"type": "string"}},
+            "execution_plan": {"type": "array", "items": {"type": "object"}},
             "url": {"type": "string"},
             "question": {"type": "string"},
             "search_query": {"type": "string"},
             "ssh_comment": {"type": "string"},
             "confidence": {"type": "string"},
+            "needs_user_input": {"type": "boolean"},
+            "answer_visibility": {"type": "string", "enum": ["summary", "details", "hidden_debug"]},
         },
         "required": [
+            "intent_class",
+            "referents",
             "current_workspace",
+            "target_workspace",
             "user_goal",
             "is_new_workspace_request",
             "is_existing_workspace_task",
@@ -2366,11 +2562,14 @@ def agent_taskspec_schema():
             "action",
             "run_after",
             "followup_actions",
+            "execution_plan",
             "url",
             "question",
             "search_query",
             "ssh_comment",
             "confidence",
+            "needs_user_input",
+            "answer_visibility",
         ],
     }
 
@@ -2521,7 +2720,10 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 "First understand the user's actual goal and target state, then describe the work as TaskSpec.\n\n"
                 "Output schema:\n"
                 "{\n"
+                '  "intent_class": "direct_answer|creative_answer|workspace_bootstrap|workspace_edit|workspace_action_chain|web_search|web_fetch|capability_help|self_improve|clarify",\n'
+                '  "referents": {"to": "resolved prior topic or empty", "tam": "resolved workspace/project or empty"},\n'
                 '  "current_workspace": "workspace-name",\n'
+                '  "target_workspace": "workspace-name or empty",\n'
                 '  "user_goal": "what the user actually wants to end up with",\n'
                 '  "is_new_workspace_request": false,\n'
                 '  "is_existing_workspace_task": true,\n'
@@ -2538,14 +2740,23 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 '  "action": "install|verify|smoke|test|build|lint or empty",\n'
                 '  "run_after": "install|verify|smoke|test|build|lint or empty",\n'
                 '  "followup_actions": ["install","smoke"],\n'
+                '  "execution_plan": [{"capability": "workspace_action_chain", "goal": "short step goal"}],\n'
                 '  "url": "public url or empty",\n'
                 '  "question": "public-web question or empty",\n'
                 '  "search_query": "workspace search query or empty",\n'
                 '  "ssh_comment": "ssh key comment or empty",\n'
-                '  "confidence": "high|medium|low"\n'
+                '  "confidence": "high|medium|low",\n'
+                '  "needs_user_input": false,\n'
+                '  "answer_visibility": "summary|details|hidden_debug"\n'
                 "}\n\n"
                 "Planning rules:\n"
                 "- Bootstrap is only for clearly new repository/workspace requests.\n"
+                "- Ordinary math, short factual questions, greetings, and story/prose requests are direct_answer or creative_answer, not repository review.\n"
+                "- Capability/help questions are capability_help, not repository review.\n"
+                "- Public web questions without a concrete URL are web_search; public web questions with a URL are web_fetch/web_search as appropriate.\n"
+                "- Resolve follow-up referents such as to/tam/ten projekt from the conversation context when it is present.\n"
+                "- For multi-step app work, use workspace_action_chain with an execution_plan instead of inventing missing capabilities like build.\n"
+                "- Before push/deploy/destructive steps that need user confirmation, include await_user_confirmation in required_capabilities and set needs_user_input=true.\n"
                 "- If an existing workspace is the target and the user mentions git init, origin, remote, push, or a remote URL, prefer existing-workspace git publishing instead of bootstrap.\n"
                 "- If the task asks for SSH key creation in an existing workspace, request the SSH capability instead of bootstrap or raw ssh-keygen.\n"
                 "- If the task asks for the public key, request the public-key capability.\n"
@@ -2577,13 +2788,45 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
 def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, workspace_exists, task):
     if not isinstance(spec, dict):
         spec = {}
+    allowed_intents = {
+        "direct_answer",
+        "creative_answer",
+        "workspace_bootstrap",
+        "workspace_edit",
+        "workspace_action_chain",
+        "web_search",
+        "web_fetch",
+        "capability_help",
+        "self_improve",
+        "clarify",
+    }
+    intent_class = str(spec.get("intent_class") or "").strip().lower()
+    if intent_class not in allowed_intents:
+        intent_class = ""
+    referents = spec.get("referents") if isinstance(spec.get("referents"), dict) else {}
+    target_workspace = str(spec.get("target_workspace") or "").strip()
+    execution_plan = spec.get("execution_plan") if isinstance(spec.get("execution_plan"), list) else []
+    execution_plan_capabilities = []
+    for step in execution_plan:
+        if not isinstance(step, dict):
+            continue
+        for key in ("capability", "capabilities", "required_capabilities"):
+            value = step.get(key)
+            if isinstance(value, list):
+                execution_plan_capabilities.extend(value)
+            elif value:
+                execution_plan_capabilities.append(value)
+    needs_user_input = _boolish(spec.get("needs_user_input"), default=False)
+    answer_visibility = str(spec.get("answer_visibility") or "summary").strip().lower()
+    if answer_visibility not in {"summary", "details", "hidden_debug"}:
+        answer_visibility = "summary"
     fallback_workspace = requested_workspace if workspace_exists else controller_workspace
     bootstrap_repo = bootstrap_repo_name_from_text(task)
     inferred_repo = agent_extract_repo_name(task)
     remote_url = str(spec.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
     requested_read_only = agent_read_only_requested(task)
-    read_only = True if requested_read_only else _boolish(spec.get("read_only"), default=False)
-    current_workspace = str(spec.get("current_workspace") or "").strip() or fallback_workspace
+    read_only = True if requested_read_only or intent_class in {"direct_answer", "creative_answer", "capability_help"} else _boolish(spec.get("read_only"), default=False)
+    current_workspace = str(spec.get("current_workspace") or "").strip() or target_workspace or fallback_workspace
     user_goal = str(spec.get("user_goal") or "").strip() or str(task or "").strip()
     target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo or inferred_repo
     target_capability_name = str(spec.get("target_capability_name") or "").strip()
@@ -2591,7 +2834,10 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         target_capability_name = agent_target_capability_name_from_task(task)
     if target_repo_name and current_workspace == requested_workspace and not workspace_exists and requested_workspace != controller_workspace:
         current_workspace = controller_workspace
-    is_new_workspace_request = _boolish(spec.get("is_new_workspace_request"), default=bool(bootstrap_repo))
+    is_new_workspace_request = _boolish(
+        spec.get("is_new_workspace_request"),
+        default=bool(bootstrap_repo) or intent_class == "workspace_bootstrap",
+    )
     if bootstrap_repo:
         is_new_workspace_request = True
         target_repo_name = bootstrap_repo
@@ -2623,7 +2869,35 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
             desired_end_state = "explicit_command_completed"
         else:
             desired_end_state = "intent_clarified"
-    planner_required_capabilities = canonicalize_agent_capabilities(_string_list(spec.get("required_capabilities")))
+    planner_required_capabilities = canonicalize_agent_capabilities(
+        _string_list(spec.get("required_capabilities")) + execution_plan_capabilities
+    )
+    intent_capabilities = []
+    if intent_class == "direct_answer":
+        intent_capabilities.append("direct_answer")
+    elif intent_class == "creative_answer":
+        intent_capabilities.append("creative_answer")
+    elif intent_class == "workspace_bootstrap":
+        intent_capabilities.append("workspace_repo_bootstrap")
+    elif intent_class == "workspace_edit":
+        intent_capabilities.append("workspace_edit")
+    elif intent_class == "workspace_action_chain":
+        intent_capabilities.append("workspace_action_chain")
+    elif intent_class == "web_search":
+        intent_capabilities.append("public_web_search")
+    elif intent_class == "web_fetch":
+        intent_capabilities.append("public_web_access")
+    elif intent_class == "capability_help":
+        intent_capabilities.append("capability_catalog_show")
+    elif intent_class == "self_improve":
+        intent_capabilities.append("agent_self_improve")
+    elif intent_class == "clarify":
+        intent_capabilities.append("clarify_or_infer_capability")
+    if needs_user_input:
+        intent_capabilities.append("await_user_confirmation")
+    intent_capabilities = canonicalize_agent_capabilities(intent_capabilities)
+    if intent_capabilities:
+        planner_required_capabilities = canonicalize_agent_capabilities(intent_capabilities + planner_required_capabilities)
     selector_source = "planner" if planner_required_capabilities else "none"
     llm_capability_selection = None
     if (
@@ -2654,7 +2928,11 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         if not planner_required_capabilities:
             selector_source = "heuristic_fallback"
     required_capabilities = canonicalize_agent_capabilities(required_capabilities)
+    if intent_capabilities:
+        required_capabilities = canonicalize_agent_capabilities(intent_capabilities + required_capabilities)
     meta_capability = agent_meta_capability_from_task(task)
+    if intent_class == "capability_help":
+        meta_capability = "capability_catalog_show"
     if meta_capability and meta_capability not in required_capabilities:
         required_capabilities.insert(0, meta_capability)
     if is_new_workspace_request and "workspace_repo_bootstrap" not in required_capabilities:
@@ -2682,7 +2960,12 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     ):
         required_capabilities.insert(0, "ssh_key_create")
     search_query = str(spec.get("search_query") or "").strip() or agent_workspace_search_query_from_task(task)
-    if search_query and workspace_exists and "workspace_search" not in required_capabilities:
+    if (
+        search_query
+        and workspace_exists
+        and "workspace_search" not in required_capabilities
+        and "public_web_search" not in required_capabilities
+    ):
         required_capabilities.insert(0, "workspace_search")
     url = str(spec.get("url") or "").strip() or agent_public_url_from_task(task)
     if (
@@ -2691,6 +2974,11 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         and not remote_url
         and not url
         and "workspace_search" not in required_capabilities
+        and "direct_answer" not in required_capabilities
+        and "creative_answer" not in required_capabilities
+        and "capability_catalog_show" not in required_capabilities
+        and "public_web_search" not in required_capabilities
+        and "await_user_confirmation" not in required_capabilities
         and not meta_capability
         and not agent_ssh_key_show_public_requested(task)
         and not agent_ssh_key_create_requested(task)
@@ -2714,6 +3002,10 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         missing_inputs.append("search_query")
     if "workspace_search" in required_capabilities and not workspace_exists:
         missing_inputs.append("existing_workspace")
+    if "public_web_search" in required_capabilities and not (
+        search_query or str(spec.get("question") or "").strip() or str(task or "").strip()
+    ):
+        missing_inputs.append("search_query")
     risk_level = str(spec.get("risk_level") or "").strip().lower()
     if risk_level not in {"low", "medium", "high"}:
         risk_level = "low" if read_only else ("medium" if remote_url or agent_edit_requested(task) else "low")
@@ -2750,7 +3042,11 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         ]
     if is_new_workspace_request and not followup_actions:
         followup_actions = agent_infer_followup_actions(task)
-    question = str(spec.get("question") or "").strip() or (str(task or "").strip() if agent_web_question_requested(task) else "")
+    question = str(spec.get("question") or "").strip() or (
+        str(task or "").strip() if intent_class in {"web_search", "web_fetch"} or agent_web_question_requested(task) else ""
+    )
+    if intent_class == "web_search" and not search_query:
+        search_query = question or str(task or "").strip()
     ssh_comment = str(spec.get("ssh_comment") or "").strip() or agent_workspace_ssh_comment(task, target_repo_name or fallback_workspace)
     confidence = str(spec.get("confidence") or "medium").strip().lower()
     if confidence == "medium" and isinstance(llm_capability_selection, dict) and llm_capability_selection.get("confidence"):
@@ -2771,7 +3067,10 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         followup_actions = []
         command = []
     return {
+        "intent_class": intent_class,
+        "referents": referents,
         "current_workspace": current_workspace,
+        "target_workspace": target_workspace,
         "user_goal": user_goal,
         "is_new_workspace_request": bool(is_new_workspace_request),
         "is_existing_workspace_task": bool(is_existing_workspace_task),
@@ -2789,6 +3088,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         "action": action,
         "run_after": run_after,
         "followup_actions": followup_actions,
+        "execution_plan": execution_plan,
         "url": url,
         "question": question,
         "search_query": search_query,
@@ -2796,6 +3096,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         "ssh_comment": ssh_comment,
         "confidence": confidence,
         "capability_selector_source": selector_source,
+        "needs_user_input": needs_user_input,
+        "answer_visibility": answer_visibility,
     }
 
 
@@ -2803,6 +3105,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     required_capabilities = canonicalize_agent_capabilities(_string_list(spec.get("required_capabilities")))
     implemented_capabilities, missing_capabilities = split_agent_capabilities(required_capabilities)
     capabilities = set(implemented_capabilities)
+    intent_class = str(spec.get("intent_class") or "").strip().lower()
     action_capability = next(
         (
             capability.split(":", 1)[1].strip().lower()
@@ -2837,6 +3140,10 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         workflow = "clarify"
     elif spec.get("missing_inputs"):
         workflow = "clarify"
+    elif spec.get("needs_user_input") or "await_user_confirmation" in capabilities:
+        workflow = "clarify"
+    elif "direct_answer" in capabilities or "creative_answer" in capabilities or intent_class in {"direct_answer", "creative_answer"}:
+        workflow = "direct_answer"
     elif meta_capability:
         workflow = "meta"
     elif spec.get("is_new_workspace_request"):
@@ -2852,10 +3159,19 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         workflow = "self_improve"
     elif "stack_deploy" in capabilities or agent_deploy_requested(task):
         workflow = "deploy"
+    elif "public_web_search" in capabilities or intent_class == "web_search":
+        workflow = "web_search"
     elif "public_web_access" in capabilities and spec.get("url"):
         workflow = "web_answer" if spec.get("question") else "web_fetch"
     elif workspace_exists and "workspace_search" in capabilities:
         workflow = "workspace_search"
+    elif (
+        "workspace_action_chain" in capabilities
+        or "workspace_expose_preview" in capabilities
+        or "workspace_autopilot" in capabilities
+        or agent_executable_task_requested(task)
+    ):
+        workflow = "autopilot"
     elif read_only:
         workflow = "review"
     elif "workspace_edit" in capabilities or agent_edit_requested(task):
@@ -2867,16 +3183,15 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     elif spec.get("command"):
         workflow = "run"
         command = spec.get("command") or []
-    elif "workspace_autopilot" in capabilities or agent_executable_task_requested(task):
-        workflow = "autopilot"
 
     workspace = str(spec.get("current_workspace") or "").strip() or (requested_workspace if workspace_exists else controller_workspace)
-    if workflow in {"bootstrap", "deploy", "self_improve"}:
+    if workflow in {"direct_answer", "bootstrap", "deploy", "self_improve", "web_search"}:
         workspace = controller_workspace
     elif workflow in {"meta", "workspace_search", "review", "edit", "action", "run", "autopilot", "ssh_key_create", "ssh_key_show_public", "workspace_git_publish"}:
         workspace = requested_workspace if workspace_exists else controller_workspace
 
     return {
+        "intent_class": intent_class,
         "workflow": workflow,
         "reason": preview_text(spec.get("user_goal") or spec.get("desired_end_state") or "", 180),
         "read_only": read_only,
@@ -2899,6 +3214,11 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         "question": str(spec.get("question") or "").strip(),
         "ssh_comment": str(spec.get("ssh_comment") or "").strip(),
         "confidence": str(spec.get("confidence") or "medium").strip().lower(),
+        "referents": spec.get("referents") if isinstance(spec.get("referents"), dict) else {},
+        "target_workspace": str(spec.get("target_workspace") or "").strip(),
+        "execution_plan": spec.get("execution_plan") if isinstance(spec.get("execution_plan"), list) else [],
+        "needs_user_input": bool(spec.get("needs_user_input")),
+        "answer_visibility": str(spec.get("answer_visibility") or "summary").strip().lower(),
         "capability_locked": True,
     }
 
@@ -3449,7 +3769,17 @@ def admin_agent_loop(payload):
         missing_capabilities = _string_list(plan.get("missing_capabilities") or taskspec.get("missing_capabilities"))
         missing_inputs = _string_list(plan.get("missing_inputs") or taskspec.get("missing_inputs"))
         result["ok"] = False
-        if missing_capabilities:
+        if plan.get("needs_user_input") or "await_user_confirmation" in _string_list(plan.get("required_capabilities")):
+            result["summary"] = "AWAIT_USER_CONFIRMATION: workflow is paused before a user-confirmed step."
+            result["recovery"] = {
+                "text": str(taskspec.get("recovery_plan") or "Potvrď pokračování a agent naváže dalším bezpečným capability krokem."),
+                "required_capabilities": _string_list(taskspec.get("required_capabilities")),
+            }
+            result["answer"] = (
+                "Čekám na potvrzení před dalším krokem. "
+                + str(taskspec.get("recovery_plan") or "Potvrď prosím, že mám pokračovat.")
+            ).strip()
+        elif missing_capabilities:
             result["summary"] = "NEEDS_ATTENTION: TaskSpec requested unsupported capability."
             result["recovery"] = {
                 "text": "Doplň nebo implementuj pojmenovanou capability, pak task zopakuj. Gateway nebude provádět jinou akci jako náhradu.",
@@ -3478,6 +3808,14 @@ def admin_agent_loop(payload):
                 "NEEDS_ATTENTION: nerozpoznal jsem bezpečný capability krok. "
                 "Neprovedu náhradní akci, která by mohla mířit jinam než zadání."
             )
+        return result
+
+    if workflow == "direct_answer":
+        execution = agent_direct_answer_response(task, plan.get("intent_class") or "direct_answer")
+        result["execution"] = execution
+        result["ok"] = bool(execution.get("ok"))
+        result["summary"] = "Direct answer completed." if result["ok"] else "Direct answer failed."
+        result["answer"] = str(execution.get("answer") or "").strip()
         return result
 
     if workflow == "meta":
@@ -3512,6 +3850,20 @@ def admin_agent_loop(payload):
         result["ok"] = bool(answer_result.get("ok"))
         result["summary"] = "Public web answer completed." if result["ok"] else "Public web answer failed."
         result["execution"] = answer_result
+        return result
+
+    if workflow == "web_search":
+        search_result = admin_public_web_search({"query": plan.get("search_query") or plan.get("question") or task})
+        result["ok"] = bool(search_result.get("ok"))
+        result["summary"] = "Public web search completed." if result["ok"] else "Public web search failed."
+        result["execution"] = search_result
+        result["answer"] = str(search_result.get("answer") or "").strip()
+        if not result["ok"]:
+            result["recovery"] = {
+                "text": str(search_result.get("recovery") or "Veřejné vyhledání selhalo; zkus konkrétní URL nebo oprav outbound síť."),
+                "query": search_result.get("query"),
+                "error": search_result.get("error"),
+            }
         return result
 
     if workflow == "deploy":
@@ -5693,6 +6045,9 @@ def agent_loop_human_answer(result):
     if workflow in {"meta", "review", "clarify"}:
         return str(result.get("answer") or "").strip()
 
+    if workflow == "direct_answer":
+        return str(result.get("answer") or execution.get("answer") or "").strip()
+
     if workflow == "workspace_search":
         query = str(execution.get("query") or "").strip()
         count = int(execution.get("match_count") or 0)
@@ -5709,6 +6064,9 @@ def agent_loop_human_answer(result):
         ).strip()
 
     if workflow == "web_answer":
+        return str(execution.get("answer") or result.get("answer") or "").strip()
+
+    if workflow == "web_search":
         return str(execution.get("answer") or result.get("answer") or "").strip()
 
     if workflow == "web_fetch":
@@ -5881,37 +6239,104 @@ def agent_loop_human_answer(result):
     return str(result.get("answer") or "").strip()
 
 
+def agent_loop_changed_files(result):
+    files = []
+    seen = set()
+
+    def add(value):
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            files.append(text)
+
+    for container_key in ("execution", "followup"):
+        container = result.get(container_key)
+        if isinstance(container, dict):
+            for key in ("files", "paths", "changed_files", "changed_paths", "safe_apply_candidate_paths"):
+                value = container.get(key)
+                if isinstance(value, list):
+                    for item in value:
+                        add(item)
+            for step in container.get("executed_actions") or []:
+                if not isinstance(step, dict):
+                    continue
+                for key in ("files", "paths", "changed_files", "changed_paths"):
+                    value = step.get(key)
+                    if isinstance(value, list):
+                        for item in value:
+                            add(item)
+    return files
+
+
+def agent_loop_verify_status(result):
+    if result.get("ok"):
+        return "OK"
+    recovery = result.get("recovery") if isinstance(result.get("recovery"), dict) else {}
+    if recovery:
+        return "needs attention"
+    return "not verified"
+
+
 def agent_loop_response_text(result):
     status = "AGENT_LOOP_OK" if result.get("ok") else "AGENT_LOOP_NEEDS_ATTENTION"
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
-    lines = [
+    workflow = str(result.get("workflow", plan.get("workflow", "")))
+    answer = agent_loop_human_answer(result)
+    lines = []
+    if answer:
+        lines.append(answer)
+    else:
+        lines.append(str(result.get("summary") or "Agent loop doběhl bez detailní odpovědi.").strip())
+
+    workspace = str(result.get("requested_workspace") or plan.get("workspace") or "").strip()
+    progress = [
+        f"Stav: {'hotovo' if result.get('ok') else 'potřebuji pozornost'} · workflow `{workflow or '-'}`",
+    ]
+    if workspace:
+        progress.append(f"Workspace: `{workspace}`")
+    changed_files = agent_loop_changed_files(result)
+    if changed_files:
+        progress.append(
+            "Změněné soubory: "
+            + ", ".join(f"`{item}`" for item in changed_files[:8])
+            + f" · verify: {agent_loop_verify_status(result)}"
+        )
+    elif not result.get("ok"):
+        recovery = result.get("recovery") if isinstance(result.get("recovery"), dict) else {}
+        recovery_text = preview_text(recovery.get("text") or result.get("summary") or "", 220)
+        if recovery_text:
+            progress.append(f"Recovery: {recovery_text}")
+    lines.extend(progress[:3])
+
+    debug_lines = [
         status,
         f"requested_workspace={result.get('requested_workspace', '')}",
         f"controller_workspace={result.get('controller_workspace', '')}",
         f"planner_source={result.get('planner_source', '')}",
-        f"workflow={result.get('workflow', plan.get('workflow', ''))}",
+        f"workflow={workflow}",
         f"read_only={result.get('read_only', plan.get('read_only', ''))}",
         f"summary={result.get('summary', '')}",
     ]
     if plan.get("reason"):
-        lines.append(f"reason={plan.get('reason')}")
-    answer = agent_loop_human_answer(result)
-    if answer:
-        lines.append("")
-        lines.append(answer)
+        debug_lines.append(f"reason={plan.get('reason')}")
+    debug_payload = {}
     for key in ("model_runtime", "execution", "followup", "recovery", "plan", "taskspec"):
         value = result.get(key)
         if value in (None, {}, []):
             continue
-        try:
-            rendered = json.dumps(value, ensure_ascii=False, indent=2)
-        except TypeError:
-            rendered = str(value)
+        debug_payload[key] = value
+    lines.append("")
+    lines.append("Debug:")
+    lines.append("```text")
+    lines.extend(debug_lines)
+    if debug_payload:
         lines.append("")
-        lines.append(f"{key}:")
-        lines.append("```json")
-        lines.append(trim_response_text(rendered, 10000))
-        lines.append("```")
+        try:
+            rendered = json.dumps(debug_payload, ensure_ascii=False, indent=2)
+        except TypeError:
+            rendered = str(debug_payload)
+        lines.append(trim_response_text(rendered, 12000))
+    lines.append("```")
     return "\n".join(lines).strip()
 
 

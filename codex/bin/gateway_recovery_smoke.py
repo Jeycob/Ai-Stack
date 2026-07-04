@@ -713,6 +713,155 @@ def assert_workspace_search_capability() -> None:
     print("WORKSPACE_SEARCH_CAPABILITY_OK")
 
 
+def assert_taskspec_v2_intents_and_renderer() -> None:
+    direct, direct_plan = _taskspec_plan(
+        {
+            "intent_class": "direct_answer",
+            "referents": {},
+            "current_workspace": "ai-stack",
+            "target_workspace": "",
+            "user_goal": "answer simple math",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": False,
+            "target_repo_name": "",
+            "target_capability_name": "",
+            "remote_url": "",
+            "desired_end_state": "answer_returned",
+            "required_capabilities": [],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "",
+            "read_only": False,
+            "command": [],
+            "action": "",
+            "run_after": "",
+            "followup_actions": [],
+            "execution_plan": [],
+            "url": "",
+            "question": "",
+            "search_query": "",
+            "ssh_comment": "",
+            "confidence": "high",
+            "needs_user_input": False,
+            "answer_visibility": "summary",
+        },
+        "kolik je 10+52",
+        workspace="ai-stack",
+        workspace_exists=True,
+    )
+    if direct.get("required_capabilities") != ["direct_answer"] or direct_plan.get("workflow") != "direct_answer":
+        raise SystemExit(f"direct_answer intent should not route to repo workflow, got {direct!r} {direct_plan!r}")
+
+    direct_spec = dict(direct)
+    direct_loop_plan = dict(direct_plan)
+    with patch.object(gateway, "agent_plan", return_value=(direct_loop_plan, direct_spec, {"source": "smoke"})):
+        with patch.object(
+            gateway,
+            "ollama_chat",
+            return_value={"choices": [{"message": {"content": "62"}}], "usage": {"total_tokens": 3}},
+        ):
+            direct_result = gateway.admin_agent_loop({"workspace": "ai-stack", "task": "kolik je 10+52"})
+    if direct_result.get("workflow") != "direct_answer" or str(direct_result.get("answer") or "").strip() != "62":
+        raise SystemExit(f"direct answer should return 62 through agent loop, got {direct_result!r}")
+    rendered_direct = gateway.agent_loop_response_text(direct_result)
+    if rendered_direct.splitlines()[0].strip() != "62" or "workflow=direct_answer" not in rendered_direct:
+        raise SystemExit(f"direct answer renderer should be concise with debug hidden below, got {rendered_direct!r}")
+
+    creative, creative_plan = _taskspec_plan(
+        {**direct, "intent_class": "creative_answer", "required_capabilities": [], "user_goal": "write a short story"},
+        "write me a story",
+        workspace="ai-stack",
+        workspace_exists=True,
+    )
+    if creative.get("required_capabilities") != ["creative_answer"] or creative_plan.get("workflow") != "direct_answer":
+        raise SystemExit(f"creative_answer intent should use direct workflow, got {creative!r} {creative_plan!r}")
+
+    help_spec, help_plan = _taskspec_plan(
+        {**direct, "intent_class": "capability_help", "required_capabilities": [], "user_goal": "show capabilities"},
+        "jake mas capability?",
+        workspace="ai-stack",
+        workspace_exists=True,
+    )
+    if "capability_catalog_show" not in help_spec.get("required_capabilities", []) or help_plan.get("workflow") != "meta":
+        raise SystemExit(f"capability_help should map to meta catalog, got {help_spec!r} {help_plan!r}")
+
+    web_spec, web_plan = _taskspec_plan(
+        {
+            **direct,
+            "intent_class": "web_search",
+            "user_goal": "find public answer",
+            "required_capabilities": [],
+            "question": "kdo ma dneska svatek",
+            "search_query": "kdo ma dneska svatek",
+        },
+        "vyhledej to kdekoliv",
+        workspace="ai-stack",
+        workspace_exists=True,
+    )
+    if web_spec.get("required_capabilities") != ["public_web_search"] or web_plan.get("workflow") != "web_search":
+        raise SystemExit(f"web_search without URL should use public_web_search, got {web_spec!r} {web_plan!r}")
+    if "workspace_search" in web_spec.get("required_capabilities", []):
+        raise SystemExit(f"public web search must not become workspace_search, got {web_spec!r}")
+
+    chain_spec, chain_plan = _taskspec_plan(
+        {
+            **direct,
+            "intent_class": "workspace_action_chain",
+            "user_goal": "install build test and expose app",
+            "required_capabilities": [],
+            "read_only": False,
+            "execution_plan": [
+                {"capability": "workspace_action_chain", "goal": "install/build/test"},
+                {"capability": "workspace_expose_preview", "goal": "show preview"},
+            ],
+        },
+        "vytvor appku, nainstaluj, buildni, otestuj a vystav preview",
+        workspace="Test2",
+        workspace_exists=True,
+    )
+    if chain_plan.get("workflow") != "autopilot" or "workspace_action_chain" not in chain_spec.get("required_capabilities", []):
+        raise SystemExit(f"workspace action chain should route to autopilot, got {chain_spec!r} {chain_plan!r}")
+
+    confirm_spec, confirm_plan = _taskspec_plan(
+        {
+            **direct,
+            "intent_class": "workspace_action_chain",
+            "required_capabilities": ["await_user_confirmation", "workspace_git_publish"],
+            "needs_user_input": True,
+            "read_only": False,
+            "remote_url": "git@github.com:owner/repo.git",
+            "recovery_plan": "Potvrď push na GitHub.",
+        },
+        "pushni to po potvrzeni",
+        workspace="Test2",
+        workspace_exists=True,
+    )
+    if confirm_plan.get("workflow") != "clarify" or confirm_plan.get("needs_user_input") is not True:
+        raise SystemExit(f"await confirmation should pause in clarify workflow, got {confirm_spec!r} {confirm_plan!r}")
+
+    rendered = gateway.agent_loop_response_text(
+        {
+            "ok": True,
+            "requested_workspace": "Test2",
+            "controller_workspace": "ai-stack",
+            "planner_source": "llm",
+            "workflow": "edit",
+            "read_only": False,
+            "summary": "Safe edit applied and verified.",
+            "answer": "Hotovo.",
+            "plan": {"workflow": "edit", "reason": "smoke"},
+            "execution": {"files": ["README.md"], "run_after": "test"},
+        }
+    )
+    first_line = rendered.splitlines()[0]
+    if "AGENT_LOOP" in first_line:
+        raise SystemExit(f"renderer should start with human answer, got {rendered!r}")
+    for marker in ("Ve workspace Test2 jsem upravil README.md.", "Změněné soubory: `README.md`", "Debug:", "AGENT_LOOP_OK", "workflow=edit"):
+        if marker not in rendered:
+            raise SystemExit(f"renderer missing marker {marker!r}: {rendered!r}")
+    print("TASKSPEC_V2_INTENTS_AND_RENDERER_OK")
+
+
 def assert_agent_self_improve_capability() -> None:
     registry = gateway.agent_capability_registry()
     entry = registry.get("agent_self_improve")
@@ -1553,6 +1702,7 @@ def main() -> int:
     assert_taskspec_unknown_capability_stays_missing()
     assert_taskspec_meta_capabilities()
     assert_workspace_search_capability()
+    assert_taskspec_v2_intents_and_renderer()
     assert_agent_self_improve_capability()
     assert_admin_agent_self_improve_forwarding()
     assert_capability_draft_contracts()

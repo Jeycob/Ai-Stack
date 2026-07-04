@@ -29,6 +29,18 @@
       "scope": "public_web",
       "summary": "Auditovana capability pro cteni verejnych HTTP/HTTPS zdroju, stazeni textu a zodpovezeni dotazu pouze z nacteneho verejneho obsahu."
     },
+    "public_web_search": {
+      "scope": "public_web",
+      "summary": "Bounded verejne webove hledani pro dotaz bez konkretni URL; vraci citovane vysledky nebo presny recovery krok, kdyz outbound search neni dostupny."
+    },
+    "direct_answer": {
+      "scope": "conversation",
+      "summary": "Prime odpovedi na bezne chatove dotazy, matematiku nebo kratke fakticke otazky bez repo snapshotu a bez workspace workflow."
+    },
+    "creative_answer": {
+      "scope": "conversation",
+      "summary": "Prime kreativni texty a story pozadavky bez prekladu do workspace_search nebo repo review."
+    },
     "workspace_git_publish": {
       "scope": "workspace_runtime",
       "summary": "Auditovana capability pro existujici workspace: git init, origin remote, commit, push branch main a recovery s workspace SSH public key pri auth blockerech."
@@ -60,6 +72,18 @@
     "agent_runtime_status": {
       "scope": "agent_metadata",
       "summary": "Vrati runtime commit, fingerprint, model config a readiness stav codex-local gateway."
+    },
+    "workspace_action_chain": {
+      "scope": "workspace_runtime",
+      "summary": "Semanticky multi-step workspace workflow pro install/build/test/smoke/deploy-like kroky pres existujici autopilot/action capability vrstvu."
+    },
+    "workspace_expose_preview": {
+      "scope": "workspace_runtime",
+      "summary": "Bezpecne pripravi nebo navrhne vystaveni lokalni aplikace pres existujici workspace runtime/preview hranice."
+    },
+    "await_user_confirmation": {
+      "scope": "mentoring",
+      "summary": "Zastavi workflow pred push/deploy nebo jinym checkpointem a vrati jasne cekani na potvrzeni uzivatele."
     },
     "agent_self_improve": {
       "scope": "stack_runtime",

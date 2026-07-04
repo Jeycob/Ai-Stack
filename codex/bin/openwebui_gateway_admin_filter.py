@@ -2221,26 +2221,35 @@ class Filter:
         answer = str(result.get("answer", "")).strip()
         summary = str(result.get("summary", "")).strip()
         status = "AGENT_LOOP_OK" if result.get("ok") else "AGENT_LOOP_NEEDS_ATTENTION"
-        lines = [
+        workflow = str(result.get("workflow", plan.get("workflow", ""))).strip()
+        lines = [answer or summary or ("Agent loop doběhl." if result.get("ok") else "Agent loop potřebuje pozornost.")]
+        lines.append(f"Stav: {'hotovo' if result.get('ok') else 'potřebuji pozornost'} · workflow `{workflow or '-'}`")
+        lines.append(f"Workspace: `{result.get('requested_workspace', workspace)}`")
+        changed_files = []
+        for key in ("files", "paths", "changed_files", "changed_paths", "safe_apply_candidate_paths"):
+            value = execution.get(key) if isinstance(execution, dict) else None
+            if isinstance(value, list):
+                changed_files.extend(str(item) for item in value if str(item).strip())
+        if changed_files:
+            lines.append("Změněné soubory: " + ", ".join(f"`{item}`" for item in changed_files[:8]))
+        debug_lines = [
             status,
             f"requested_workspace={result.get('requested_workspace', workspace)}",
             f"controller_workspace={result.get('controller_workspace', workspace)}",
             f"workspace_exists={result.get('workspace_exists')}",
-            f"workflow={result.get('workflow', plan.get('workflow', ''))}",
+            f"workflow={workflow}",
             f"read_only={result.get('read_only', plan.get('read_only', False))}",
             f"confidence={plan.get('confidence', '')}",
             f"reason={plan.get('reason', '')}",
             f"summary={summary}",
         ]
-        if answer:
-            lines.extend(["answer:", answer])
-        if execution:
-            lines.append(self._details("execution", json.dumps(execution, ensure_ascii=False, indent=2)))
-        if followup:
-            lines.append(self._details("followup", json.dumps(followup, ensure_ascii=False, indent=2)))
-        if recovery:
-            lines.append(self._details("recovery", json.dumps(recovery, ensure_ascii=False, indent=2)))
-        lines.append(self._details("plan", json.dumps(plan, ensure_ascii=False, indent=2)))
+        debug_payload = {
+            "execution": execution,
+            "followup": followup,
+            "recovery": recovery,
+            "plan": plan,
+        }
+        lines.append(self._details("debug", "\n".join(debug_lines) + "\n\n" + json.dumps(debug_payload, ensure_ascii=False, indent=2)))
         return "\n".join(line for line in lines if line).rstrip()
 
     def _gateway_admin_request(self, path: str, payload: dict, timeout: int = 90) -> dict:
