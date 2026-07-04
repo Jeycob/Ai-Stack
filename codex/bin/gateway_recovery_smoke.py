@@ -790,6 +790,28 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
     help_answer = str(help_meta.get("answer") or "")
     if "Umim bezny chat" not in help_answer or "`repo: Test2`" not in help_answer:
         raise SystemExit(f"capability_help answer should be human and practical, got {help_meta!r}")
+    generic_help = gateway.normalize_agent_taskspec(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "show capabilities",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": False,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "human capability summary returned",
+            "required_capabilities": [],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "",
+            "read_only": True,
+        },
+        "ai-stack",
+        "ai-stack",
+        True,
+        "co umis?",
+    )
+    if generic_help.get("intent_class") != "capability_help" or "capability_catalog_show" not in generic_help.get("required_capabilities", []):
+        raise SystemExit(f"generic capability help should normalize to capability_help, got {generic_help!r}")
 
     context_meta = gateway.admin_agent_meta(
         {"meta_capability": "workspace_context_status"},
@@ -819,6 +841,22 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
         raise SystemExit(f"web_search without URL should use public_web_search, got {web_spec!r} {web_plan!r}")
     if "workspace_search" in web_spec.get("required_capabilities", []):
         raise SystemExit(f"public web search must not become workspace_search, got {web_spec!r}")
+    followup_web = gateway.normalize_agent_taskspec(
+        {
+            **direct,
+            "intent_class": "web_search",
+            "required_capabilities": [],
+            "question": "",
+            "search_query": "",
+        },
+        "Test2",
+        "ai-stack",
+        True,
+        "vyhledej to kdekoliv",
+        "user: kdo ma dneska svatek?\nassistant: Muzu to dohledat na webu.\nuser: vyhledej to kdekoliv",
+    )
+    if followup_web.get("search_query") != "kdo ma dneska svatek?" or "public_web_search" not in followup_web.get("required_capabilities", []):
+        raise SystemExit(f"follow-up web referent should reuse previous topic, got {followup_web!r}")
 
     chain_spec, chain_plan = _taskspec_plan(
         {
@@ -838,6 +876,8 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
     )
     if chain_plan.get("workflow") != "autopilot" or "workspace_action_chain" not in chain_spec.get("required_capabilities", []):
         raise SystemExit(f"workspace action chain should route to autopilot, got {chain_spec!r} {chain_plan!r}")
+    if "workspace_expose_preview" not in chain_spec.get("required_capabilities", []):
+        raise SystemExit(f"workspace action chain with preview should keep preview capability, got {chain_spec!r}")
 
     autopilot_preview_text = gateway.agent_loop_human_answer(
         {
@@ -868,6 +908,8 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
         workspace="Test2",
         workspace_exists=True,
     )
+    if "await_user_confirmation" not in confirm_spec.get("required_capabilities", []) or confirm_plan.get("workflow") != "clarify":
+        raise SystemExit(f"push/deploy confirmation should stay explicit, got {confirm_spec!r} {confirm_plan!r}")
     if confirm_plan.get("workflow") != "clarify" or confirm_plan.get("needs_user_input") is not True:
         raise SystemExit(f"await confirmation should pause in clarify workflow, got {confirm_spec!r} {confirm_plan!r}")
 

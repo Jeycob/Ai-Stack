@@ -31,6 +31,12 @@ def run_print_config(extra_env: dict[str, str] | None = None) -> dict:
 
 
 def main() -> int:
+    script_text = SCRIPT.read_text(encoding="utf-8")
+    if "python3 -B '$GATEWAY'" not in script_text or "PYTHONDONTWRITEBYTECODE=1" not in script_text:
+        raise SystemExit("expected start script to launch gateway with python3 -B and PYTHONDONTWRITEBYTECODE=1")
+    if "clear_gateway_bytecode_cache" not in script_text:
+        raise SystemExit("expected start script to clear gateway bytecode cache before launch")
+
     payload = run_print_config()
     if payload.get("repo_root") != str(ROOT):
         raise SystemExit(f"expected repo_root={ROOT}, got {payload!r}")

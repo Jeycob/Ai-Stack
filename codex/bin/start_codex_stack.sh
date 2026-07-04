@@ -73,12 +73,18 @@ PY
 fi
 
 launch_gateway() {
-  local command="PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
+  local command="PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 -B '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
   if [ "$AI_USER" = "root" ] || [ "$(id -u)" -ne 0 ]; then
     bash -lc "$command"
   else
     runuser -u "$AI_USER" -- bash -lc "$command"
   fi
+}
+
+clear_gateway_bytecode_cache() {
+  find "$CODEX_ROOT" \
+    \( -path "$CODEX_ROOT/gateway/__pycache__" -o -path "$CODEX_ROOT/bin/__pycache__" \) \
+    -type d -prune -exec rm -rf {} + >/dev/null 2>&1 || true
 }
 
 gateway_diag() {
@@ -361,6 +367,7 @@ if [ -f "$STATE_ROOT/codex-gateway.pid" ]; then
 fi
 pkill -f "$GATEWAY" >/dev/null 2>&1 || true
 kill_gateway_port_owner
+clear_gateway_bytecode_cache
 
 launch_gateway
 

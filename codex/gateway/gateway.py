@@ -2127,6 +2127,67 @@ def agent_web_question_requested(task):
     return any(cue in lower for cue in cues)
 
 
+def agent_capability_help_requested(task):
+    lower = str(task or "").strip().lower()
+    if not lower:
+        return False
+    cues = (
+        "co umis",
+        "co umiš",
+        "co dokazes",
+        "co dokážeš",
+        "jake mas capability",
+        "jaké máš capability",
+        "jake mas schopnosti",
+        "jaké máš schopnosti",
+        "jake mas tooly",
+        "jaké máš tooly",
+        "capability help",
+        "capability catalog",
+        "capability katalog",
+        "help capabilities",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def agent_preview_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "preview",
+        "nahled",
+        "náhled",
+        "vystav",
+        "expose",
+        "open app",
+        "otevri app",
+        "otevři app",
+        "ukaz appku",
+        "ukaž appku",
+        "spust appku",
+        "spusť appku",
+    )
+    return any(cue in lower for cue in cues)
+
+
+def agent_user_confirmation_requested(task):
+    lower = str(task or "").lower()
+    cues = (
+        "pockej na potvrzeni",
+        "počkej na potvrzení",
+        "az potvrdim",
+        "až potvrdím",
+        "po potvrzeni",
+        "po potvrzení",
+        "cekaj na potvrzeni",
+        "čekej na potvrzení",
+        "await confirmation",
+        "wait for confirmation",
+        "before push",
+        "before deploy",
+    )
+    return any(cue in lower for cue in cues)
+
+
 def agent_deploy_requested(task):
     lower = str(task or "").lower()
     cues = (
@@ -2218,7 +2279,7 @@ def agent_meta_capability_from_task(task):
     lower = str(task or "").strip().lower()
     if not lower:
         return ""
-    if any(cue in lower for cue in ("jake mas capability", "jaké máš capability", "jake mas schopnosti", "jaké máš schopnosti", "capability catalog", "capability katalog")):
+    if agent_capability_help_requested(task):
         return "capability_catalog_show"
     if any(cue in lower for cue in ("prepni se do workspace", "přepni se do workspace", "switch workspace", "set workspace", "zmen workspace", "změň workspace")):
         return "workspace_context_set"
@@ -2254,6 +2315,97 @@ def agent_workspace_search_query_from_task(task):
     )
     cleaned = " ".join(cleaned.replace(":", " ").split())
     return cleaned[:160] or "capability"
+
+
+def looks_like_followup_reference(task):
+    lower = str(task or "").strip().lower()
+    if not lower:
+        return False
+    patterns = (
+        r"\bto\b",
+        r"\btam\b",
+        r"\bten projekt\b",
+        r"\bv nem\b",
+        r"\bv něm\b",
+        r"\bdo nej\b",
+        r"\bdo něj\b",
+        r"\bpokracuj\b",
+        r"\bpokračuj\b",
+        r"\bvyhledej to\b",
+        r"\bhledej to\b",
+        r"\bfind it\b",
+        r"\bsearch it\b",
+    )
+    return any(re.search(pattern, lower) for pattern in patterns)
+
+
+def placeholder_followup_text(text):
+    normalized = " ".join(str(text or "").strip().lower().split())
+    placeholders = {
+        "",
+        "to",
+        "tam",
+        "ten projekt",
+        "v nem",
+        "v něm",
+        "do nej",
+        "do něj",
+        "pokracuj",
+        "pokračuj",
+        "vyhledej to",
+        "hledej to",
+        "find it",
+        "search it",
+    }
+    if normalized in placeholders:
+        return True
+    prefixes = (
+        "to ",
+        "vyhledej to ",
+        "hledej to ",
+        "find it ",
+        "search it ",
+    )
+    return any(normalized.startswith(prefix) for prefix in prefixes)
+
+
+def recent_nontrivial_context_message(conversation_context, current_task=""):
+    current = " ".join(str(current_task or "").strip().split()).lower()
+    lines = [line.strip() for line in str(conversation_context or "").splitlines() if line.strip()]
+    assistant_fallback = ""
+    for raw in reversed(lines):
+        role_match = re.match(r"^(user|assistant):\s*", raw, flags=re.I)
+        role = role_match.group(1).lower() if role_match else ""
+        line = re.sub(r"^(user|assistant):\s*", "", raw, flags=re.I).strip()
+        if not line:
+            continue
+        lowered = " ".join(line.split()).lower()
+        if current and lowered == current:
+            continue
+        if lowered.startswith("ag") and ("workflow=" in lowered or "requested_workspace=" in lowered):
+            continue
+        if "codeX_debug".lower() in lowered or lowered.startswith("{") or lowered.startswith("["):
+            continue
+        if any(marker in lowered for marker in ("requested_workspace=", "controller_workspace=", "workflow=", "planner_source=")):
+            continue
+        if role == "user":
+            return line
+        if not assistant_fallback:
+            assistant_fallback = line
+    return assistant_fallback
+
+
+def resolved_referents(task, conversation_context, requested_workspace="", controller_workspace=""):
+    referents = {}
+    if not looks_like_followup_reference(task):
+        return referents
+    recent = recent_nontrivial_context_message(conversation_context, task)
+    if recent:
+        referents["to"] = recent
+    workspace_hint = requested_workspace or controller_workspace
+    if workspace_hint:
+        referents["tam"] = workspace_hint
+    return referents
 
 
 def agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists):
@@ -2495,6 +2647,8 @@ def agent_capability_hints_from_task(task, workspace_exists):
     bootstrap_name = bootstrap_repo_name_from_text(task)
     meta_capability = agent_meta_capability_from_task(task)
     target_capability_name = agent_target_capability_name_from_task(task)
+    public_url = agent_public_url_from_task(task)
+    inferred_followups = agent_infer_followup_actions(task)
     if meta_capability:
         capabilities.append(meta_capability)
     if agent_workspace_search_query_from_task(task) and workspace_exists:
@@ -2511,11 +2665,19 @@ def agent_capability_hints_from_task(task, workspace_exists):
         capabilities.append("workspace_ssh_key_create")
     if agent_deploy_requested(task):
         capabilities.append("stack_deploy")
-    if agent_public_url_from_task(task) and not remote_url:
+    if public_url and not remote_url:
         capabilities.append("public_web_access")
+    elif agent_web_question_requested(task) and not remote_url:
+        capabilities.append("public_web_search")
     inferred_action = agent_infer_action_from_task(task)
     if inferred_action:
         capabilities.append(f"workspace_action:{inferred_action}")
+    if len(inferred_followups) >= 2:
+        capabilities.append("workspace_action_chain")
+    if agent_preview_requested(task):
+        capabilities.append("workspace_expose_preview")
+    if agent_user_confirmation_requested(task):
+        capabilities.append("await_user_confirmation")
     if agent_edit_requested(task):
         capabilities.append("workspace_edit")
     explicit_command = agent_infer_command_from_task(task)
@@ -2872,6 +3034,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if intent_class not in allowed_intents:
         intent_class = ""
     referents = spec.get("referents") if isinstance(spec.get("referents"), dict) else {}
+    if not referents:
+        referents = resolved_referents(task, conversation_context, requested_workspace, controller_workspace)
     target_workspace = str(spec.get("target_workspace") or "").strip()
     execution_plan = spec.get("execution_plan") if isinstance(spec.get("execution_plan"), list) else []
     execution_plan_capabilities = []
@@ -2941,6 +3105,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         _string_list(spec.get("required_capabilities")) + execution_plan_capabilities
     )
     intent_capabilities = []
+    if not intent_class and agent_capability_help_requested(task):
+        intent_class = "capability_help"
     if intent_class == "direct_answer":
         intent_capabilities.append("direct_answer")
     elif intent_class == "creative_answer":
@@ -3004,6 +3170,10 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         meta_capability = "capability_catalog_show"
     if meta_capability and meta_capability not in required_capabilities:
         required_capabilities.insert(0, meta_capability)
+    if agent_preview_requested(task) and "workspace_expose_preview" not in required_capabilities:
+        required_capabilities.append("workspace_expose_preview")
+    if agent_user_confirmation_requested(task) and "await_user_confirmation" not in required_capabilities:
+        required_capabilities.insert(0, "await_user_confirmation")
     if is_new_workspace_request and "workspace_repo_bootstrap" not in required_capabilities:
         required_capabilities.insert(0, "workspace_repo_bootstrap")
     if target_capability_name and "agent_capability_develop" not in required_capabilities:
@@ -3028,7 +3198,12 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         and "ssh_key_show_public" not in required_capabilities
     ):
         required_capabilities.insert(0, "ssh_key_create")
+    referent_topic = str(referents.get("to") or "").strip()
     search_query = str(spec.get("search_query") or "").strip() or agent_workspace_search_query_from_task(task)
+    if placeholder_followup_text(search_query):
+        search_query = ""
+    if not search_query and referent_topic and intent_class in {"web_search", "web_fetch"}:
+        search_query = referent_topic
     if (
         search_query
         and workspace_exists
@@ -3114,6 +3289,10 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     question = str(spec.get("question") or "").strip() or (
         str(task or "").strip() if intent_class in {"web_search", "web_fetch"} or agent_web_question_requested(task) else ""
     )
+    if placeholder_followup_text(question):
+        question = ""
+    if not question and referent_topic and intent_class in {"web_search", "web_fetch"}:
+        question = referent_topic
     if intent_class == "web_search" and not search_query:
         search_query = question or str(task or "").strip()
     ssh_comment = str(spec.get("ssh_comment") or "").strip() or agent_workspace_ssh_comment(task, target_repo_name or fallback_workspace)
