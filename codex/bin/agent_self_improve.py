@@ -3053,6 +3053,9 @@ def generate_unified_diff(
     reasoning: dict[str, Any],
     proposal: dict[str, Any],
 ) -> dict[str, Any]:
+    llm_review_patch_file = audit_dir / "llm-review-draft.diff"
+    llm_review_patch_text = ""
+    llm_review_patch_check: dict[str, Any] = {}
     if args.patch_file:
         patch_text = read_text(Path(args.patch_file))
         source = "provided_patch_file"
@@ -3086,7 +3089,10 @@ def generate_unified_diff(
                 candidate_text = str(llm_attempt.get("patch_text") or "")
                 candidate_check = check_patch_text(candidate_text, args.command_timeout) if candidate_text else {"ok": False}
                 llm_attempt["check"] = candidate_check
-                if not candidate_check.get("ok"):
+                if candidate_check.get("ok"):
+                    llm_review_patch_text = candidate_text
+                    llm_review_patch_check = candidate_check
+                else:
                     llm_attempt["error"] = candidate_check.get("message") or "llm_diff_failed_check"
             for rel, diff in (
                 roadmap_with_capability(capability, feature_request, reasoning),
@@ -3151,6 +3157,8 @@ def generate_unified_diff(
         promotable_runtime_patch_file = audit_dir / "runtime-promotable-candidate.diff"
         promotable_runtime_patch_text = ""
         promotable_runtime_patch_check: dict[str, Any] = {}
+        if llm_review_patch_text and llm_review_patch_check.get("ok"):
+            write_text(llm_review_patch_file, llm_review_patch_text)
         if (
             not args.patch_file
             and source == "capability_development_template"
@@ -3182,6 +3190,17 @@ def generate_unified_diff(
             "review_only_patch_sha256": (
                 hashlib.sha256(review_only_patch_text.encode("utf-8")).hexdigest() if review_only_patch_text else ""
             ),
+            "llm_review_patch_file": (
+                str(llm_review_patch_file)
+                if llm_review_patch_text and llm_review_patch_check.get("ok")
+                else ""
+            ),
+            "llm_review_patch_sha256": (
+                hashlib.sha256(llm_review_patch_text.encode("utf-8")).hexdigest()
+                if llm_review_patch_text and llm_review_patch_check.get("ok")
+                else ""
+            ),
+            "llm_review_patch_check": llm_review_patch_check,
             "promotable_runtime_patch_file": (
                 str(promotable_runtime_patch_file)
                 if promotable_runtime_patch_text and promotable_runtime_patch_check.get("ok")
@@ -3773,6 +3792,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
         "safe_apply_candidate_paths": generated_diff_result.get("safe_apply_candidate_paths") or [],
         "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
         "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
+        "llm_review_patch_file": generated_diff_result.get("llm_review_patch_file") or "",
         "promotable_runtime_patch_file": generated_diff_result.get("promotable_runtime_patch_file") or "",
         "generated_artifacts": generated_artifacts,
         "patch_application_decision": (
@@ -3826,6 +3846,7 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
     workspace = str(summary.get("workspace") or "")
     safe_apply_candidate_patch_file = str(generated_diff_result.get("safe_apply_candidate_patch_file") or "")
     review_only_patch_file = str(generated_diff_result.get("review_only_patch_file") or "")
+    llm_review_patch_file = str(generated_diff_result.get("llm_review_patch_file") or "")
     promotable_runtime_patch_file = str(generated_diff_result.get("promotable_runtime_patch_file") or "")
     runtime_gate_command = "python3 codex/bin/gateway_runtime_fingerprint_check.py"
     safe_apply_commands: list[str] = []
@@ -3872,7 +3893,9 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         "safe_apply_candidate_patch_file": safe_apply_candidate_patch_file,
         "safe_apply_candidate_patch_sha256": generated_diff_result.get("safe_apply_candidate_patch_sha256") or "",
         "review_only_patch_file": review_only_patch_file,
+        "llm_review_patch_file": llm_review_patch_file,
         "review_only_patch_sha256": generated_diff_result.get("review_only_patch_sha256") or "",
+        "llm_review_patch_sha256": generated_diff_result.get("llm_review_patch_sha256") or "",
         "promotable_runtime_patch_file": promotable_runtime_patch_file,
         "promotable_runtime_patch_sha256": generated_diff_result.get("promotable_runtime_patch_sha256") or "",
         "promotable_runtime_patch_check": generated_diff_result.get("promotable_runtime_patch_check") or {},
@@ -3925,6 +3948,7 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         ),
         "manual_promotion_steps": [
             "Review runtime patch candidate diff against current gateway.py.",
+            "Review llm-review-draft.diff when present; it is the bounded codex-local patch proposal that passed git apply --check.",
             "Start from runtime-promotable-candidate.diff when available; it is already extracted as a direct patch draft.",
             "Promote only the approved hunk set into a guarded unified diff patch file.",
             "Run the minimum verify commands again on the promoted patch.",
@@ -4040,6 +4064,7 @@ def build_execution_packet(
             "safe_apply_candidate_patch_file": manifest.get("safe_apply_candidate_patch_file") or "",
             "safe_apply_commands": manifest.get("safe_apply_commands") or [],
             "review_only_patch_file": manifest.get("review_only_patch_file") or "",
+            "llm_review_patch_file": manifest.get("llm_review_patch_file") or "",
             "promotable_runtime_patch_file": manifest.get("promotable_runtime_patch_file") or "",
             "runtime_promotion_commands": manifest.get("runtime_promotion_commands") or [],
             "promotion_blockers": manifest.get("promotion_blockers") or [],
@@ -4207,6 +4232,8 @@ def write_final_report(
         lines.append("- none")
     lines.extend(["", "## Review-Only Patch Bundle", ""])
     lines.append(f"- patch_file: `{report.get('review_only_patch_file') or '-'}`")
+    if report.get("llm_review_patch_file"):
+        lines.append(f"- llm_review_patch_file: `{report.get('llm_review_patch_file')}`")
     lines.extend(["", "## Promotable Runtime Patch Draft", ""])
     lines.append(f"- patch_file: `{report.get('promotable_runtime_patch_file') or '-'}`")
     lines.extend(["", "## Artifacts", ""])
@@ -4228,6 +4255,8 @@ def write_final_report(
             lines.append(f"  - {item}")
     lines.extend(["", "## Guarded Apply Manifest", ""])
     lines.append(f"- decision: `{manifest.get('decision')}`")
+    if manifest.get("llm_review_patch_file"):
+        lines.append(f"- llm review patch file: `{manifest.get('llm_review_patch_file')}`")
     if manifest.get("runtime_gate_status"):
         lines.append("- runtime gate status:")
         for phase, gate_info in manifest["runtime_gate_status"].items():

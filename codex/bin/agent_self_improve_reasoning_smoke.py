@@ -616,6 +616,87 @@ def run_llm_diff_generation_uses_runtime_draft() -> None:
     with_gateway_helpers(helpers, run)
 
 
+def run_llm_capability_diff_preserved_as_review_draft() -> None:
+    diagnosis = asi.classify_failure("capability draft needed", "", "")
+    regression = {"cases": []}
+    reasoning = {
+        "task_spec": {
+            "current_workspace": "ai-stack",
+            "user_goal": "Add bounded workspace profiling capability.",
+            "target_capability_name": "workspace_profile",
+            "required_capabilities": ["agent_capability_develop"],
+            "desired_end_state": "workspace_profile capability draft is prepared",
+        }
+    }
+    proposal = {
+        "ok": True,
+        "capability_development": {"capability_name": "workspace_profile"},
+        "target_capability_name": "workspace_profile",
+    }
+    readme_rel = "README.md"
+    readme_before = (ROOT / readme_rel).read_text(encoding="utf-8")
+    marker = "\nLLM review draft for workspace_profile.\n"
+    readme_after = readme_before if "LLM review draft for workspace_profile." in readme_before else readme_before.rstrip() + marker
+    diff_text = f"diff --git a/{readme_rel} b/{readme_rel}\n" + asi.unified_diff_for_file(readme_rel, readme_before, readme_after)
+
+    def fake_ollama_chat(model_id, messages, timeout=0, response_format=None):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": f"```diff\n{diff_text}```"
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 123},
+        }
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": lambda *args, **kwargs: ({}, "{}", {}),
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "agent_capability_develop\nworkspace_profile",
+        "extract_unified_diff": lambda raw: diff_text if "diff --git" in raw else (_ for _ in ()).throw(ValueError("missing diff")),
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        from codex.gateway import gateway as gateway_module
+
+        previous_ollama_chat = gateway_module.ollama_chat
+        try:
+            gateway_module.ollama_chat = fake_ollama_chat
+            with tempfile.TemporaryDirectory(prefix="asi-llm-capdiff-") as tmp:
+                args = make_args(
+                    audit_root=tmp,
+                    mode="capability_develop",
+                    target_capability_name="workspace_profile",
+                    capability_name="workspace_profile",
+                    feature_request="Add bounded workspace profiling capability.",
+                    command_timeout=120,
+                )
+                result = asi.generate_unified_diff(args, Path(tmp), diagnosis, regression, reasoning, proposal)
+                if result.get("source") != "capability_development_template":
+                    raise SystemExit(f"expected capability template source, got {result!r}")
+                llm_attempt = result.get("llm_attempt") or {}
+                if (llm_attempt.get("check") or {}).get("ok") is not True:
+                    raise SystemExit(f"expected preserved llm draft to pass check, got {result!r}")
+                llm_review_patch_file = result.get("llm_review_patch_file") or ""
+                if not llm_review_patch_file:
+                    raise SystemExit(f"expected llm review patch artifact for capability draft, got {result!r}")
+                llm_review_text = Path(llm_review_patch_file).read_text(encoding="utf-8")
+                if "LLM review draft for workspace_profile." not in llm_review_text:
+                    raise SystemExit(f"expected llm review draft content, got {llm_review_text!r}")
+                print("AGENT_SELF_IMPROVE_LLM_CAPABILITY_DIFF_OK")
+        finally:
+            gateway_module.ollama_chat = previous_ollama_chat
+
+    with_gateway_helpers(helpers, run)
+
+
 def main() -> int:
     run_llm_diagnosis_uses_runtime_output()
     run_llm_diagnosis_falls_back_cleanly()
@@ -626,6 +707,7 @@ def main() -> int:
     run_llm_reasoning_uses_gateway_normalizer()
     run_llm_reasoning_falls_back_cleanly()
     run_llm_diff_generation_uses_runtime_draft()
+    run_llm_capability_diff_preserved_as_review_draft()
     print("AGENT_SELF_IMPROVE_REASONING_SMOKE_OK")
     return 0
 
