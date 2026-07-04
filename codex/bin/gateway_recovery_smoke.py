@@ -834,6 +834,60 @@ def assert_agent_self_improve_capability() -> None:
     print("AGENT_SELF_IMPROVE_CAPABILITY_OK")
 
 
+def assert_admin_agent_self_improve_forwarding() -> None:
+    captured = {}
+
+    class DummyProc:
+        def __init__(self, stdout, returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(cmd, cwd=None, text=None, stdout=None, stderr=None, timeout=None):
+        captured["cmd"] = list(cmd)
+        captured["cwd"] = str(cwd)
+        captured["timeout"] = timeout
+        payload = {
+            "ok": True,
+            "artifact_dir": "/tmp/agent-self-improve-forwarding",
+            "mode": "capability_develop",
+            "dry_run": True,
+        }
+        return DummyProc(json.dumps(payload, ensure_ascii=False))
+
+    with patch.object(gateway.subprocess, "run", side_effect=fake_run):
+        result = gateway.admin_agent_self_improve(
+            {
+                "workspace": "ai-stack",
+                "mode": "capability_develop",
+                "dry_run": True,
+                "max_cycles": 9,
+                "timeout": 123,
+                "prompt": "pridej capability workspace_profile",
+                "capability_name": "workspace_profile",
+                "target_capability_name": "workspace_profile",
+                "feature_request": "Add bounded workspace profiling capability.",
+            }
+        )
+    cmd = captured.get("cmd") or []
+    if "--mode" not in cmd or cmd[cmd.index("--mode") + 1] != "capability_develop":
+        raise SystemExit(f"expected forwarded capability_develop mode, got {cmd!r}")
+    if "--target-capability-name" not in cmd or cmd[cmd.index("--target-capability-name") + 1] != "workspace_profile":
+        raise SystemExit(f"expected forwarded target capability name, got {cmd!r}")
+    if "--capability-name" not in cmd or cmd[cmd.index("--capability-name") + 1] != "workspace_profile":
+        raise SystemExit(f"expected forwarded capability name, got {cmd!r}")
+    if "--feature-request" not in cmd or cmd[cmd.index("--feature-request") + 1] != "Add bounded workspace profiling capability.":
+        raise SystemExit(f"expected forwarded feature request, got {cmd!r}")
+    if "--max-cycles" not in cmd or cmd[cmd.index("--max-cycles") + 1] != "3":
+        raise SystemExit(f"expected max_cycles clamp to 3, got {cmd!r}")
+    if "--dry-run" not in cmd:
+        raise SystemExit(f"expected dry-run flag in forwarded command, got {cmd!r}")
+    if captured.get("timeout") != 123:
+        raise SystemExit(f"expected forwarded timeout=123, got {captured!r}")
+    if not result.get("ok") or result.get("mode") != "capability_develop" or result.get("dry_run") is not True:
+        raise SystemExit(f"expected successful forwarding result, got {result!r}")
+    print("ADMIN_AGENT_SELF_IMPROVE_FORWARDING_OK")
+
+
 def assert_capability_draft_contracts() -> None:
     roadmap_path = ROOT / "docs" / "codex-local-capability-roadmap.json"
     if not roadmap_path.is_file():
@@ -1408,6 +1462,7 @@ def main() -> int:
     assert_taskspec_meta_capabilities()
     assert_workspace_search_capability()
     assert_agent_self_improve_capability()
+    assert_admin_agent_self_improve_forwarding()
     assert_capability_draft_contracts()
     assert_agent_loop_meta_response()
     assert_agent_loop_prefers_llm_plan()
