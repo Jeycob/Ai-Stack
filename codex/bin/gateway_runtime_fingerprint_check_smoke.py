@@ -19,6 +19,13 @@ if str(ROOT) not in sys.path:
 from codex.bin import gateway_runtime_fingerprint_check as check
 
 
+def assert_request_json_disables_proxy() -> None:
+    text = (ROOT / "codex/bin/gateway_runtime_fingerprint_check.py").read_text(encoding="utf-8")
+    if "ProxyHandler({})" not in text or "opener.open(req, timeout=timeout)" not in text:
+        raise SystemExit("GATEWAY_RUNTIME_FINGERPRINT_PROXY_GUARD_FAILED")
+    print("GATEWAY_RUNTIME_FINGERPRINT_PROXY_GUARD_OK")
+
+
 def run_main(args: list[str]) -> tuple[int, str]:
     stdout = io.StringIO()
     old_argv = sys.argv
@@ -119,6 +126,7 @@ def assert_candidate_discovery_uses_env() -> None:
 
 
 def main() -> int:
+    assert_request_json_disables_proxy()
     assert_candidate_fallback()
     assert_unavailable_reports_tried()
     assert_candidate_discovery_uses_env()

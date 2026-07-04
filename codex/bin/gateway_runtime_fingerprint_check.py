@@ -23,7 +23,8 @@ from codex.bin.openwebui_runtime import discover_gateway_base_urls
 
 def request_json(url: str, timeout: float) -> dict:
     req = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8", errors="replace")
         return json.loads(raw or "{}")
 
