@@ -777,6 +777,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
             "canonical_alias_roundtrip": shape["aliases"],
             "required_paths": [
                 f"docs/capability-drafts/{capability}.json",
+                f"docs/capability-drafts/{capability}.gateway-integration.json",
                 f"docs/capability-drafts/{capability}.wiring.json",
                 "docs/codex-local-capability-roadmap.json",
             ],
@@ -880,6 +881,77 @@ def capability_wiring_blueprint_file(
         "diagnosis_category": diagnosis.get("category"),
     }
     after = json.dumps(blueprint, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def capability_gateway_integration_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.gateway-integration.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    planned_workflow = "self_improve" if capability.startswith("agent_") else shape["workflow"]
+    integration = {
+        "kind": "codex-local-capability-gateway-integration-draft",
+        "capability_name": capability,
+        "summary": shape["summary"],
+        "target_file": "codex/gateway/gateway.py",
+        "integration_order": [
+            "AGENT_CAPABILITY_TO_WORKFLOW",
+            "CANONICAL_AGENT_CAPABILITY_ALIASES",
+            "agent_capability_registry",
+            "agent_taskspec_to_plan",
+            "executor_or_admin_handler",
+        ],
+        "snippets": {
+            "workflow_map": {
+                "anchor": "AGENT_CAPABILITY_TO_WORKFLOW",
+                "code": {
+                    capability: planned_workflow,
+                },
+            },
+            "canonical_aliases": {
+                "anchor": "CANONICAL_AGENT_CAPABILITY_ALIASES",
+                "code": {
+                    alias: capability for alias in shape["aliases"]
+                },
+            },
+            "registry_entry": {
+                "anchor": "CORE_AGENT_CAPABILITIES or roadmap-backed registry merge",
+                "code": {
+                    capability: {
+                        "workflow": planned_workflow,
+                        "summary": shape["summary"],
+                        "scope": shape["scope"],
+                        "implemented": False,
+                        "draft": True,
+                        "executor": shape["executor"],
+                    }
+                },
+            },
+            "taskspec_plan_binding": {
+                "anchor": "agent_taskspec_to_plan",
+                "code": {
+                    "required_capability": capability,
+                    "workflow": planned_workflow,
+                    "desired_end_state": task_spec.get("desired_end_state") or "",
+                    "note": "Prefer canonical capability semantics; do not add prompt-specific routing.",
+                },
+            },
+            "executor_hook": {
+                "anchor": "workflow executor dispatch",
+                "code": {
+                    "executor_pattern": shape["executor"],
+                    "planned_workflow": planned_workflow,
+                    "manual_gate": True,
+                    "note": "Keep as draft until bounded executor or admin reuse is approved.",
+                },
+            },
+        },
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "generated_by": "agent_self_improve.generate_unified_diff",
+    }
+    after = json.dumps(integration, ensure_ascii=False, indent=2) + "\n"
     return rel, unified_diff_for_file(rel, before, after)
 
 
@@ -1071,6 +1143,7 @@ def generate_unified_diff(
                 roadmap_with_capability(capability, feature_request, reasoning),
                 capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_gateway_integration_file(capability, feature_request, reasoning),
                 capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_stub_file(capability, feature_request, reasoning),
                 capability_runtime_hook_stub_file(capability, feature_request, reasoning),
