@@ -1932,6 +1932,22 @@ def generate_unified_diff(
     if patch_text:
         write_text(patch_file, patch_text)
         check = check_patch_text(patch_text, args.command_timeout)
+        review_only_paths = sorted(
+            [
+                path
+                for path in (check.get("paths") or [])
+                if review_only_patch_path(path)
+            ]
+        )
+        safe_apply_paths = sorted([path for path in (check.get("paths") or []) if path not in review_only_paths])
+        safe_apply_patch_file = audit_dir / "safe-apply-candidate.diff"
+        review_only_patch_file = audit_dir / "runtime-review-only.diff"
+        safe_apply_patch_text = filter_patch_text(patch_text, set(safe_apply_paths)) if safe_apply_paths else ""
+        review_only_patch_text = filter_patch_text(patch_text, set(review_only_paths)) if review_only_paths else ""
+        if safe_apply_patch_text:
+            write_text(safe_apply_patch_file, safe_apply_patch_text)
+        if review_only_patch_text:
+            write_text(review_only_patch_file, review_only_patch_text)
         result = {
             "ok": bool(check.get("ok")),
             "phase": "generate_unified_diff",
@@ -1940,6 +1956,16 @@ def generate_unified_diff(
             "patch_sha256": hashlib.sha256(patch_text.encode("utf-8")).hexdigest(),
             "paths": check.get("paths") or [],
             "blocked_paths": check.get("blocked_paths") or [],
+            "safe_apply_candidate_paths": safe_apply_paths,
+            "safe_apply_candidate_patch_file": str(safe_apply_patch_file) if safe_apply_patch_text else "",
+            "safe_apply_candidate_patch_sha256": (
+                hashlib.sha256(safe_apply_patch_text.encode("utf-8")).hexdigest() if safe_apply_patch_text else ""
+            ),
+            "review_only_runtime_artifacts": review_only_paths,
+            "review_only_patch_file": str(review_only_patch_file) if review_only_patch_text else "",
+            "review_only_patch_sha256": (
+                hashlib.sha256(review_only_patch_text.encode("utf-8")).hexdigest() if review_only_patch_text else ""
+            ),
             "git_apply_check_exit_code": check.get("git_apply_check_exit_code"),
             "git_apply_check_output": check.get("git_apply_check_output"),
             "message": check.get("message") or "Generated unified diff passed git apply --check.",
@@ -1973,6 +1999,49 @@ def changed_paths_from_patch(patch_text: str) -> list[str]:
         elif line.startswith("*** Add File: "):
             paths.append(line.removeprefix("*** Add File: ").strip())
     return sorted({p for p in paths if p})
+
+
+def split_patch_sections(patch_text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    current: list[str] = []
+    current_path = ""
+    for line in patch_text.splitlines(keepends=True):
+        if line.startswith("diff --git a/"):
+            if current and current_path:
+                sections.append((current_path, "".join(current)))
+            current = [line]
+            current_path = ""
+            continue
+        if line.startswith("--- ") and current:
+            if current_path or any(part.startswith("+++ b/") for part in current):
+                sections.append((current_path, "".join(current)))
+            current = [line]
+            current_path = ""
+            continue
+        if line.startswith("--- ") and not current:
+            current = [line]
+            current_path = ""
+            continue
+        current.append(line)
+        if line.startswith("+++ b/"):
+            rel = line[6:].strip()
+            if rel != "/dev/null":
+                current_path = rel
+    if current and current_path:
+        sections.append((current_path, "".join(current)))
+    return sections
+
+
+def filter_patch_text(patch_text: str, keep_paths: set[str]) -> str:
+    parts = [chunk for rel, chunk in split_patch_sections(patch_text) if rel in keep_paths]
+    return "".join(parts)
+
+
+def review_only_patch_path(rel: str) -> bool:
+    normalized = rel.replace("\\", "/").lstrip("/")
+    if normalized.startswith("docs/capability-drafts/"):
+        return True
+    return normalized.endswith(".runtime.patch.diff") or normalized.endswith(".gateway.patch.md")
 
 
 def patch_path_allowed(rel: str) -> bool:
@@ -2291,6 +2360,9 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
         "verify_summary": verify_info,
         "capability_patch_readiness": readiness,
         "generated_patch_paths": generated_paths,
+        "safe_apply_candidate_paths": generated_diff_result.get("safe_apply_candidate_paths") or [],
+        "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
+        "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
         "generated_artifacts": generated_artifacts,
         "patch_application_decision": (
             "applied"
@@ -2352,6 +2424,10 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         "generated_diff_ok": generated_diff_ok,
         "generated_patch_file": generated_diff_result.get("patch_file") or "",
         "generated_patch_sha256": generated_diff_result.get("patch_sha256") or "",
+        "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
+        "safe_apply_candidate_patch_sha256": generated_diff_result.get("safe_apply_candidate_patch_sha256") or "",
+        "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
+        "review_only_patch_sha256": generated_diff_result.get("review_only_patch_sha256") or "",
         "decision": decision,
         "safe_apply_candidate_paths": safe_apply_candidate_paths,
         "review_only_runtime_artifacts": review_only_artifacts,
@@ -2465,6 +2541,15 @@ def write_final_report(
             lines.append(f"- `{item}`")
     else:
         lines.append("- none")
+    lines.extend(["", "## Safe Apply Candidate", ""])
+    lines.append(f"- patch_file: `{report.get('safe_apply_candidate_patch_file') or '-'}`")
+    if report.get("safe_apply_candidate_paths"):
+        for item in report["safe_apply_candidate_paths"]:
+            lines.append(f"- `{item}`")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Review-Only Patch Bundle", ""])
+    lines.append(f"- patch_file: `{report.get('review_only_patch_file') or '-'}`")
     lines.extend(["", "## Artifacts", ""])
     for item in report["generated_artifacts"]:
         lines.append(f"- `{item}`")
@@ -2865,6 +2950,10 @@ def main() -> int:
             "patch_file": generated_diff_result.get("patch_file"),
             "paths": generated_diff_result.get("paths") or [],
             "blocked_paths": generated_diff_result.get("blocked_paths") or [],
+            "safe_apply_candidate_paths": generated_diff_result.get("safe_apply_candidate_paths") or [],
+            "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
+            "review_only_runtime_artifacts": generated_diff_result.get("review_only_runtime_artifacts") or [],
+            "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
             "source": generated_diff_result.get("source"),
         },
         "patch": patch_result,

@@ -214,6 +214,12 @@ def run_capability_develop_mode() -> None:
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         if not generated.get("ok") or generated.get("git_apply_check_exit_code") != 0:
             raise SystemExit(f"expected applicable generated diff, got {generated!r}")
+        safe_apply_patch_file = Path(str(generated.get("safe_apply_candidate_patch_file") or ""))
+        review_only_patch_file = Path(str(generated.get("review_only_patch_file") or ""))
+        if not safe_apply_patch_file.is_file():
+            raise SystemExit(f"expected safe apply candidate patch file, got {generated!r}")
+        if not review_only_patch_file.is_file():
+            raise SystemExit(f"expected review-only patch file, got {generated!r}")
         if report.get("target_capability_name") != "workspace_profile":
             raise SystemExit(f"expected report to expose target capability, got {report!r}")
         readiness = report.get("capability_patch_readiness") or {}
@@ -237,6 +243,10 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected runtime patch candidate in promotable list, got {manifest!r}")
         if "docs/codex-local-capability-roadmap.json" not in (manifest.get("safe_apply_candidate_paths") or []):
             raise SystemExit(f"expected roadmap diff in safe-apply candidate paths, got {manifest!r}")
+        if str(manifest.get("safe_apply_candidate_patch_file") or "") != str(safe_apply_patch_file):
+            raise SystemExit(f"expected safe apply patch file in manifest, got {manifest!r}")
+        if str(manifest.get("review_only_patch_file") or "") != str(review_only_patch_file):
+            raise SystemExit(f"expected review-only patch file in manifest, got {manifest!r}")
         if manifest.get("promotion_ready") is not False:
             raise SystemExit(f"expected promotion_ready false while runtime review is required, got {manifest!r}")
         blockers = manifest.get("promotion_blockers") or []
@@ -248,7 +258,13 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected completed codex-local smoke execution in report, got {report!r}")
         if "applying runtime patches" not in (report.get("codex_senior_review_required_for") or []):
             raise SystemExit(f"expected senior review report, got {report!r}")
+        if str(report.get("safe_apply_candidate_patch_file") or "") != str(safe_apply_patch_file):
+            raise SystemExit(f"expected safe apply patch file in report, got {report!r}")
+        if str(report.get("review_only_patch_file") or "") != str(review_only_patch_file):
+            raise SystemExit(f"expected review-only patch file in report, got {report!r}")
         patch_text = generated_file.read_text(encoding="utf-8")
+        safe_apply_patch_text = safe_apply_patch_file.read_text(encoding="utf-8")
+        review_only_patch_text = review_only_patch_file.read_text(encoding="utf-8")
         if "docs/capability-drafts/workspace_profile.json" not in patch_text:
             raise SystemExit(f"expected capability draft file in generated diff:\n{patch_text}")
         if "docs/capability-drafts/workspace_profile.smoke.json" not in patch_text:
@@ -311,6 +327,14 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected runtime hook scaffold marker in generated diff:\n{patch_text}")
         if "CAPABILITY_DRAFT_SMOKE_SCAFFOLD" not in patch_text:
             raise SystemExit(f"expected smoke scaffold marker in generated diff:\n{patch_text}")
+        if "docs/capability-drafts/workspace_profile.runtime.patch.diff" in safe_apply_patch_text:
+            raise SystemExit(f"safe apply patch should not contain runtime review-only artifact:\n{safe_apply_patch_text}")
+        if "docs/capability-drafts/workspace_profile.gateway.patch.md" in safe_apply_patch_text:
+            raise SystemExit(f"safe apply patch should not contain gateway review-only artifact:\n{safe_apply_patch_text}")
+        if "docs/codex-local-capability-roadmap.json" not in safe_apply_patch_text:
+            raise SystemExit(f"safe apply patch should keep safe docs/stubs:\n{safe_apply_patch_text}")
+        if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in review_only_patch_text:
+            raise SystemExit(f"review-only patch should include runtime candidate artifact:\n{review_only_patch_text}")
         print("AGENT_SELF_IMPROVE_CAPABILITY_DEVELOP_OK")
 
 
@@ -336,6 +360,10 @@ def run_generate_unified_diff_mode() -> None:
         if not generated.get("ok") or generated.get("source") != "capability_development_template":
             raise SystemExit(f"expected generated diff mode to produce a valid draft diff, got {payload!r}")
         paths = generated.get("paths") or []
+        if not generated.get("safe_apply_candidate_patch_file"):
+            raise SystemExit(f"expected safe apply candidate patch file in generated diff result, got {generated!r}")
+        if not generated.get("review_only_patch_file"):
+            raise SystemExit(f"expected review-only patch file in generated diff result, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.json" not in paths:
             raise SystemExit(f"expected capability draft path in generated diff, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.smoke.json" not in paths:
