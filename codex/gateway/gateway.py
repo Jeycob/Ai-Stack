@@ -5870,16 +5870,44 @@ def admin_deploy_status(payload):
             pid = None
     running = bool(pid and pid_running(pid))
     head = run_ro(["git", "rev-parse", "--short", "HEAD"], REPO_ROOT, 8)
+    upstream = run_ro(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], REPO_ROOT, 8)
+    origin_head = run_ro(["git", "rev-parse", "--short", "origin/main"], REPO_ROOT, 8)
+    remote_url = run_ro(["git", "remote", "get-url", "origin"], REPO_ROOT, 8)
     status = run_ro(["git", "status", "--short", "--branch"], REPO_ROOT, 8)
+    tail = tail_text(log_file)
+    deploy_pairs = re.findall(r"(?m)^before=([0-9a-fA-F]+)\s*$\n^after=([0-9a-fA-F]+)\s*$", tail)
+    last_before = deploy_pairs[-1][0] if deploy_pairs else ""
+    last_after = deploy_pairs[-1][1] if deploy_pairs else ""
+    blocker = ""
+    for marker in (
+        "DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED",
+        "DEPLOY_BLOCKED_RUNTIME_METADATA_CONFLICT",
+        "DEPLOY_BLOCKED_DIRTY_TRACKED_FILES",
+        "DEPLOY_BLOCKED_ROOT_REQUIRED",
+    ):
+        if marker in tail:
+            blocker = marker
+    restart_required = blocker == "DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED"
+    user = run_ro(["id", "-un"], REPO_ROOT, 4)
+    script = REPO_ROOT / "codex/bin/deploy_ai_stack.sh"
     return {
         "ok": True,
         "action": "deploy_status",
         "pid": pid,
         "running": running,
         "head": head,
+        "upstream": upstream,
+        "origin_head": origin_head,
+        "remote_url": remote_url,
         "git_status": status,
+        "last_before": last_before,
+        "last_after": last_after,
+        "deployment_blocker": blocker,
+        "restart_required": restart_required,
+        "manual_restart_command": f"sudo {script} --restart-only" if restart_required else "",
+        "sudoers_entry": f"{user} ALL=(root) NOPASSWD: {script}" if restart_required and user else "",
         "log": str(log_file),
-        "tail": tail_text(log_file),
+        "tail": tail,
     }
 
 def admin_agent_self_improve(payload):

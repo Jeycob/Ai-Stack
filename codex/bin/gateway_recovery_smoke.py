@@ -1681,6 +1681,49 @@ def assert_case(action: str, output: str, manifests: list[str], expected_target:
     print(f"RECOVERY_RULE_OK action={action} target={target}")
 
 
+def assert_deploy_status_diagnostics() -> None:
+    deploy_tail = "\n".join(
+        [
+            "[2026-07-04T19:31:39+02:00] Pulling latest git revision",
+            "before=dfeb57e",
+            "after=28a3bbc",
+            "DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED",
+            "Manual fallback:",
+            "sudo /mnt/c/Repositories/ai-stack/codex/bin/deploy_ai_stack.sh --restart-only",
+        ]
+    )
+    run_outputs = {
+        ("git", "rev-parse", "--short", "HEAD"): "dfeb57e",
+        ("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"): "origin/main",
+        ("git", "rev-parse", "--short", "origin/main"): "28a3bbc",
+        ("git", "remote", "get-url", "origin"): "git@github.com:Jeycob/Ai-Stack.git",
+        ("git", "status", "--short", "--branch"): "## main...origin/main\n?? codex/tags.json",
+        ("id", "-un"): "sklenik",
+    }
+
+    def fake_run_ro(command, root, timeout=8):
+        return run_outputs.get(tuple(command), "")
+
+    with patch.object(gateway, "run_ro", side_effect=fake_run_ro), patch.object(
+        gateway, "tail_text", return_value=deploy_tail
+    ):
+        result = gateway.admin_deploy_status({})
+
+    if result.get("origin_head") != "28a3bbc" or result.get("upstream") != "origin/main":
+        raise SystemExit(f"deploy status should include upstream/origin diagnostics, got {result!r}")
+    if result.get("last_before") != "dfeb57e" or result.get("last_after") != "28a3bbc":
+        raise SystemExit(f"deploy status should parse before/after from log, got {result!r}")
+    if result.get("deployment_blocker") != "DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED":
+        raise SystemExit(f"deploy status should expose root restart blocker, got {result!r}")
+    if result.get("restart_required") is not True:
+        raise SystemExit(f"deploy status should set restart_required, got {result!r}")
+    if "deploy_ai_stack.sh --restart-only" not in str(result.get("manual_restart_command") or ""):
+        raise SystemExit(f"deploy status should include manual restart command, got {result!r}")
+    if "NOPASSWD" not in str(result.get("sudoers_entry") or ""):
+        raise SystemExit(f"deploy status should include narrow sudoers hint, got {result!r}")
+    print("DEPLOY_STATUS_DIAGNOSTICS_OK")
+
+
 def main() -> int:
     assert_agent_loop_parse()
     assert_fallback_plans()
@@ -1716,6 +1759,7 @@ def main() -> int:
     assert_codex_local_completion_hard_fails_on_agent_loop_error()
     assert_agent_loop_human_answers()
     assert_host_runner_requires_explicit_capability()
+    assert_deploy_status_diagnostics()
     assert_case(
         "test",
         "npm error Missing script: test",

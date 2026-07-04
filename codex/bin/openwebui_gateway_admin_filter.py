@@ -2122,6 +2122,12 @@ class Filter:
             f"running={result.get('running')}\n"
             f"pid={result.get('pid')}\n"
             f"head={result.get('head')}\n"
+            f"origin_head={result.get('origin_head', '')}\n"
+            f"upstream={result.get('upstream', '')}\n"
+            f"deployment_blocker={result.get('deployment_blocker', '')}\n"
+            f"restart_required={result.get('restart_required', False)}\n"
+            f"manual_restart_command={result.get('manual_restart_command', '')}\n"
+            f"sudoers_entry={result.get('sudoers_entry', '')}\n"
             f"log={result.get('log')}\n"
             + self._details("git_status", str(result.get("git_status", "")))
             + "\n"

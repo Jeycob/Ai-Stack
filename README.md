@@ -505,6 +505,8 @@ Stejný princip teď hlídá i samotný helper `codex/bin/owui_chat_turn.py`. Pr
 
 Výjimka je jen explicitní deploy recovery. Když helper běží z čistého cizího klonu, jeho `HEAD` odpovídá `origin/main`, gateway `/health` potvrzuje dostupný LAN admin token a prompt je přesně admin flow `GATEWAY_ADMIN_DEPLOY_STACK`, preflight dovolí request projít i při `CODEX_LOCAL_RUNTIME_CLONE_DRIFT`, protože právě ten deploy má runtime checkout dotáhnout na nový commit. Běžné chaty, E2E a workspace úlohy zůstávají při driftu zablokované. Read-only `GATEWAY_ADMIN_DEPLOY_STATUS` je povolený také, aby šel bezpečně přečíst log a recovery typu `DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED`.
 
+`GATEWAY_ADMIN_DEPLOY_STATUS` k tomu vrací strukturované diagnostiky `head`, `origin_head`, `upstream`, poslední `before/after` z deploy logu, `deployment_blocker`, `restart_required`, `manual_restart_command` a úzký `sudoers_entry` hint. Agent tak nemusí parsovat dlouhý `log_tail`, aby poznal, jestli je problém v git pullu, runtime restartu nebo právech k Dockeru.
+
 Když naopak chceš opravdu plný živý důkaz přes OpenWebUI chat, použij:
 
     python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok a dotahni co pujde." --strict-live
