@@ -543,6 +543,16 @@ def run_runtime_drift_blocks_e2e() -> None:
         e2e = payload.get("e2e") or {}
         if e2e.get("reason") != "runtime_fingerprint_gate_failed":
             raise SystemExit(f"expected runtime gate failure, got {payload!r}")
+        gate = e2e.get("gate") or {}
+        if not gate or gate.get("ok") is not False:
+            raise SystemExit(f"expected failing runtime gate payload, got {payload!r}")
+        report = payload.get("report") or {}
+        runtime_gate_status = report.get("runtime_gate_status") or {}
+        e2e_gate = runtime_gate_status.get("e2e") or {}
+        if e2e_gate.get("status") != "blocked":
+            raise SystemExit(f"expected blocked e2e runtime gate status, got {payload!r}")
+        if not e2e_gate.get("marker"):
+            raise SystemExit(f"expected runtime gate marker in report, got {payload!r}")
         print("AGENT_SELF_IMPROVE_RUNTIME_GATE_BLOCKS_E2E_OK")
 
 
@@ -587,8 +597,16 @@ def run_verify_dry_run() -> None:
             raise SystemExit(f"expected verify phase status ok in verify dry-run, got {payload!r}")
         if (report.get("verify_summary") or {}).get("all_green") is not True:
             raise SystemExit(f"expected verify summary all_green in verify dry-run, got {payload!r}")
+        runtime_gate_status = report.get("runtime_gate_status") or {}
+        for phase in ("deploy", "e2e"):
+            gate = runtime_gate_status.get(phase) or {}
+            if gate.get("status") not in {"not_run", "not_recorded"}:
+                raise SystemExit(f"expected untouched runtime gate status for {phase} in verify dry-run, got {payload!r}")
         if manifest.get("decision") not in {"safe_apply_candidate", "safe_apply_candidate_with_runtime_review", "no_apply_candidate"}:
             raise SystemExit(f"unexpected guarded apply decision in verify dry-run, got {manifest!r}")
+        manifest_runtime_gate_status = manifest.get("runtime_gate_status") or {}
+        if sorted(manifest_runtime_gate_status.keys()) != ["deploy", "e2e"]:
+            raise SystemExit(f"expected runtime gate status in manifest, got {manifest!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
 
 

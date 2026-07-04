@@ -2514,6 +2514,53 @@ def phase_status_summary(summary: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def runtime_gate_status(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for phase in ("deploy", "e2e"):
+        payload = summary_phase_payload(summary, phase)
+        gate = payload.get("gate") if isinstance(payload, dict) else None
+        if not isinstance(gate, dict) or not gate:
+            result[phase] = {
+                "status": "not_run" if payload.get("skipped") else "not_recorded",
+                "required": True,
+                "ok": None,
+                "marker": "",
+                "recovery": "",
+                "runtime_commit": "",
+                "runtime_fingerprint": "",
+                "gateway_source_epoch": "",
+            }
+            continue
+        fingerprint = gate.get("fingerprint_check") if isinstance(gate.get("fingerprint_check"), dict) else {}
+        result[phase] = {
+            "status": (
+                "passed"
+                if gate.get("ok")
+                else ("prepared" if gate.get("dry_run") and gate.get("skipped") else "blocked")
+            ),
+            "required": True,
+            "ok": gate.get("ok"),
+            "marker": str(gate.get("marker") or fingerprint.get("marker") or ""),
+            "recovery": str(gate.get("recovery") or ""),
+            "runtime_commit": str(
+                fingerprint.get("remote_runtime_commit")
+                or fingerprint.get("runtime_commit")
+                or ""
+            ),
+            "runtime_fingerprint": str(
+                fingerprint.get("remote_runtime_fingerprint")
+                or fingerprint.get("runtime_fingerprint")
+                or ""
+            ),
+            "gateway_source_epoch": str(
+                fingerprint.get("remote_gateway_source_epoch")
+                or fingerprint.get("gateway_source_epoch")
+                or ""
+            ),
+        }
+    return result
+
+
 def capability_patch_readiness(
     summary: dict[str, Any],
     proposal_result: dict[str, Any],
@@ -2669,6 +2716,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
     offload_ratio = round((len(codex_local_offload) / total_work_buckets) * 100, 1) if total_work_buckets else 0.0
     verify_info = verify_summary(summary_phase_payload(summary, "verify"))
     phase_status = phase_status_summary(summary)
+    runtime_gates = runtime_gate_status(summary)
     evidence_status = acceptance_evidence_status(summary, proposal_result, generated_diff_result)
     readiness = capability_patch_readiness(summary, proposal_result, generated_diff_result, evidence_status)
     report = {
@@ -2679,6 +2727,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
         "offload_ratio_percent": offload_ratio,
         "target_capability_name": capability_development.get("capability_name") or "",
         "phase_status": phase_status,
+        "runtime_gate_status": runtime_gates,
         "verify_summary": verify_info,
         "capability_patch_readiness": readiness,
         "acceptance_evidence_status": evidence_status,
@@ -2733,6 +2782,7 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
     blocked_paths = generated_diff_result.get("blocked_paths") or []
     verify_info = verify_summary(summary_phase_payload(summary, "verify"))
     readiness = ((summary.get("report") or {}).get("capability_patch_readiness") or {}) if isinstance(summary.get("report"), dict) else {}
+    runtime_gates = ((summary.get("report") or {}).get("runtime_gate_status") or {}) if isinstance(summary.get("report"), dict) else {}
     missing_acceptance_evidence = readiness.get("missing_acceptance_evidence") or []
     if blocked_paths:
         decision = "blocked_paths"
@@ -2763,6 +2813,7 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         "verify_all_green": verify_info.get("all_green"),
         "missing_acceptance_evidence": missing_acceptance_evidence,
         "runtime_gate_required_for": ["deploy", "e2e", "runtime_apply_promotion"],
+        "runtime_gate_status": runtime_gates,
         "manual_review_required": [
             "review runtime patch candidates before touching gateway.py",
             "confirm generated diff still matches current repo state",
@@ -2859,6 +2910,22 @@ def write_final_report(
     lines.extend(["", "## Phase Status", ""])
     for phase, status in report["phase_status"].items():
         lines.append(f"- {phase}: `{status}`")
+    lines.extend(["", "## Runtime Gate Status", ""])
+    for phase, gate_info in (report.get("runtime_gate_status") or {}).items():
+        lines.append(f"- {phase}: `{gate_info.get('status')}`")
+        lines.append(f"  - required: `{gate_info.get('required')}`")
+        if gate_info.get("ok") is not None:
+            lines.append(f"  - ok: `{gate_info.get('ok')}`")
+        if gate_info.get("marker"):
+            lines.append(f"  - marker: `{gate_info.get('marker')}`")
+        if gate_info.get("runtime_commit"):
+            lines.append(f"  - runtime_commit: `{gate_info.get('runtime_commit')}`")
+        if gate_info.get("gateway_source_epoch"):
+            lines.append(f"  - gateway_source_epoch: `{gate_info.get('gateway_source_epoch')}`")
+        if gate_info.get("runtime_fingerprint"):
+            lines.append(f"  - runtime_fingerprint: `{gate_info.get('runtime_fingerprint')}`")
+        if gate_info.get("recovery"):
+            lines.append(f"  - recovery: {gate_info.get('recovery')}")
     lines.extend(["", "## Verify Summary", ""])
     lines.append(f"- command_count: `{report['verify_summary'].get('command_count')}`")
     lines.append(f"- passed: `{report['verify_summary'].get('passed')}`")
@@ -2918,6 +2985,12 @@ def write_final_report(
         lines.append(f"- `{item}`")
     lines.extend(["", "## Guarded Apply Manifest", ""])
     lines.append(f"- decision: `{manifest.get('decision')}`")
+    if manifest.get("runtime_gate_status"):
+        lines.append("- runtime gate status:")
+        for phase, gate_info in manifest["runtime_gate_status"].items():
+            lines.append(
+                f"  - {phase}: status=`{gate_info.get('status')}` marker=`{gate_info.get('marker') or '-'}'"
+            )
     if manifest.get("safe_apply_candidate_paths"):
         lines.append("- safe apply candidate paths:")
         for item in manifest["safe_apply_candidate_paths"]:
@@ -2969,11 +3042,13 @@ def deploy(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
             "ok": True,
             "dry_run": True,
             "scheduled": False,
+            "gate": gate,
             "command": command,
             "message": "Deploy command prepared but not executed because dry_run=true.",
         }
     result = run_command(command, args.command_timeout)
     result["ok"] = result.get("exit_code") == 0
+    result["gate"] = gate
     write_json(audit_dir / "deploy-result.json", result)
     return result
 
@@ -2991,7 +3066,7 @@ def e2e(args: argparse.Namespace, audit_dir: Path, regression: dict[str, Any]) -
     cases = regression.get("cases") or []
     prompt = args.e2e_prompt or (cases[0].get("prompt") if cases and isinstance(cases[0], dict) else "")
     if not prompt:
-        return {"ok": False, "skipped": True, "reason": "no_e2e_prompt"}
+        return {"ok": False, "skipped": True, "reason": "no_e2e_prompt", "gate": gate}
     command = [
         "python3",
         "codex/bin/owui_chat_turn.py",
@@ -3017,6 +3092,7 @@ def e2e(args: argparse.Namespace, audit_dir: Path, regression: dict[str, Any]) -
             "ok": True,
             "dry_run": True,
             "executed": False,
+            "gate": gate,
             "command": command,
         }
     if not openwebui_api_key(args):
@@ -3024,10 +3100,12 @@ def e2e(args: argparse.Namespace, audit_dir: Path, regression: dict[str, Any]) -
             "ok": False,
             "skipped": True,
             "reason": "openwebui_api_key_missing",
+            "gate": gate,
             "command": command,
         }
     result = run_command(command, args.command_timeout)
     result["ok"] = result.get("exit_code") == 0
+    result["gate"] = gate
     write_json(audit_dir / "e2e-result.json", result)
     return result
 
