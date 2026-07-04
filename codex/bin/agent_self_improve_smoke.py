@@ -200,8 +200,15 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected runtime-review guarded apply decision, got {manifest!r}")
         if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in (manifest.get("review_only_runtime_artifacts") or []):
             raise SystemExit(f"expected runtime patch candidate in review-only list, got {manifest!r}")
+        if "docs/capability-drafts/workspace_profile.runtime.patch.diff" not in (manifest.get("promotable_runtime_candidates") or []):
+            raise SystemExit(f"expected runtime patch candidate in promotable list, got {manifest!r}")
         if "docs/codex-local-capability-roadmap.json" not in (manifest.get("safe_apply_candidate_paths") or []):
             raise SystemExit(f"expected roadmap diff in safe-apply candidate paths, got {manifest!r}")
+        if manifest.get("promotion_ready") is not False:
+            raise SystemExit(f"expected promotion_ready false while runtime review is required, got {manifest!r}")
+        blockers = manifest.get("promotion_blockers") or []
+        if not any("review-only" in str(item) for item in blockers):
+            raise SystemExit(f"expected runtime review blocker explanation, got {manifest!r}")
         if "repository exploration" not in (report.get("safe_to_offload_to_codex_local") or []):
             raise SystemExit(f"expected codex-local offload report, got {report!r}")
         if "applying runtime patches" not in (report.get("codex_senior_review_required_for") or []):

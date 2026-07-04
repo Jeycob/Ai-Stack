@@ -1739,6 +1739,13 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
             if path not in review_only_artifacts
         ]
     )
+    promotable_runtime_candidates = sorted(
+        [
+            path
+            for path in review_only_artifacts
+            if path.endswith(".runtime.patch.diff")
+        ]
+    )
     verify_commands = [" ".join(command) for command in effective_verify_commands()]
     generated_diff_ok = bool(generated_diff_result.get("ok"))
     blocked_paths = generated_diff_result.get("blocked_paths") or []
@@ -1761,6 +1768,7 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         "decision": decision,
         "safe_apply_candidate_paths": safe_apply_candidate_paths,
         "review_only_runtime_artifacts": review_only_artifacts,
+        "promotable_runtime_candidates": promotable_runtime_candidates,
         "blocked_paths": blocked_paths,
         "minimum_verify_commands": verify_commands,
         "runtime_gate_required_for": ["deploy", "e2e", "runtime_apply_promotion"],
@@ -1769,6 +1777,29 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
             "confirm generated diff still matches current repo state",
             "re-run verify commands and live runtime fingerprint check before deploy",
         ],
+        "promotion_blockers": (
+            blocked_paths
+            or (
+                [
+                    "runtime candidate artifacts are review-only by design",
+                    "live runtime fingerprint gate must pass before promotion",
+                    "senior Codex review must approve gateway.py changes",
+                ]
+                if promotable_runtime_candidates
+                else []
+            )
+        ),
+        "promotion_ready": bool(generated_diff_ok and not blocked_paths and not promotable_runtime_candidates),
+        "manual_promotion_steps": [
+            "Review runtime patch candidate diff against current gateway.py.",
+            "Promote only the approved hunk set into a guarded unified diff patch file.",
+            "Run the minimum verify commands again on the promoted patch.",
+            "Run live gateway_runtime_fingerprint_check.py before and after deploy.",
+        ],
+        "manual_promotion_command_template": (
+            "python3 codex/bin/agent_self_improve.py --workspace {workspace} "
+            "--mode patch --patch-file /path/to/reviewed.patch"
+        ),
         "promotion_rule": (
             "Generated unified diff may be applied only after senior review; runtime patch candidate artifacts "
             "remain review-only and must not be auto-applied."
@@ -1827,9 +1858,18 @@ def write_final_report(
         lines.append("- runtime review-only artifacts:")
         for item in manifest["review_only_runtime_artifacts"]:
             lines.append(f"  - `{item}`")
+    if manifest.get("promotable_runtime_candidates"):
+        lines.append("- promotable runtime candidates:")
+        for item in manifest["promotable_runtime_candidates"]:
+            lines.append(f"  - `{item}`")
     lines.append("- minimum verify commands:")
     for item in manifest["minimum_verify_commands"]:
         lines.append(f"  - `{item}`")
+    if manifest.get("promotion_blockers"):
+        lines.append("- promotion blockers:")
+        for item in manifest["promotion_blockers"]:
+            lines.append(f"  - {item}")
+    lines.append(f"- promotion_ready: `{manifest.get('promotion_ready')}`")
     if report.get("why_patch_was_not_applied"):
         lines.extend(["", "## Patch Apply Recovery", "", f"- {report['why_patch_was_not_applied']}"])
     write_text(audit_dir / "self-improve-report.md", "\n".join(lines) + "\n")
