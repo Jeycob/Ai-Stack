@@ -1315,6 +1315,190 @@ def generic_acceptance_evidence_plan(
     ]
 
 
+def self_improve_patch_proposal_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "target_capability_name": {"type": "string"},
+            "acceptance_criteria": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "proposed_file_changes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "path": {"type": "string"},
+                        "change_type": {"type": "string"},
+                        "intent": {"type": "string"},
+                    },
+                    "required": ["path", "intent"],
+                },
+            },
+            "codex_local_tasks": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "senior_codex_tasks": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["proposed_file_changes"],
+    }
+
+
+def normalize_acceptance_criteria(candidate: Any, fallback: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in list(candidate or []) + list(fallback or []):
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        merged.append(text)
+    return merged
+
+
+def normalize_offload_tasks(candidate: Any, fallback: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in list(candidate or []) + list(fallback or []):
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        merged.append(text)
+    return merged
+
+
+def normalize_proposed_file_changes(candidate: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_item(item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        path = str(item.get("path") or "").strip()
+        intent = str(item.get("intent") or "").strip()
+        change_type = str(item.get("change_type") or "update").strip() or "update"
+        if not path or not intent or path in seen or not patch_path_allowed(path):
+            return
+        seen.add(path)
+        merged.append(
+            {
+                "path": path,
+                "change_type": change_type,
+                "intent": intent,
+            }
+        )
+
+    for item in candidate or []:
+        add_item(item)
+    for item in fallback or []:
+        add_item(item)
+    return merged
+
+
+def self_improve_patch_proposal_messages(
+    args: argparse.Namespace,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+    fallback_proposal: dict[str, Any],
+) -> list[dict[str, str]]:
+    transcript_goal = (
+        args.feature_request
+        or args.prompt
+        or str((reasoning.get("task_spec") or {}).get("user_goal") or "")
+        or str(diagnosis.get("expected_behavior") or "")
+        or "Prepare a bounded codex-local patch proposal."
+    )
+    regression_cases = [
+        {
+            "name": case.get("name"),
+            "expected_workflow": case.get("expected_workflow"),
+            "expected_capability": case.get("expected_capability"),
+            "expected_marker": case.get("expected_marker"),
+        }
+        for case in (regression.get("cases") or [])
+        if isinstance(case, dict)
+    ]
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are codex-local in patch-planning mode for agent_self_improve. "
+                "Return JSON only. Do not explain. "
+                "Propose the smallest bounded ai-stack patch plan that fixes the diagnosed issue or develops the requested capability. "
+                "Prefer TaskSpec/capability semantics over keyword routing. "
+                "Touch only safe ai-stack paths under codex/bin/, codex/gateway/, docs/, or the root files README.md, docker-compose.yml, start_docker.bat. "
+                "Never include .env, secrets, tokens, private keys, codex/state/, codex/audit/, or logs/."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Workspace: {args.workspace}\n"
+                f"Goal:\n{transcript_goal}\n\n"
+                f"Diagnosis:\n{json.dumps(diagnosis, ensure_ascii=False)}\n\n"
+                f"TaskSpec:\n{json.dumps(reasoning.get('task_spec') or {}, ensure_ascii=False)}\n\n"
+                f"Regression cases:\n{json.dumps(regression_cases, ensure_ascii=False)}\n\n"
+                f"Fallback proposal:\n{json.dumps(fallback_proposal, ensure_ascii=False)}\n\n"
+                "Return a bounded patch proposal JSON with safe file changes, acceptance criteria, and offload split."
+            ),
+        },
+    ]
+
+
+def llm_patch_proposal(
+    args: argparse.Namespace,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+    fallback_proposal: dict[str, Any],
+) -> dict[str, Any]:
+    helpers = gateway_reasoning_helpers()
+    if not helpers.get("ok"):
+        return {
+            "ok": False,
+            "planner": "llm_patch_proposal_runtime",
+            "error": helpers.get("error") or "gateway_reasoning_helpers_unavailable",
+        }
+    if env_truthy("AGENT_SELF_IMPROVE_SMOKE_RUNNING") or env_truthy("AGENT_SELF_IMPROVE_DISABLE_LLM_PATCH_PROPOSAL"):
+        return {
+            "ok": False,
+            "planner": "llm_patch_proposal_runtime",
+            "error": "llm_patch_proposal_disabled",
+        }
+    prompt = args.feature_request or args.prompt or str((reasoning.get("task_spec") or {}).get("user_goal") or "")
+    messages = self_improve_patch_proposal_messages(args, diagnosis, regression, reasoning, fallback_proposal)
+    model_id = helpers["codex_local_runtime_model_name"](task=prompt, role=helpers["ROLE_PLANNER"])
+    try:
+        parsed, raw, _meta = helpers["structured_json_chat"](
+            model_id,
+            messages,
+            "agent_self_improve_patch_proposal",
+            self_improve_patch_proposal_schema(),
+            timeout=min(args.command_timeout, 60),
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "planner": "llm_patch_proposal_runtime",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "ok": True,
+        "planner": "llm_patch_proposal_runtime",
+        "raw": raw,
+        "proposal": parsed if isinstance(parsed, dict) else {},
+    }
+
+
 def propose_patch(
     args: argparse.Namespace,
     audit_dir: Path,
@@ -1325,10 +1509,50 @@ def propose_patch(
     patch_text = read_text(Path(args.patch_file)) if args.patch_file else ""
     paths = changed_paths_from_patch(patch_text) if patch_text else []
     capability_plan = capability_development_plan(args, diagnosis, regression) if args.mode == "capability_develop" or args.capability_name else None
-    file_change_plan = proposal_change_plan(args, diagnosis, regression, reasoning, capability_plan)
-    offload_split = proposal_offload_split(capability_plan)
+    fallback_file_change_plan = proposal_change_plan(args, diagnosis, regression, reasoning, capability_plan)
+    fallback_offload_split = proposal_offload_split(capability_plan)
     task_spec = reasoning.get("task_spec") or {}
-    acceptance_criteria = task_spec.get("acceptance_criteria") or []
+    fallback_acceptance_criteria = list(task_spec.get("acceptance_criteria") or [])
+    fallback_proposal = {
+        "target_capability_name": capability_plan.get("capability_name") if capability_plan else "",
+        "acceptance_criteria": fallback_acceptance_criteria,
+        "proposed_file_changes": fallback_file_change_plan,
+        "codex_local_tasks": fallback_offload_split["codex_local"],
+        "senior_codex_tasks": fallback_offload_split["senior_codex"],
+    }
+    source = "deterministic_fallback"
+    llm_raw = ""
+    llm_error = ""
+    llm_result = llm_patch_proposal(args, diagnosis, regression, reasoning, fallback_proposal)
+    if llm_result.get("ok"):
+        source = str(llm_result.get("planner") or "llm_patch_proposal_runtime")
+        llm_raw = str(llm_result.get("raw") or "")
+    else:
+        if str(llm_result.get("error") or ""):
+            source = "structured_patch_proposal_runtime_fallback"
+            llm_error = str(llm_result.get("error") or "")
+    candidate = llm_result.get("proposal") if llm_result.get("ok") else {}
+    acceptance_criteria = normalize_acceptance_criteria(
+        candidate.get("acceptance_criteria") if isinstance(candidate, dict) else [],
+        fallback_acceptance_criteria,
+    )
+    file_change_plan = normalize_proposed_file_changes(
+        candidate.get("proposed_file_changes") if isinstance(candidate, dict) else [],
+        fallback_file_change_plan,
+    )
+    offload_split = {
+        "codex_local": normalize_offload_tasks(
+            candidate.get("codex_local_tasks") if isinstance(candidate, dict) else [],
+            fallback_offload_split["codex_local"],
+        ),
+        "senior_codex": normalize_offload_tasks(
+            candidate.get("senior_codex_tasks") if isinstance(candidate, dict) else [],
+            fallback_offload_split["senior_codex"],
+        ),
+    }
+    target_capability_name = capability_plan.get("capability_name") if capability_plan else ""
+    if not target_capability_name and isinstance(candidate, dict):
+        target_capability_name = slugify(str(candidate.get("target_capability_name") or "").strip(), "")
     if capability_plan:
         acceptance_evidence_plan = capability_acceptance_evidence_plan(capability_plan["capability_name"], acceptance_criteria)
     else:
@@ -1336,6 +1560,7 @@ def propose_patch(
     proposal = {
         "ok": True,
         "phase": "propose_patch",
+        "source": source,
         "has_patch_file": bool(args.patch_file),
         "patch_file": args.patch_file,
         "changed_paths": paths,
@@ -1343,7 +1568,7 @@ def propose_patch(
         "minimal_patch_scope": diagnosis.get("patch_scope") or [],
         "reasoning_task_spec": reasoning.get("task_spec") or {},
         "capability_development": capability_plan,
-        "target_capability_name": capability_plan.get("capability_name") if capability_plan else "",
+        "target_capability_name": target_capability_name,
         "acceptance_criteria": acceptance_criteria,
         "acceptance_evidence_plan": acceptance_evidence_plan,
         "proposed_file_changes": file_change_plan,
@@ -1370,6 +1595,10 @@ def propose_patch(
             "No patch file supplied. Use this proposal to ask codex-local for a unified diff, "
             "review it, then rerun self-improve with --patch-file and --mode patch/full."
         )
+    if llm_raw:
+        proposal["llm_raw"] = llm_raw
+    if llm_error:
+        proposal["llm_error"] = llm_error
     write_json(audit_dir / "patch-proposal.json", proposal)
     markdown = [
         "# Agent Self-Improve Patch Proposal",

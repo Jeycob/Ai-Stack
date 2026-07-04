@@ -324,6 +324,149 @@ def run_llm_regression_falls_back_cleanly() -> None:
     with_gateway_helpers(helpers, run)
 
 
+def run_llm_patch_proposal_uses_runtime_output() -> None:
+    transcript = {
+        "id": "chat-patch-proposal",
+        "messages": [
+            {"role": "user", "content": "repo: ai-stack\npridej capability workspace_profile pro bounded workspace profile"},
+        ],
+    }
+    diagnosis = asi.classify_failure("missing capability workspace_profile", "", "")
+    regression = asi.build_regression(transcript, diagnosis, make_args())
+    args = make_args(
+        mode="capability_develop",
+        capability_name="workspace_profile",
+        target_capability_name="workspace_profile",
+        feature_request="Add bounded workspace profiling capability.",
+    )
+    reasoning = {
+        "task_spec": {
+            "current_workspace": "ai-stack",
+            "user_goal": "Add bounded workspace profiling capability.",
+            "target_capability_name": "workspace_profile",
+            "required_capabilities": ["agent_capability_develop"],
+            "acceptance_criteria": [
+                "TaskSpec includes target_capability_name when a capability is being developed.",
+                "Generated patch is a unified diff, touches only allowed paths, and passes git apply --check before any apply.",
+            ],
+        }
+    }
+
+    def fake_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
+        return (
+            {
+                "target_capability_name": "workspace_profile",
+                "acceptance_criteria": [
+                    "Capability appears in roadmap or draft artifact with scope, preconditions, executor plan, recovery and tests."
+                ],
+                "proposed_file_changes": [
+                    {
+                        "path": "codex/gateway/gateway.py",
+                        "change_type": "update",
+                        "intent": "Wire the canonical capability into registry and workflow mapping.",
+                    },
+                    {
+                        "path": ".env",
+                        "change_type": "update",
+                        "intent": "This must be dropped by normalization.",
+                    },
+                ],
+                "codex_local_tasks": [
+                    "Draft capability registry/test/docs delta",
+                ],
+                "senior_codex_tasks": [
+                    "Review runtime gateway wiring before promotion",
+                ],
+            },
+            '{"target_capability_name":"workspace_profile"}',
+            {},
+        )
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": fake_structured_json_chat,
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "agent_capability_develop\nworkspace_profile",
+        "extract_unified_diff": lambda text: text,
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        with tempfile.TemporaryDirectory(prefix="asi-patch-proposal-") as tmp:
+            result = asi.propose_patch(args, Path(tmp), diagnosis, regression, reasoning)
+            if result.get("source") != "llm_patch_proposal_runtime":
+                raise SystemExit(f"expected llm patch proposal source, got {result!r}")
+            if result.get("target_capability_name") != "workspace_profile":
+                raise SystemExit(f"expected target capability name in proposal, got {result!r}")
+            file_changes = result.get("proposed_file_changes") or []
+            if not any(item.get("path") == "codex/gateway/gateway.py" for item in file_changes if isinstance(item, dict)):
+                raise SystemExit(f"expected llm-selected gateway change, got {result!r}")
+            if any(item.get("path") == ".env" for item in file_changes if isinstance(item, dict)):
+                raise SystemExit(f"blocked file should have been dropped from proposal, got {result!r}")
+            acceptance = result.get("acceptance_criteria") or []
+            if "TaskSpec includes target_capability_name when a capability is being developed." not in acceptance:
+                raise SystemExit(f"expected fallback acceptance criteria to be preserved, got {result!r}")
+            if "Capability appears in roadmap or draft artifact with scope, preconditions, executor plan, recovery and tests." not in acceptance:
+                raise SystemExit(f"expected llm acceptance criteria to merge in, got {result!r}")
+            if not result.get("llm_raw"):
+                raise SystemExit(f"expected raw llm proposal artifact, got {result!r}")
+            print("AGENT_SELF_IMPROVE_LLM_PATCH_PROPOSAL_OK")
+
+    with_gateway_helpers(helpers, run)
+
+
+def run_llm_patch_proposal_falls_back_cleanly() -> None:
+    transcript = {
+        "id": "chat-patch-proposal-fallback",
+        "messages": [
+            {"role": "user", "content": "repo: Test2\nvytvor tam ssh klic a vypis mi public"},
+        ],
+    }
+    diagnosis = asi.classify_failure("unsupported capability workspace_ssh_key_create", "", "")
+    regression = asi.build_regression(transcript, diagnosis, make_args())
+    args = make_args(prompt="repo: Test2\nvytvor tam ssh klic a vypis mi public")
+    reasoning = {
+        "task_spec": {
+            "current_workspace": "Test2",
+            "user_goal": "vytvor tam ssh klic a vypis mi public",
+            "required_capabilities": ["ssh_key_show_public"],
+            "acceptance_criteria": ["A regression artifact exists before any patch is applied."],
+        }
+    }
+
+    def failing_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
+        raise RuntimeError("patch proposal backend unavailable")
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": failing_structured_json_chat,
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "ssh_key_show_public",
+        "extract_unified_diff": lambda text: text,
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        with tempfile.TemporaryDirectory(prefix="asi-patch-proposal-fallback-") as tmp:
+            result = asi.propose_patch(args, Path(tmp), diagnosis, regression, reasoning)
+            if result.get("source") != "structured_patch_proposal_runtime_fallback":
+                raise SystemExit(f"expected fallback patch proposal source, got {result!r}")
+            file_changes = result.get("proposed_file_changes") or []
+            if not any(item.get("path") == "codex/gateway/gateway.py" for item in file_changes if isinstance(item, dict)):
+                raise SystemExit(f"expected deterministic fallback file changes, got {result!r}")
+            if "patch proposal backend unavailable" not in str(result.get("llm_error") or ""):
+                raise SystemExit(f"expected llm error detail in fallback proposal, got {result!r}")
+            print("AGENT_SELF_IMPROVE_LLM_PATCH_PROPOSAL_FALLBACK_OK")
+
+    with_gateway_helpers(helpers, run)
+
+
 def run_llm_reasoning_falls_back_cleanly() -> None:
     transcript = {
         "id": "chat-test",
@@ -478,6 +621,8 @@ def main() -> int:
     run_llm_diagnosis_falls_back_cleanly()
     run_llm_regression_uses_runtime_output()
     run_llm_regression_falls_back_cleanly()
+    run_llm_patch_proposal_uses_runtime_output()
+    run_llm_patch_proposal_falls_back_cleanly()
     run_llm_reasoning_uses_gateway_normalizer()
     run_llm_reasoning_falls_back_cleanly()
     run_llm_diff_generation_uses_runtime_draft()
