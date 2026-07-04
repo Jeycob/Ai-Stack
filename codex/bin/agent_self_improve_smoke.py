@@ -225,10 +225,13 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected applicable generated diff, got {generated!r}")
         safe_apply_patch_file = Path(str(generated.get("safe_apply_candidate_patch_file") or ""))
         review_only_patch_file = Path(str(generated.get("review_only_patch_file") or ""))
+        promotable_runtime_patch_file = Path(str(generated.get("promotable_runtime_patch_file") or ""))
         if not safe_apply_patch_file.is_file():
             raise SystemExit(f"expected safe apply candidate patch file, got {generated!r}")
         if not review_only_patch_file.is_file():
             raise SystemExit(f"expected review-only patch file, got {generated!r}")
+        if not promotable_runtime_patch_file.is_file():
+            raise SystemExit(f"expected promotable runtime patch file, got {generated!r}")
         if report.get("target_capability_name") != "workspace_profile":
             raise SystemExit(f"expected report to expose target capability, got {report!r}")
         readiness = report.get("capability_patch_readiness") or {}
@@ -265,6 +268,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected safe apply patch file in manifest, got {manifest!r}")
         if str(manifest.get("review_only_patch_file") or "") != str(review_only_patch_file):
             raise SystemExit(f"expected review-only patch file in manifest, got {manifest!r}")
+        if str(manifest.get("promotable_runtime_patch_file") or "") != str(promotable_runtime_patch_file):
+            raise SystemExit(f"expected promotable runtime patch file in manifest, got {manifest!r}")
         if manifest.get("verify_all_green") is not True:
             raise SystemExit(f"expected manifest verify_all_green flag, got {manifest!r}")
         if manifest.get("missing_acceptance_evidence") not in ([], None):
@@ -284,9 +289,12 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected safe apply patch file in report, got {report!r}")
         if str(report.get("review_only_patch_file") or "") != str(review_only_patch_file):
             raise SystemExit(f"expected review-only patch file in report, got {report!r}")
+        if str(report.get("promotable_runtime_patch_file") or "") != str(promotable_runtime_patch_file):
+            raise SystemExit(f"expected promotable runtime patch file in report, got {report!r}")
         patch_text = generated_file.read_text(encoding="utf-8")
         safe_apply_patch_text = safe_apply_patch_file.read_text(encoding="utf-8")
         review_only_patch_text = review_only_patch_file.read_text(encoding="utf-8")
+        promotable_runtime_patch_text = promotable_runtime_patch_file.read_text(encoding="utf-8")
         if "docs/capability-drafts/workspace_profile.json" not in patch_text:
             raise SystemExit(f"expected capability draft file in generated diff:\n{patch_text}")
         if "docs/capability-drafts/workspace_profile.smoke.json" not in patch_text:
@@ -363,6 +371,14 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"review-only patch should include runtime candidate artifact:\n{review_only_patch_text}")
         if "docs/capability-drafts/workspace_profile.promotion.patch.diff" not in review_only_patch_text:
             raise SystemExit(f"review-only patch should include promotion patch artifact:\n{review_only_patch_text}")
+        if "--- a/codex/gateway/gateway.py" not in promotable_runtime_patch_text:
+            raise SystemExit(f"expected promotable runtime patch to target gateway before path:\n{promotable_runtime_patch_text}")
+        if "+++ b/codex/gateway/gateway.py" not in promotable_runtime_patch_text:
+            raise SystemExit(f"expected promotable runtime patch to target gateway after path:\n{promotable_runtime_patch_text}")
+        if '"workspace_profile": "clarify"' not in promotable_runtime_patch_text:
+            raise SystemExit(f"expected capability workflow mapping in promotable runtime patch diff:\n{promotable_runtime_patch_text}")
+        if '"implemented": False' not in promotable_runtime_patch_text:
+            raise SystemExit(f"expected promotable runtime patch to stay in draft state:\n{promotable_runtime_patch_text}")
         print("AGENT_SELF_IMPROVE_CAPABILITY_DEVELOP_OK")
 
 
@@ -392,6 +408,8 @@ def run_generate_unified_diff_mode() -> None:
             raise SystemExit(f"expected safe apply candidate patch file in generated diff result, got {generated!r}")
         if not generated.get("review_only_patch_file"):
             raise SystemExit(f"expected review-only patch file in generated diff result, got {generated!r}")
+        if not generated.get("promotable_runtime_patch_file"):
+            raise SystemExit(f"expected promotable runtime patch file in generated diff result, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.json" not in paths:
             raise SystemExit(f"expected capability draft path in generated diff, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.smoke.json" not in paths:

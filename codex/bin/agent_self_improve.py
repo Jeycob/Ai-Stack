@@ -968,6 +968,7 @@ def capability_acceptance_evidence_plan(capability: str, acceptance: list[str]) 
                 "AUDIT:generated-unified.diff",
                 "AUDIT:safe-apply-candidate.diff",
                 "AUDIT:review-only-patch.diff",
+                "AUDIT:runtime-promotable-candidate.diff",
                 f"docs/capability-drafts/{capability}.promotion.patch.diff",
             ],
             "verify_commands": verify_commands,
@@ -2021,10 +2022,7 @@ def insert_into_dict_assignment(text: str, var_name: str, entry_text: str, marke
     return prefix + entry_text + suffix
 
 
-def capability_runtime_promotion_patch_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
-    rel = f"docs/capability-drafts/{capability}.promotion.patch.diff"
-    path = ROOT / rel
-    before = read_text(path) if path.is_file() else ""
+def capability_runtime_promotion_patch_text(capability: str, feature_request: str, reasoning: dict[str, Any]) -> str:
     gateway_rel = "codex/gateway/gateway.py"
     gateway_path = ROOT / gateway_rel
     gateway_before = read_text(gateway_path)
@@ -2069,8 +2067,14 @@ def capability_runtime_promotion_patch_file(capability: str, feature_request: st
             f'"{capability}": "{capability}"',
         )
 
-    promotion_diff = unified_diff_for_file(gateway_rel, gateway_before, gateway_after)
-    after = promotion_diff
+    return unified_diff_for_file(gateway_rel, gateway_before, gateway_after)
+
+
+def capability_runtime_promotion_patch_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.promotion.patch.diff"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    after = capability_runtime_promotion_patch_text(capability, feature_request, reasoning)
     return rel, unified_diff_for_file(rel, before, after)
 
 
@@ -2475,40 +2479,54 @@ def generate_unified_diff(
             "new_capability",
         )
         feature_request = args.feature_request or args.prompt or str(task_spec.get("user_goal") or "")
+        capability_mode = bool(
+            proposal.get("capability_development")
+            or args.mode == "capability_develop"
+            or args.capability_name
+            or args.target_capability_name
+        )
         llm_attempt = llm_generated_unified_diff(args, diagnosis, regression, reasoning, proposal)
-        patch_text = ""
-        source = "llm_unified_diff"
-        if llm_attempt.get("ok"):
-            candidate_text = str(llm_attempt.get("patch_text") or "")
-            candidate_check = check_patch_text(candidate_text, args.command_timeout) if candidate_text else {"ok": False}
-            llm_attempt["check"] = candidate_check
-            if candidate_check.get("ok"):
-                patch_text = candidate_text
-            else:
-                llm_attempt["error"] = candidate_check.get("message") or "llm_diff_failed_check"
-        if not patch_text:
-            patch_parts: list[str] = []
-            if proposal.get("capability_development") or args.mode == "capability_develop" or args.capability_name or args.target_capability_name:
-                for rel, diff in (
-                    roadmap_with_capability(capability, feature_request, reasoning),
-                    capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
-                    capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
-                    capability_gateway_integration_file(capability, feature_request, reasoning),
-                    capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
-                    capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
-                    capability_runtime_promotion_patch_file(capability, feature_request, reasoning),
-                    capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
-                    capability_executor_contract_file(capability, feature_request, reasoning),
-                    capability_executor_dispatch_file(capability, feature_request, reasoning),
-                    capability_implementation_workorder_file(capability, feature_request, diagnosis, regression, reasoning),
-                    capability_executor_stub_file(capability, feature_request, reasoning),
-                    capability_runtime_hook_stub_file(capability, feature_request, reasoning),
-                    capability_smoke_stub_file(capability, feature_request, reasoning),
-                ):
-                    if diff:
-                        patch_parts.append(diff)
-                source = "capability_development_template"
-            else:
+        patch_parts: list[str] = []
+        if capability_mode:
+            source = "capability_development_template"
+            patch_text = ""
+            if llm_attempt.get("ok"):
+                candidate_text = str(llm_attempt.get("patch_text") or "")
+                candidate_check = check_patch_text(candidate_text, args.command_timeout) if candidate_text else {"ok": False}
+                llm_attempt["check"] = candidate_check
+                if not candidate_check.get("ok"):
+                    llm_attempt["error"] = candidate_check.get("message") or "llm_diff_failed_check"
+            for rel, diff in (
+                roadmap_with_capability(capability, feature_request, reasoning),
+                capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_gateway_integration_file(capability, feature_request, reasoning),
+                capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
+                capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
+                capability_runtime_promotion_patch_file(capability, feature_request, reasoning),
+                capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_executor_contract_file(capability, feature_request, reasoning),
+                capability_executor_dispatch_file(capability, feature_request, reasoning),
+                capability_implementation_workorder_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_executor_stub_file(capability, feature_request, reasoning),
+                capability_runtime_hook_stub_file(capability, feature_request, reasoning),
+                capability_smoke_stub_file(capability, feature_request, reasoning),
+            ):
+                if diff:
+                    patch_parts.append(diff)
+            patch_text = "".join(patch_parts)
+        else:
+            patch_text = ""
+            source = "llm_unified_diff"
+            if llm_attempt.get("ok"):
+                candidate_text = str(llm_attempt.get("patch_text") or "")
+                candidate_check = check_patch_text(candidate_text, args.command_timeout) if candidate_text else {"ok": False}
+                llm_attempt["check"] = candidate_check
+                if candidate_check.get("ok"):
+                    patch_text = candidate_text
+                else:
+                    llm_attempt["error"] = candidate_check.get("message") or "llm_diff_failed_check"
+            if not patch_text:
                 regression_slug = failure_case_slug(regression, diagnosis, reasoning)
                 for rel, diff in (
                     failure_regression_case_file(regression_slug, diagnosis, regression, reasoning),
@@ -2520,7 +2538,7 @@ def generate_unified_diff(
                     if diff:
                         patch_parts.append(diff)
                 source = "failure_regression_template"
-            patch_text = "".join(patch_parts)
+                patch_text = "".join(patch_parts)
 
     patch_file = audit_dir / "generated-unified.diff"
     if patch_text:
@@ -2538,6 +2556,18 @@ def generate_unified_diff(
         review_only_patch_file = audit_dir / "runtime-review-only.diff"
         safe_apply_patch_text = filter_patch_text(patch_text, set(safe_apply_paths)) if safe_apply_paths else ""
         review_only_patch_text = filter_patch_text(patch_text, set(review_only_paths)) if review_only_paths else ""
+        promotable_runtime_patch_file = audit_dir / "runtime-promotable-candidate.diff"
+        promotable_runtime_patch_text = ""
+        promotable_runtime_patch_check: dict[str, Any] = {}
+        if (
+            not args.patch_file
+            and source == "capability_development_template"
+            and capability_mode
+        ):
+            promotable_runtime_patch_text = capability_runtime_promotion_patch_text(capability, feature_request, reasoning)
+            promotable_runtime_patch_check = check_patch_text(promotable_runtime_patch_text, args.command_timeout)
+            if promotable_runtime_patch_check.get("ok"):
+                write_text(promotable_runtime_patch_file, promotable_runtime_patch_text)
         if safe_apply_patch_text:
             write_text(safe_apply_patch_file, safe_apply_patch_text)
         if review_only_patch_text:
@@ -2560,6 +2590,17 @@ def generate_unified_diff(
             "review_only_patch_sha256": (
                 hashlib.sha256(review_only_patch_text.encode("utf-8")).hexdigest() if review_only_patch_text else ""
             ),
+            "promotable_runtime_patch_file": (
+                str(promotable_runtime_patch_file)
+                if promotable_runtime_patch_text and promotable_runtime_patch_check.get("ok")
+                else ""
+            ),
+            "promotable_runtime_patch_sha256": (
+                hashlib.sha256(promotable_runtime_patch_text.encode("utf-8")).hexdigest()
+                if promotable_runtime_patch_text and promotable_runtime_patch_check.get("ok")
+                else ""
+            ),
+            "promotable_runtime_patch_check": promotable_runtime_patch_check,
             "git_apply_check_exit_code": check.get("git_apply_check_exit_code"),
             "git_apply_check_output": check.get("git_apply_check_output"),
             "message": check.get("message") or "Generated unified diff passed git apply --check.",
@@ -3037,6 +3078,8 @@ def evidence_artifact_present(name: str, generated_diff_result: dict[str, Any]) 
             return bool(generated_diff_result.get("safe_apply_candidate_patch_file"))
         if marker == "review-only-patch.diff":
             return bool(generated_diff_result.get("review_only_patch_file"))
+        if marker == "runtime-promotable-candidate.diff":
+            return bool(generated_diff_result.get("promotable_runtime_patch_file"))
         if marker == "guarded-apply-manifest.json":
             return True
         if marker == "self-improve-report.json":
@@ -3136,6 +3179,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
         "safe_apply_candidate_paths": generated_diff_result.get("safe_apply_candidate_paths") or [],
         "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
         "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
+        "promotable_runtime_patch_file": generated_diff_result.get("promotable_runtime_patch_file") or "",
         "generated_artifacts": generated_artifacts,
         "patch_application_decision": (
             "applied"
@@ -3205,6 +3249,9 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         "safe_apply_candidate_patch_sha256": generated_diff_result.get("safe_apply_candidate_patch_sha256") or "",
         "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
         "review_only_patch_sha256": generated_diff_result.get("review_only_patch_sha256") or "",
+        "promotable_runtime_patch_file": generated_diff_result.get("promotable_runtime_patch_file") or "",
+        "promotable_runtime_patch_sha256": generated_diff_result.get("promotable_runtime_patch_sha256") or "",
+        "promotable_runtime_patch_check": generated_diff_result.get("promotable_runtime_patch_check") or {},
         "decision": decision,
         "safe_apply_candidate_paths": safe_apply_candidate_paths,
         "review_only_runtime_artifacts": review_only_artifacts,
@@ -3251,6 +3298,7 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         ),
         "manual_promotion_steps": [
             "Review runtime patch candidate diff against current gateway.py.",
+            "Start from runtime-promotable-candidate.diff when available; it is already extracted as a direct patch draft.",
             "Promote only the approved hunk set into a guarded unified diff patch file.",
             "Run the minimum verify commands again on the promoted patch.",
             "Run live gateway_runtime_fingerprint_check.py before and after deploy.",
@@ -3381,6 +3429,8 @@ def write_final_report(
         lines.append("- none")
     lines.extend(["", "## Review-Only Patch Bundle", ""])
     lines.append(f"- patch_file: `{report.get('review_only_patch_file') or '-'}`")
+    lines.extend(["", "## Promotable Runtime Patch Draft", ""])
+    lines.append(f"- patch_file: `{report.get('promotable_runtime_patch_file') or '-'}`")
     lines.extend(["", "## Artifacts", ""])
     for item in report["generated_artifacts"]:
         lines.append(f"- `{item}`")
@@ -3404,6 +3454,8 @@ def write_final_report(
         lines.append("- promotable runtime candidates:")
         for item in manifest["promotable_runtime_candidates"]:
             lines.append(f"  - `{item}`")
+    if manifest.get("promotable_runtime_patch_file"):
+        lines.append(f"- promotable runtime patch file: `{manifest.get('promotable_runtime_patch_file')}`")
     lines.append("- minimum verify commands:")
     for item in manifest["minimum_verify_commands"]:
         lines.append(f"  - `{item}`")
@@ -3803,6 +3855,7 @@ def main() -> int:
             "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
             "review_only_runtime_artifacts": generated_diff_result.get("review_only_runtime_artifacts") or [],
             "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
+            "promotable_runtime_patch_file": generated_diff_result.get("promotable_runtime_patch_file") or "",
             "source": generated_diff_result.get("source"),
         },
         "patch": patch_result,
