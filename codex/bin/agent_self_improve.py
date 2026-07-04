@@ -604,6 +604,12 @@ def proposal_change_plan(
                 "acceptance_criteria": acceptance,
             },
             {
+                "path": f"docs/capability-drafts/{capability}.executor-contract.json",
+                "change_type": "create_or_update",
+                "intent": "Define explicit executor inputs, preconditions, return schema and recovery contract for the new capability.",
+                "acceptance_criteria": acceptance,
+            },
+            {
                 "path": f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 "change_type": "create_or_update",
                 "intent": "Provide a bounded executor stub that codex-local can extend into a real capability implementation.",
@@ -833,6 +839,94 @@ def capability_draft_shape(capability: str, feature_request: str, reasoning: dic
     }
 
 
+def capability_executor_contract(capability: str, feature_request: str, reasoning: dict[str, Any]) -> dict[str, Any]:
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    desired_end_state = task_spec.get("desired_end_state") or ""
+    workspace_scoped = shape["scope"].startswith("workspace")
+    requires_manual_gate = shape["scope"] == "stack_runtime"
+    inputs = []
+    if workspace_scoped:
+        inputs.append({"name": "workspace", "type": "string", "required": True, "source": "resolved workspace context"})
+    if task_spec.get("target_capability_name"):
+        inputs.append({"name": "target_capability_name", "type": "string", "required": True, "source": "TaskSpec"})
+    if task_spec.get("remote_url"):
+        inputs.append({"name": "remote_url", "type": "string", "required": False, "source": "TaskSpec"})
+    if not inputs:
+        inputs.append({"name": "request", "type": "object", "required": True, "source": "TaskSpec + runtime context"})
+    preconditions = [
+        "Capability name is canonicalized before registry lookup.",
+        "TaskSpec desired_end_state is populated.",
+        "Unknown capabilities fail closed as NEEDS_ATTENTION.",
+    ]
+    if workspace_scoped:
+        preconditions.append("Resolved workspace exists in codex/workspaces.json or a bootstrap step has already created it.")
+    if requires_manual_gate:
+        preconditions.append("Runtime/source fingerprint gate must be green before deploy or E2E.")
+    recovery = [
+        "On missing bounded executor, keep capability non-implemented and return MANUAL_STEP_REQUIRED with the generated draft bundle.",
+        "On verify failure, feed failing verify output into the next max_cycles iteration.",
+        "Never replace the user's goal with a different workflow just because one capability is missing.",
+    ]
+    return_schema = {
+        "ok": "bool",
+        "capability": capability,
+        "workflow": shape["planned_workflow"],
+        "desired_end_state": desired_end_state,
+        "summary": "short execution or blocker summary",
+        "artifacts": ["optional generated paths or runtime references"],
+        "recovery": "next safe step if blocked",
+    }
+    return {
+        "kind": "codex-local-capability-executor-contract",
+        "capability_name": capability,
+        "scope": shape["scope"],
+        "planned_workflow": shape["planned_workflow"],
+        "executor_pattern": shape["executor"],
+        "requires_manual_gate": requires_manual_gate,
+        "inputs": inputs,
+        "preconditions": preconditions,
+        "return_schema": return_schema,
+        "recovery_contract": recovery,
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "generated_by": "agent_self_improve.generate_unified_diff",
+    }
+
+
+def capability_test_matrix(capability: str, feature_request: str, reasoning: dict[str, Any]) -> dict[str, Any]:
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    return {
+        "kind": "codex-local-capability-test-matrix",
+        "capability_name": capability,
+        "workflow": shape["planned_workflow"],
+        "scenarios": [
+            {
+                "name": "taskspec_canonicalization",
+                "goal": "TaskSpec normalization preserves target_capability_name and selects the canonical capability.",
+                "expected": {"required_capabilities": [capability]},
+            },
+            {
+                "name": "registry_contract",
+                "goal": "Roadmap-backed registry entry exposes aliases, workflow and implemented=false draft state.",
+                "expected": {"implemented": False, "draft": True, "planned_workflow": shape["planned_workflow"]},
+            },
+            {
+                "name": "guarded_diff_generation",
+                "goal": "Generated diff remains within allowed ai-stack paths and passes git apply --check.",
+                "expected": {"git_apply_check_exit_code": 0},
+            },
+            {
+                "name": "runtime_recovery",
+                "goal": "If the executor remains unimplemented, runtime returns MANUAL_STEP_REQUIRED or NEEDS_ATTENTION instead of hallucinated success.",
+                "expected": {"manual_or_needs_attention": True},
+            },
+        ],
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "generated_by": "agent_self_improve.generate_unified_diff",
+    }
+
+
 def roadmap_with_capability(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
     rel = "docs/codex-local-capability-roadmap.json"
     path = ROOT / rel
@@ -892,6 +986,8 @@ def capability_draft_file(capability: str, feature_request: str, diagnosis: dict
             "planned_workflow": shape["planned_workflow"],
             "note": "The draft stays non-implemented until senior review approves a bounded executor or pattern reuse.",
         },
+        "executor_contract": capability_executor_contract(capability, feature_request, reasoning),
+        "test_matrix": capability_test_matrix(capability, feature_request, reasoning),
         "executor_plan": [
             f"Preferred executor pattern: {shape['executor']}.",
             "Define explicit inputs and preconditions.",
@@ -944,6 +1040,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
                 f"docs/capability-drafts/{capability}.gateway.patch.md",
                 f"docs/capability-drafts/{capability}.runtime.patch.diff",
                 f"docs/capability-drafts/{capability}.wiring.json",
+                f"docs/capability-drafts/{capability}.executor-contract.json",
                 f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
                 f"codex/bin/capability_drafts/{capability}_smoke.py",
@@ -1025,6 +1122,16 @@ def capability_wiring_blueprint_file(
                 ],
                 "responsibility": "Generated diff shape, guarded patch path, and self-improve offload contract.",
             },
+            {
+                "file": f"docs/capability-drafts/{capability}.executor-contract.json",
+                "symbols": [
+                    "inputs",
+                    "preconditions",
+                    "return_schema",
+                    "recovery_contract",
+                ],
+                "responsibility": "Concrete executor contract for follow-up implementation and review.",
+            },
         ],
         "implementation_steps": [
             "Add or confirm canonical capability name and aliases in the registry source of truth.",
@@ -1058,6 +1165,14 @@ def capability_wiring_blueprint_file(
         "diagnosis_category": diagnosis.get("category"),
     }
     after = json.dumps(blueprint, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def capability_executor_contract_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.executor-contract.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    after = json.dumps(capability_executor_contract(capability, feature_request, reasoning), ensure_ascii=False, indent=2) + "\n"
     return rel, unified_diff_for_file(rel, before, after)
 
 
@@ -1231,6 +1346,7 @@ def capability_executor_stub_file(capability: str, feature_request: str, reasoni
     task_spec = reasoning.get("task_spec") or {}
     shape = capability_draft_shape(capability, feature_request, reasoning)
     acceptance = task_spec.get("acceptance_criteria") or []
+    executor_contract = capability_executor_contract(capability, feature_request, reasoning)
     payload = {
         "capability_name": capability,
         "scope": shape["scope"],
@@ -1240,6 +1356,9 @@ def capability_executor_stub_file(capability: str, feature_request: str, reasoni
         "aliases": shape["aliases"],
         "desired_end_state": task_spec.get("desired_end_state") or "",
         "acceptance_criteria": acceptance,
+        "inputs": executor_contract.get("inputs") or [],
+        "preconditions": executor_contract.get("preconditions") or [],
+        "return_schema": executor_contract.get("return_schema") or {},
     }
     after = (
         "#!/usr/bin/env python3\n"
@@ -1258,6 +1377,18 @@ def capability_executor_stub_file(capability: str, feature_request: str, reasoni
         f"SUMMARY = {shape['summary']!r}\n\n"
         "def draft_executor_spec() -> dict:\n"
         f"    return {json.dumps(payload, ensure_ascii=False, indent=4)}\n\n"
+        "def draft_execute(request: dict) -> dict:\n"
+        "    spec = draft_executor_spec()\n"
+        "    return {\n"
+        "        'ok': False,\n"
+        "        'capability': CAPABILITY_NAME,\n"
+        "        'workflow': PLANNED_WORKFLOW,\n"
+        "        'summary': 'Executor stub only; senior review must approve runtime wiring.',\n"
+        "        'artifacts': [],\n"
+        "        'recovery': 'Promote the reviewed executor contract into gateway runtime or reuse an existing bounded executor pattern.',\n"
+        "        'request': request,\n"
+        "        'spec': spec,\n"
+        "    }\n\n"
         "def main() -> int:\n"
         "    print(json.dumps(draft_executor_spec(), ensure_ascii=False, indent=2))\n"
         "    return 0\n\n"
@@ -1614,6 +1745,7 @@ def generate_unified_diff(
                 capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
                 capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
                 capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
+                capability_executor_contract_file(capability, feature_request, reasoning),
                 capability_executor_stub_file(capability, feature_request, reasoning),
                 capability_runtime_hook_stub_file(capability, feature_request, reasoning),
                 capability_smoke_stub_file(capability, feature_request, reasoning),

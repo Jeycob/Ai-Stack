@@ -961,6 +961,7 @@ def assert_capability_draft_contracts() -> None:
         gateway_patch_fragment_path = ROOT / f"docs/capability-drafts/{capability}.gateway.patch.md"
         gateway_runtime_patch_candidate_path = ROOT / f"docs/capability-drafts/{capability}.runtime.patch.diff"
         wiring_path = ROOT / f"docs/capability-drafts/{capability}.wiring.json"
+        executor_contract_path = ROOT / f"docs/capability-drafts/{capability}.executor-contract.json"
         executor_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_executor_stub.py"
         runtime_hook_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py"
         smoke_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_smoke.py"
@@ -1002,6 +1003,14 @@ def assert_capability_draft_contracts() -> None:
                 raise SystemExit(f"wiring kind mismatch for {capability}: {wiring!r}")
             if not (wiring.get("touchpoints") or []):
                 raise SystemExit(f"wiring blueprint missing touchpoints for {capability}: {wiring!r}")
+        if executor_contract_path.is_file():
+            executor_contract = json.loads(executor_contract_path.read_text(encoding="utf-8"))
+            if str(executor_contract.get("kind") or "") != "codex-local-capability-executor-contract":
+                raise SystemExit(f"executor contract kind mismatch for {capability}: {executor_contract!r}")
+            if not (executor_contract.get("inputs") or []):
+                raise SystemExit(f"executor contract missing inputs for {capability}: {executor_contract!r}")
+            if not (executor_contract.get("return_schema") or {}):
+                raise SystemExit(f"executor contract missing return schema for {capability}: {executor_contract!r}")
         if executor_stub_path.is_file():
             executor_text = executor_stub_path.read_text(encoding="utf-8")
             capability_constant = str(markers.get("executor_capability_constant") or "").strip()

@@ -187,6 +187,8 @@ def run_capability_develop_mode() -> None:
         proposed_file_changes = proposal.get("proposed_file_changes") or []
         if not any(item.get("path") == "docs/codex-local-capability-roadmap.json" for item in proposed_file_changes if isinstance(item, dict)):
             raise SystemExit(f"expected roadmap change plan in capability proposal, got {proposal!r}")
+        if not any(item.get("path") == "docs/capability-drafts/workspace_profile.executor-contract.json" for item in proposed_file_changes if isinstance(item, dict)):
+            raise SystemExit(f"expected executor contract change plan in capability proposal, got {proposal!r}")
         if not any(item.get("path") == "codex/bin/capability_drafts/workspace_profile_executor_stub.py" for item in proposed_file_changes if isinstance(item, dict)):
             raise SystemExit(f"expected executor scaffold change plan in capability proposal, got {proposal!r}")
         if proposal.get("target_capability_name") != "workspace_profile":
@@ -240,6 +242,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected capability runtime patch candidate file in generated diff:\n{patch_text}")
         if "docs/capability-drafts/workspace_profile.wiring.json" not in patch_text:
             raise SystemExit(f"expected capability wiring blueprint file in generated diff:\n{patch_text}")
+        if "docs/capability-drafts/workspace_profile.executor-contract.json" not in patch_text:
+            raise SystemExit(f"expected capability executor contract file in generated diff:\n{patch_text}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in patch_text:
             raise SystemExit(f"expected capability executor scaffold in generated diff:\n{patch_text}")
         if "codex/bin/capability_drafts/workspace_profile_runtime_hook_stub.py" not in patch_text:
@@ -256,6 +260,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected draft smoke contract metadata in generated diff:\n{patch_text}")
         if '"kind": "codex-local-capability-wiring-blueprint"' not in patch_text:
             raise SystemExit(f"expected wiring blueprint metadata in generated diff:\n{patch_text}")
+        if '"kind": "codex-local-capability-executor-contract"' not in patch_text:
+            raise SystemExit(f"expected executor contract metadata in generated diff:\n{patch_text}")
         if '"kind": "codex-local-capability-gateway-integration-draft"' not in patch_text:
             raise SystemExit(f"expected gateway integration draft metadata in generated diff:\n{patch_text}")
         if "codex-local-capability-gateway-patch-fragment" not in patch_text:
@@ -311,6 +317,8 @@ def run_generate_unified_diff_mode() -> None:
             raise SystemExit(f"expected capability runtime patch candidate path in generated diff, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.wiring.json" not in paths:
             raise SystemExit(f"expected capability wiring blueprint path in generated diff, got {generated!r}")
+        if "docs/capability-drafts/workspace_profile.executor-contract.json" not in paths:
+            raise SystemExit(f"expected capability executor contract path in generated diff, got {generated!r}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in paths:
             raise SystemExit(f"expected capability executor scaffold path in generated diff, got {generated!r}")
         if "codex/bin/capability_drafts/workspace_profile_runtime_hook_stub.py" not in paths:
