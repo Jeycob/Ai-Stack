@@ -182,9 +182,112 @@ def run_llm_reasoning_falls_back_cleanly() -> None:
     with_gateway_helpers(helpers, run)
 
 
+def run_llm_diff_generation_uses_runtime_draft() -> None:
+    diagnosis = {
+        "category": "capability_alias_or_registry_bug",
+        "root_cause": "TaskSpec capability alias was not canonicalized.",
+        "recovery": "Canonicalize before validation.",
+        "patch_scope": ["codex/gateway/gateway.py", "README.md"],
+        "expected_behavior": "ssh public key workflow resolves canonically",
+    }
+    regression = {
+        "cases": [
+            {
+                "name": "ssh_public_key_alias_test2",
+                "expected_workflow": "ssh_key_show_public",
+                "expected_capability": "ssh_key_show_public",
+                "expected_marker": "public_key_path",
+            }
+        ]
+    }
+    reasoning = {
+        "task_spec": {
+            "current_workspace": "ai-stack",
+            "user_goal": "Priprav maly patch pro canonical ssh public key capability routing.",
+            "desired_end_state": "canonical capability path works",
+            "acceptance_criteria": [
+                "Capability aliases are canonicalized before validation.",
+                "Smoke regression captures the fixed ssh public key path.",
+            ],
+        }
+    }
+    proposal = {
+        "proposed_file_changes": [
+            {"path": "README.md", "intent": "Document the fix."},
+            {"path": "codex/gateway/gateway.py", "intent": "Fix canonical capability handling."},
+        ]
+    }
+
+    diff_text = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,5 +1,6 @@
+ # AI Stack
+ 
++LLM diff draft smoke marker.
+ Lokální AI stack pro OpenWebUI, Ollama a izolované Codex/OpenCode workspaces. Repozitář slouží jako verzovaná konfigurace pro domácí AI prostředí, správu coding agentů a budoucí integrace typu Home Assistant nebo analýza výdajů.
+ 
+ ## Komponenty
+"""
+
+    def fake_ollama_chat(model_id, messages, timeout=0, response_format=None):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": f"```diff\n{diff_text}```"
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 123},
+        }
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": lambda *args, **kwargs: ({}, "{}", {}),
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "ssh_key_show_public",
+        "extract_unified_diff": lambda raw: diff_text if "diff --git" in raw else (_ for _ in ()).throw(ValueError("missing diff")),
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        from codex.gateway import gateway as gateway_module
+
+        previous_ollama_chat = gateway_module.ollama_chat
+        try:
+            gateway_module.ollama_chat = fake_ollama_chat
+            with tempfile.TemporaryDirectory(prefix="asi-llm-diff-") as tmp:
+                args = make_args(
+                    audit_root=tmp,
+                    mode="generate_unified_diff",
+                    prompt="repo: ai-stack\noprav canonical ssh key capability routing",
+                    command_timeout=120,
+                )
+                result = asi.generate_unified_diff(args, Path(tmp), diagnosis, regression, reasoning, proposal)
+                if result.get("source") != "llm_unified_diff":
+                    raise SystemExit(f"expected llm diff source, got {result!r}")
+                if result.get("ok") is not True:
+                    raise SystemExit(f"expected llm diff to pass git apply --check, got {result!r}")
+                llm_attempt = result.get("llm_attempt") or {}
+                if llm_attempt.get("model") != "codex-local":
+                    raise SystemExit(f"expected llm attempt model audit, got {result!r}")
+                if (llm_attempt.get("check") or {}).get("ok") is not True:
+                    raise SystemExit(f"expected llm attempt check metadata, got {result!r}")
+                print("AGENT_SELF_IMPROVE_LLM_DIFF_OK")
+        finally:
+            gateway_module.ollama_chat = previous_ollama_chat
+
+    with_gateway_helpers(helpers, run)
+
+
 def main() -> int:
     run_llm_reasoning_uses_gateway_normalizer()
     run_llm_reasoning_falls_back_cleanly()
+    run_llm_diff_generation_uses_runtime_draft()
     print("AGENT_SELF_IMPROVE_REASONING_SMOKE_OK")
     return 0
 

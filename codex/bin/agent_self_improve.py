@@ -320,7 +320,9 @@ def gateway_reasoning_helpers() -> dict[str, Any]:
         "normalize_agent_taskspec": gateway_module.normalize_agent_taskspec,
         "agent_taskspec_schema": gateway_module.agent_taskspec_schema,
         "agent_capability_catalog": gateway_module.agent_capability_catalog,
+        "extract_unified_diff": gateway_module.extract_unified_diff,
         "ROLE_PLANNER": gateway_module.ROLE_PLANNER,
+        "ROLE_AGENT": getattr(gateway_module, "ROLE_AGENT", gateway_module.ROLE_PLANNER),
     }
     return _GATEWAY_REASONING_HELPERS
 
@@ -1100,6 +1102,167 @@ def propose_patch(
             markdown.append(f"- {item}")
     write_text(audit_dir / "patch-proposal.md", "\n".join(markdown) + "\n")
     return proposal
+
+
+def compact_file_context(rel: str, *, max_chars: int = 3000) -> str:
+    path = ROOT / rel
+    if not path.is_file():
+        return f"FILE: {rel}\nSTATUS: absent\n"
+    text = read_text(path)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n...[truncated]..."
+    return f"FILE: {rel}\nSTATUS: present\n```text\n{text}\n```\n"
+
+
+def self_improve_patch_context(
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+    proposal: dict[str, Any],
+    *,
+    max_files: int = 10,
+) -> str:
+    file_changes = [
+        str(item.get("path") or "").strip()
+        for item in (proposal.get("proposed_file_changes") or [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
+    selected: list[str] = []
+    for rel in file_changes:
+        if rel not in selected:
+            selected.append(rel)
+        if len(selected) >= max_files:
+            break
+    if "codex/gateway/gateway.py" not in selected and any(
+        "gateway.py" in str(item) for item in (diagnosis.get("patch_scope") or [])
+    ):
+        selected.append("codex/gateway/gateway.py")
+    if "README.md" not in selected:
+        selected.append("README.md")
+    snippets = [compact_file_context(rel) for rel in selected[:max_files]]
+    acceptance = reasoning.get("task_spec", {}).get("acceptance_criteria") or []
+    regression_cases = [
+        {
+            "name": case.get("name"),
+            "expected_workflow": case.get("expected_workflow"),
+            "expected_capability": case.get("expected_capability"),
+            "expected_marker": case.get("expected_marker"),
+        }
+        for case in (regression.get("cases") or [])
+        if isinstance(case, dict)
+    ]
+    return "\n".join(
+        [
+            f"Diagnosis category: {diagnosis.get('category')}",
+            f"Root cause: {diagnosis.get('root_cause')}",
+            f"Recovery: {diagnosis.get('recovery')}",
+            f"Patch scope: {json.dumps(diagnosis.get('patch_scope') or [], ensure_ascii=False)}",
+            f"TaskSpec: {json.dumps(reasoning.get('task_spec') or {}, ensure_ascii=False)}",
+            f"Regression cases: {json.dumps(regression_cases, ensure_ascii=False)}",
+            f"Acceptance criteria: {json.dumps(acceptance, ensure_ascii=False)}",
+            f"Proposed file changes: {json.dumps(proposal.get('proposed_file_changes') or [], ensure_ascii=False)}",
+            "",
+            "Current file context:",
+            "",
+            "\n".join(snippets),
+        ]
+    )
+
+
+def self_improve_patch_messages(
+    args: argparse.Namespace,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+    proposal: dict[str, Any],
+) -> list[dict[str, str]]:
+    task_spec = reasoning.get("task_spec") or {}
+    prompt = (
+        args.feature_request
+        or args.prompt
+        or str(task_spec.get("user_goal") or "")
+        or str(diagnosis.get("expected_behavior") or "")
+        or "Prepare a bounded codex-local patch."
+    )
+    context = self_improve_patch_context(diagnosis, regression, reasoning, proposal)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are codex-local in executor mode preparing a guarded ai-stack patch draft. "
+                "Return exactly one unified diff and nothing else. "
+                "Do not use markdown except an optional ```diff fenced block. "
+                "Touch only allowed ai-stack paths under codex/bin/, codex/gateway/, docs/, or the root files README.md, docker-compose.yml, start_docker.bat. "
+                "Never touch secrets, codex/state/, codex/audit/, logs/, .env, tokens, or private keys. "
+                "Prefer the smallest architectural change that improves TaskSpec/capability/executor/test/docs behavior. "
+                "Do not invent destructive host actions or broaden scope beyond the proposal."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Workspace: {args.workspace}\n"
+                f"Goal:\n{prompt}\n\n"
+                f"{context}\n\n"
+                "Return only one unified diff that is likely to pass `git apply --check`."
+            ),
+        },
+    ]
+
+
+def llm_generated_unified_diff(
+    args: argparse.Namespace,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    helpers = gateway_reasoning_helpers()
+    if not helpers.get("ok"):
+        return {
+            "ok": False,
+            "source": "llm_unified_diff",
+            "error": helpers.get("error") or "gateway_reasoning_helpers_unavailable",
+        }
+    if env_truthy("AGENT_SELF_IMPROVE_SMOKE_RUNNING") or env_truthy("AGENT_SELF_IMPROVE_DISABLE_LLM_DIFF_GENERATOR"):
+        return {
+            "ok": False,
+            "source": "llm_unified_diff",
+            "error": "llm_diff_generator_disabled",
+        }
+    prompt = args.feature_request or args.prompt or str((reasoning.get("task_spec") or {}).get("user_goal") or "")
+    role = helpers.get("ROLE_AGENT") or helpers.get("ROLE_PLANNER")
+    model_id = helpers["codex_local_runtime_model_name"](task=prompt, role=role)
+    try:
+        from codex.gateway import gateway as gateway_module
+    except Exception as exc:
+        return {
+            "ok": False,
+            "source": "llm_unified_diff",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    try:
+        response = gateway_module.ollama_chat(
+            model_id,
+            self_improve_patch_messages(args, diagnosis, regression, reasoning, proposal),
+            timeout=min(args.command_timeout, 120),
+        )
+        raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        diff = helpers["extract_unified_diff"](raw)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "source": "llm_unified_diff",
+            "model": model_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "ok": True,
+        "source": "llm_unified_diff",
+        "model": model_id,
+        "raw": raw,
+        "patch_text": diff,
+    }
 
 
 def unified_diff_for_file(rel: str, before: str, after: str) -> str:
@@ -2297,6 +2460,11 @@ def generate_unified_diff(
     if args.patch_file:
         patch_text = read_text(Path(args.patch_file))
         source = "provided_patch_file"
+        llm_attempt: dict[str, Any] = {
+            "ok": False,
+            "source": "llm_unified_diff",
+            "error": "explicit_patch_file_supplied",
+        }
     else:
         task_spec = reasoning.get("task_spec") or {}
         capability = slugify(
@@ -2307,40 +2475,52 @@ def generate_unified_diff(
             "new_capability",
         )
         feature_request = args.feature_request or args.prompt or str(task_spec.get("user_goal") or "")
-        patch_parts: list[str] = []
-        if proposal.get("capability_development") or args.mode == "capability_develop" or args.capability_name or args.target_capability_name:
-            for rel, diff in (
-                roadmap_with_capability(capability, feature_request, reasoning),
-                capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
-                capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
-                capability_gateway_integration_file(capability, feature_request, reasoning),
-                capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
-                capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
-                capability_runtime_promotion_patch_file(capability, feature_request, reasoning),
-                capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
-                capability_executor_contract_file(capability, feature_request, reasoning),
-                capability_executor_dispatch_file(capability, feature_request, reasoning),
-                capability_implementation_workorder_file(capability, feature_request, diagnosis, regression, reasoning),
-                capability_executor_stub_file(capability, feature_request, reasoning),
-                capability_runtime_hook_stub_file(capability, feature_request, reasoning),
-                capability_smoke_stub_file(capability, feature_request, reasoning),
-            ):
-                if diff:
-                    patch_parts.append(diff)
-            source = "capability_development_template"
-        else:
-            regression_slug = failure_case_slug(regression, diagnosis, reasoning)
-            for rel, diff in (
-                failure_regression_case_file(regression_slug, diagnosis, regression, reasoning),
-                failure_regression_smoke_contract_file(regression_slug, diagnosis, regression, reasoning),
-                failure_regression_patch_fragment_file(regression_slug, diagnosis, regression, reasoning),
-                failure_regression_runtime_patch_candidate_file(regression_slug, diagnosis, regression, reasoning),
-                failure_regression_smoke_stub_file(regression_slug, diagnosis, regression, reasoning),
-            ):
-                if diff:
-                    patch_parts.append(diff)
-            source = "failure_regression_template"
-        patch_text = "".join(patch_parts)
+        llm_attempt = llm_generated_unified_diff(args, diagnosis, regression, reasoning, proposal)
+        patch_text = ""
+        source = "llm_unified_diff"
+        if llm_attempt.get("ok"):
+            candidate_text = str(llm_attempt.get("patch_text") or "")
+            candidate_check = check_patch_text(candidate_text, args.command_timeout) if candidate_text else {"ok": False}
+            llm_attempt["check"] = candidate_check
+            if candidate_check.get("ok"):
+                patch_text = candidate_text
+            else:
+                llm_attempt["error"] = candidate_check.get("message") or "llm_diff_failed_check"
+        if not patch_text:
+            patch_parts: list[str] = []
+            if proposal.get("capability_development") or args.mode == "capability_develop" or args.capability_name or args.target_capability_name:
+                for rel, diff in (
+                    roadmap_with_capability(capability, feature_request, reasoning),
+                    capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
+                    capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
+                    capability_gateway_integration_file(capability, feature_request, reasoning),
+                    capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
+                    capability_runtime_patch_candidate_file(capability, feature_request, reasoning),
+                    capability_runtime_promotion_patch_file(capability, feature_request, reasoning),
+                    capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
+                    capability_executor_contract_file(capability, feature_request, reasoning),
+                    capability_executor_dispatch_file(capability, feature_request, reasoning),
+                    capability_implementation_workorder_file(capability, feature_request, diagnosis, regression, reasoning),
+                    capability_executor_stub_file(capability, feature_request, reasoning),
+                    capability_runtime_hook_stub_file(capability, feature_request, reasoning),
+                    capability_smoke_stub_file(capability, feature_request, reasoning),
+                ):
+                    if diff:
+                        patch_parts.append(diff)
+                source = "capability_development_template"
+            else:
+                regression_slug = failure_case_slug(regression, diagnosis, reasoning)
+                for rel, diff in (
+                    failure_regression_case_file(regression_slug, diagnosis, regression, reasoning),
+                    failure_regression_smoke_contract_file(regression_slug, diagnosis, regression, reasoning),
+                    failure_regression_patch_fragment_file(regression_slug, diagnosis, regression, reasoning),
+                    failure_regression_runtime_patch_candidate_file(regression_slug, diagnosis, regression, reasoning),
+                    failure_regression_smoke_stub_file(regression_slug, diagnosis, regression, reasoning),
+                ):
+                    if diff:
+                        patch_parts.append(diff)
+                source = "failure_regression_template"
+            patch_text = "".join(patch_parts)
 
     patch_file = audit_dir / "generated-unified.diff"
     if patch_text:
@@ -2384,6 +2564,8 @@ def generate_unified_diff(
             "git_apply_check_output": check.get("git_apply_check_output"),
             "message": check.get("message") or "Generated unified diff passed git apply --check.",
         }
+        if llm_attempt:
+            result["llm_attempt"] = llm_attempt
     else:
         result = {
             "ok": False,
@@ -2392,6 +2574,7 @@ def generate_unified_diff(
             "patch_file": "",
             "paths": [],
             "blocked_paths": [],
+            "llm_attempt": llm_attempt,
             "recovery": (
                 "No safe deterministic diff generator matched this TaskSpec. "
                 "Ask codex-local for an explicit unified diff or provide --patch-file for guarded apply."
