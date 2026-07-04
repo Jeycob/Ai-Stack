@@ -76,6 +76,12 @@ SCENARIOS: tuple[RouteScenario, ...] = (
         unexpected=("GATEWAY_ADMIN_EXPLAIN_FILE", "nemohl najít"),
     ),
     RouteScenario(
+        name="agent-capability-develop-natural",
+        prompt="repo: ai-stack\npridej capability workspace_profile pro bounded workspace profile",
+        expected=("repo: ai-stack", "GATEWAY_ADMIN_AGENT_LOOP ai-stack --", "workspace_profile"),
+        unexpected=("GATEWAY_ADMIN_WORKSPACE_ACTION", "GATEWAY_ADMIN_CREATE_LOCAL_REPO"),
+    ),
+    RouteScenario(
         name="transcript-bootstrap-testcode",
         prompt="vytvor mi nove repository TestCode",
         expected=("GATEWAY_ADMIN_AGENT_LOOP ", "vytvor mi nove repository TestCode"),

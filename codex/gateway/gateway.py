@@ -1709,6 +1709,63 @@ def agent_ssh_key_create_requested(task):
     return any(cue in lower for cue in create_cues)
 
 
+def normalize_capability_identifier(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.strip("`'\"")
+    text = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text)
+    text = text.strip("._:-")
+    text = re.sub(r"_+", "_", text)
+    if not text:
+        return ""
+    if not re.match(r"^[A-Za-z][A-Za-z0-9_.:-]{1,79}$", text):
+        return ""
+    return text.replace("-", "_")
+
+
+def agent_target_capability_name_from_task(task):
+    text = strip_routing(str(task or "")).strip()
+    if not text:
+        return ""
+    patterns = (
+        r"(?i)\btarget_capability_name\s*[:=]\s*[`'\"]?([A-Za-z][A-Za-z0-9_.:-]{1,79})[`'\"]?",
+        r"(?i)\b(?:capability|capabilities|schopnost|schopnosti|feature)\s*[:=]\s*[`'\"]?([A-Za-z][A-Za-z0-9_.:-]{1,79})[`'\"]?",
+        r"(?i)\b(?:add|create|implement|develop|improve|pridej|přidej|vytvor|vytvoř|navrhni|rozsir|rozšiř)\s+(?:new\s+)?(?:codex-local\s+)?(?:capability|feature|schopnost)\s+[`'\"]?([A-Za-z][A-Za-z0-9_.:-]{1,79})[`'\"]?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        normalized = normalize_capability_identifier(match.group(1))
+        if normalized:
+            return normalized
+    return ""
+
+
+def agent_capability_develop_requested(task):
+    lower = str(task or "").lower()
+    if agent_target_capability_name_from_task(task):
+        return True
+    cues = (
+        "nova capability",
+        "nova schopnost",
+        "new capability",
+        "implement capability",
+        "develop capability",
+        "improve capability",
+        "pridej capability",
+        "přidej capability",
+        "pridej schopnost",
+        "přidej schopnost",
+        "navrhni capability",
+        "navrhni schopnost",
+        "rozsir capability",
+        "rozšiř capability",
+    )
+    return any(cue in lower for cue in cues)
+
+
 def agent_workspace_ssh_comment(task, workspace):
     text = str(task or "")
     match = re.search(r'(?i)\b-C\s+["\']?([^"\']{1,160})["\']?', text)
@@ -1942,7 +1999,13 @@ def agent_workspace_search_query_from_task(task):
     if not text:
         return ""
     lower = text.lower()
-    if not any(cue in lower for cue in ("prohledej", "hledej", "vyhledej", "search", "grep", "rg", "find mentions")):
+    explicit_repo_search = any(cue in lower for cue in ("prohledej", "hledej", "vyhledej", "grep", "rg", "find mentions"))
+    if agent_capability_develop_requested(task) and not explicit_repo_search:
+        return ""
+    search_with_scope = "search" in lower and any(
+        cue in lower for cue in ("repo", "repository", "repozitar", "repozitář", "workspace", "soubor", "files", "codebase")
+    )
+    if not (explicit_repo_search or search_with_scope):
         return ""
     cleaned = re.sub(
         r"(?is)\b(?:prohledej|prohledat|vyhledej|hledej|search|grep|rg|find mentions(?: of)?)\b",
@@ -2196,12 +2259,15 @@ def agent_capability_hints_from_task(task, workspace_exists):
     remote_url = agent_remote_url_from_task(task)
     bootstrap_name = bootstrap_repo_name_from_text(task)
     meta_capability = agent_meta_capability_from_task(task)
+    target_capability_name = agent_target_capability_name_from_task(task)
     if meta_capability:
         capabilities.append(meta_capability)
     if agent_workspace_search_query_from_task(task) and workspace_exists:
         capabilities.append("workspace_search")
     if bootstrap_name:
         capabilities.append("workspace_repo_bootstrap")
+    if target_capability_name or agent_capability_develop_requested(task):
+        capabilities.append("agent_capability_develop")
     if remote_url and workspace_exists and not bootstrap_name:
         capabilities.append("workspace_git_publish")
     if agent_ssh_key_show_public_requested(task):
@@ -2521,6 +2587,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     user_goal = str(spec.get("user_goal") or "").strip() or str(task or "").strip()
     target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo or inferred_repo
     target_capability_name = str(spec.get("target_capability_name") or "").strip()
+    if not target_capability_name:
+        target_capability_name = agent_target_capability_name_from_task(task)
     if target_repo_name and current_workspace == requested_workspace and not workspace_exists and requested_workspace != controller_workspace:
         current_workspace = controller_workspace
     is_new_workspace_request = _boolish(spec.get("is_new_workspace_request"), default=bool(bootstrap_repo))

@@ -548,6 +548,143 @@ def capability_development_plan(args: argparse.Namespace, diagnosis: dict[str, A
     }
 
 
+def proposal_change_plan(
+    args: argparse.Namespace,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+    capability_plan: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    task_spec = reasoning.get("task_spec") or {}
+    acceptance = task_spec.get("acceptance_criteria") or []
+    feature_request = args.feature_request or args.prompt or diagnosis.get("expected_behavior") or ""
+    if capability_plan:
+        capability = capability_plan.get("capability_name") or "new_capability"
+        return [
+            {
+                "path": "docs/codex-local-capability-roadmap.json",
+                "change_type": "update",
+                "intent": "Register the capability draft in the roadmap-backed registry source of truth.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"docs/capability-drafts/{capability}.json",
+                "change_type": "create_or_update",
+                "intent": "Describe the capability contract, aliases, bounded executor plan, and senior review boundary.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"docs/capability-drafts/{capability}.smoke.json",
+                "change_type": "create_or_update",
+                "intent": "Define a machine-checkable smoke contract for registry aliases, wiring, and artifact integrity.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"docs/capability-drafts/{capability}.gateway-integration.json",
+                "change_type": "create_or_update",
+                "intent": "Draft concrete gateway touchpoints for canonical capability wiring without prompt-specific routing.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"docs/capability-drafts/{capability}.gateway.patch.md",
+                "change_type": "create_or_update",
+                "intent": "Prepare a review-friendly gateway patch fragment for senior Codex review.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"docs/capability-drafts/{capability}.runtime.patch.diff",
+                "change_type": "create_or_update",
+                "intent": "Prepare a runtime patch candidate that stays review-only until guarded promotion and fingerprint-gated deploy.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"docs/capability-drafts/{capability}.wiring.json",
+                "change_type": "create_or_update",
+                "intent": "Capture file-level implementation steps, recovery rules, and offload split for the new capability.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"codex/bin/capability_drafts/{capability}_executor_stub.py",
+                "change_type": "create_or_update",
+                "intent": "Provide a bounded executor stub that codex-local can extend into a real capability implementation.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
+                "change_type": "create_or_update",
+                "intent": "Document the runtime hook shape before touching live gateway execution paths.",
+                "acceptance_criteria": acceptance,
+            },
+            {
+                "path": f"codex/bin/capability_drafts/{capability}_smoke.py",
+                "change_type": "create_or_update",
+                "intent": "Provide a bounded smoke scaffold for the capability implementation and recovery behavior.",
+                "acceptance_criteria": acceptance,
+            },
+        ]
+    regression_cases = [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)]
+    case_slug = failure_case_slug(regression, diagnosis, reasoning)
+    return [
+        {
+            "path": f"docs/self-improve-cases/{case_slug}.json",
+            "change_type": "create_or_update",
+            "intent": "Record the observed failure pattern as a reusable regression case.",
+            "acceptance_criteria": acceptance,
+        },
+        {
+            "path": f"docs/self-improve-cases/{case_slug}.smoke.json",
+            "change_type": "create_or_update",
+            "intent": "Define expected workflow, capability, and output markers for future regression runs.",
+            "acceptance_criteria": acceptance,
+        },
+        {
+            "path": f"docs/self-improve-cases/{case_slug}.patch.md",
+            "change_type": "create_or_update",
+            "intent": "Summarize the smallest architectural patch scope for this failure pattern.",
+            "acceptance_criteria": acceptance,
+        },
+        {
+            "path": f"docs/self-improve-cases/{case_slug}.runtime.patch.diff",
+            "change_type": "create_or_update",
+            "intent": "Prepare a review-only runtime candidate diff for the failure pattern.",
+            "acceptance_criteria": acceptance,
+        },
+        {
+            "path": f"codex/bin/self_improve_cases/{case_slug}_smoke.py",
+            "change_type": "create_or_update",
+            "intent": "Provide a bounded smoke scaffold that reproduces the failure case without OpenWebUI mutation.",
+            "acceptance_criteria": acceptance,
+        },
+        {
+            "path": "codex/gateway/gateway.py",
+            "change_type": "review_then_patch",
+            "intent": "Apply the smallest runtime fix only after the regression artifact exists and the generated diff has passed git apply --check.",
+            "acceptance_criteria": acceptance or [feature_request or diagnosis.get("root_cause") or "Fix the reproduced failure."],
+            "related_cases": regression_cases,
+        },
+    ]
+
+
+def proposal_offload_split(capability_plan: dict[str, Any] | None) -> dict[str, list[str]]:
+    codex_local = [
+        "Collect transcript and diagnosis artifacts",
+        "Draft acceptance criteria from TaskSpec and regression cases",
+        "Prepare file-by-file patch plan",
+        "Generate guarded unified diff draft",
+        "Run local py_compile and smoke checks",
+        "Write recovery report and apply manifest",
+    ]
+    senior = [
+        "Review runtime patch candidates touching gateway execution",
+        "Approve any guarded apply beyond dry-run",
+        "Approve deploy/E2E after fingerprint gate is green",
+    ]
+    if capability_plan:
+        codex_local.append("Draft new capability registry/docs/smoke scaffolds")
+        senior.append("Approve bounded executor semantics for the new capability")
+    return {"codex_local": codex_local, "senior_codex": senior}
+
+
 def propose_patch(
     args: argparse.Namespace,
     audit_dir: Path,
@@ -558,6 +695,9 @@ def propose_patch(
     patch_text = read_text(Path(args.patch_file)) if args.patch_file else ""
     paths = changed_paths_from_patch(patch_text) if patch_text else []
     capability_plan = capability_development_plan(args, diagnosis, regression) if args.mode == "capability_develop" or args.capability_name else None
+    file_change_plan = proposal_change_plan(args, diagnosis, regression, reasoning, capability_plan)
+    offload_split = proposal_offload_split(capability_plan)
+    task_spec = reasoning.get("task_spec") or {}
     proposal = {
         "ok": True,
         "phase": "propose_patch",
@@ -568,6 +708,17 @@ def propose_patch(
         "minimal_patch_scope": diagnosis.get("patch_scope") or [],
         "reasoning_task_spec": reasoning.get("task_spec") or {},
         "capability_development": capability_plan,
+        "target_capability_name": capability_plan.get("capability_name") if capability_plan else "",
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "proposed_file_changes": file_change_plan,
+        "offload_split": offload_split,
+        "unified_diff_expectations": {
+            "must_pass_git_apply_check": True,
+            "allowed_patch_prefixes": list(ALLOWED_PATCH_PREFIXES),
+            "allowed_patch_files": sorted(ALLOWED_PATCH_FILES),
+            "blocked_patch_prefixes": list(BLOCKED_PATCH_PREFIXES),
+            "runtime_review_required": True,
+        },
         "proposal": [
             "Keep the fix at the smallest violated layer: TaskSpec/canonical capability/registry/executor/test/docs.",
             "Add regression before changing behavior.",
@@ -594,8 +745,20 @@ def propose_patch(
     ]
     for item in diagnosis.get("patch_scope") or []:
         markdown.append(f"- `{item}`")
+    markdown.extend(["", "## Proposed File Changes", ""])
+    for item in file_change_plan:
+        markdown.append(f"- `{item['path']}`: {item['intent']}")
+    markdown.extend(["", "## Acceptance Criteria", ""])
+    for item in proposal["acceptance_criteria"]:
+        markdown.append(f"- {item}")
     markdown.extend(["", "## Guard Rails", ""])
     for item in proposal["proposal"]:
+        markdown.append(f"- {item}")
+    markdown.extend(["", "## Offload Split", "", "### Codex-Local", ""])
+    for item in offload_split["codex_local"]:
+        markdown.append(f"- {item}")
+    markdown.extend(["", "### Senior Codex", ""])
+    for item in offload_split["senior_codex"]:
         markdown.append(f"- {item}")
     if capability_plan:
         markdown.extend(["", "## Capability Development", ""])

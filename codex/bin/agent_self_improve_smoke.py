@@ -126,6 +126,11 @@ def run_proposal_mode() -> None:
         proposal = json.loads(proposal_file.read_text(encoding="utf-8"))
         if not proposal.get("proposal"):
             raise SystemExit(f"expected proposal content, got {proposal!r}")
+        proposed_file_changes = proposal.get("proposed_file_changes") or []
+        if not any(item.get("path") == "codex/gateway/gateway.py" for item in proposed_file_changes if isinstance(item, dict)):
+            raise SystemExit(f"expected non-capability proposal to include runtime gateway change plan, got {proposal!r}")
+        if not proposal.get("offload_split", {}).get("codex_local"):
+            raise SystemExit(f"expected offload split in proposal, got {proposal!r}")
         generated = payload.get("generated_diff") or {}
         if generated.get("source") != "failure_regression_template" or not generated.get("ok"):
             raise SystemExit(f"expected generated failure regression bundle for non-capability proposal, got {payload!r}")
@@ -179,6 +184,15 @@ def run_capability_develop_mode() -> None:
         dev = proposal.get("capability_development") or {}
         if dev.get("capability_name") != "workspace_profile":
             raise SystemExit(f"expected capability development plan, got {proposal!r}")
+        proposed_file_changes = proposal.get("proposed_file_changes") or []
+        if not any(item.get("path") == "docs/codex-local-capability-roadmap.json" for item in proposed_file_changes if isinstance(item, dict)):
+            raise SystemExit(f"expected roadmap change plan in capability proposal, got {proposal!r}")
+        if not any(item.get("path") == "codex/bin/capability_drafts/workspace_profile_executor_stub.py" for item in proposed_file_changes if isinstance(item, dict)):
+            raise SystemExit(f"expected executor scaffold change plan in capability proposal, got {proposal!r}")
+        if proposal.get("target_capability_name") != "workspace_profile":
+            raise SystemExit(f"expected target capability in proposal, got {proposal!r}")
+        if proposal.get("unified_diff_expectations", {}).get("must_pass_git_apply_check") is not True:
+            raise SystemExit(f"expected guarded diff expectations in proposal, got {proposal!r}")
         generated_file = Path(payload["artifact_dir"]) / "cycle-01/generated-unified.diff"
         generated_result_file = Path(payload["artifact_dir"]) / "cycle-01/generated-diff-result.json"
         report_file = Path(payload["artifact_dir"]) / "self-improve-report.json"

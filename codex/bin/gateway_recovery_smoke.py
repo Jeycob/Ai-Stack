@@ -800,6 +800,33 @@ def assert_agent_self_improve_capability() -> None:
         raise SystemExit(f"expected target capability to imply agent_capability_develop, got {taskspec!r}")
     if plan.get("workflow") != "self_improve" or plan.get("target_capability_name") != "workspace_profile":
         raise SystemExit(f"expected self_improve plan with target capability, got {plan!r}")
+    with patch.object(gateway, "agent_select_capabilities_with_llm", side_effect=RuntimeError("offline smoke")):
+        taskspec, plan = _taskspec_plan(
+            {
+                "current_workspace": "ai-stack",
+                "user_goal": "přidej capability workspace_search_index pro rychlejší capability search workflow",
+                "is_new_workspace_request": False,
+                "is_existing_workspace_task": True,
+                "target_repo_name": "",
+                "target_capability_name": "",
+                "remote_url": "",
+                "desired_end_state": "workspace_search_index capability patch draft created",
+                "required_capabilities": [],
+                "missing_inputs": [],
+                "risk_level": "medium",
+                "recovery_plan": "generate guarded capability patch draft",
+                "read_only": False,
+            },
+            "přidej capability workspace_search_index pro rychlejší capability search workflow",
+            workspace="ai-stack",
+            workspace_exists=True,
+        )
+    if taskspec.get("target_capability_name") != "workspace_search_index":
+        raise SystemExit(f"expected natural capability prompt to infer target_capability_name, got {taskspec!r}")
+    if taskspec.get("required_capabilities") != ["agent_capability_develop"]:
+        raise SystemExit(f"expected inferred target capability to canonicalize to agent_capability_develop, got {taskspec!r}")
+    if plan.get("workflow") != "self_improve" or plan.get("target_capability_name") != "workspace_search_index":
+        raise SystemExit(f"expected natural capability prompt to route into self_improve, got {plan!r}")
     with tempfile.TemporaryDirectory(prefix="gateway-cap-roadmap-") as tmp:
         roadmap_path = Path(tmp) / "roadmap.json"
         roadmap_path.write_text(
