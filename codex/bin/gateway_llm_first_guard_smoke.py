@@ -157,6 +157,38 @@ def assert_taskspec_normalizer_does_not_route_readonly_prose() -> None:
     print("TASKSPEC_NORMALIZER_READONLY_PROSE_ROUTING_ABSENT_OK")
 
 
+def assert_taskspec_core_does_not_call_prose_compat_hooks() -> None:
+    sources = {
+        "normalize_agent_taskspec": inspect.getsource(gateway.normalize_agent_taskspec),
+        "agent_taskspec_to_plan": inspect.getsource(gateway.agent_taskspec_to_plan),
+    }
+    forbidden = (
+        "agent_read_only_requested(task)",
+        "agent_capability_help_requested(task)",
+        "agent_ssh_key_show_public_requested(task)",
+        "agent_ssh_key_create_requested(task)",
+        "agent_deploy_requested(task)",
+        "agent_edit_requested(task)",
+        "agent_executable_task_requested(task)",
+        "agent_infer_action_from_task(task)",
+        "agent_infer_followup_actions(task)",
+        "agent_workspace_search_query_from_task(task)",
+        "agent_meta_capability_from_task(task)",
+        "agent_preview_requested(task)",
+        "agent_user_confirmation_requested(task)",
+        "bootstrap_repo_name_from_text(task)",
+        "infer_repo_name_from_text(task)",
+    )
+    failures = []
+    for name, source in sources.items():
+        for fragment in forbidden:
+            if fragment in source:
+                failures.append(f"{name}:{fragment}")
+    if failures:
+        fail("TaskSpec core must not call prose compatibility hooks: " + ", ".join(failures))
+    print("TASKSPEC_CORE_PROSE_COMPAT_HOOKS_ABSENT_OK")
+
+
 def assert_routing_provenance_terms() -> None:
     text = GATEWAY_PATH.read_text(encoding="utf-8")
     forbidden = ("heuristic_fallback", "llm_task_spec")
@@ -176,6 +208,7 @@ def main() -> int:
     assert_agent_fallback_structural_only()
     assert_taskspec_requested_hooks_do_not_route_prose()
     assert_taskspec_normalizer_does_not_route_readonly_prose()
+    assert_taskspec_core_does_not_call_prose_compat_hooks()
     assert_routing_provenance_terms()
     print("GATEWAY_LLM_FIRST_GUARD_OK")
     return 0

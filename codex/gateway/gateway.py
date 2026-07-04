@@ -2355,15 +2355,9 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
     """
     url = agent_public_url_from_task(task)
     command = agent_infer_command_from_task(task)
-    meta_capability = agent_meta_capability_from_task(task)
-    search_query = agent_workspace_search_query_from_task(task)
 
     provenance = "fallback:structural"
-    if meta_capability:
-        workflow = "meta"
-    elif search_query and workspace_exists:
-        workflow = "workspace_search"
-    elif workspace_exists and agent_git_publish_requested(task):
+    if workspace_exists and agent_git_publish_requested(task):
         workflow = "workspace_git_publish"
     elif url:
         workflow = "web_fetch"
@@ -2388,9 +2382,9 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         "desired_end_state": "git_init_origin_commit_push_main" if workflow == "workspace_git_publish" else "",
         "url": url,
         "question": str(task or "").strip() if workflow == "web_answer" else "",
-        "search_query": search_query if workflow == "workspace_search" else "",
-        "meta_capability": meta_capability if workflow == "meta" else "",
-        "required_capabilities": [meta_capability] if workflow == "meta" else (["workspace_search"] if workflow == "workspace_search" else []),
+        "search_query": "",
+        "meta_capability": "",
+        "required_capabilities": [],
         "routing_provenance": provenance,
         "capability_locked": True,
         "ssh_comment": agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
@@ -2565,52 +2559,25 @@ def _string_list(value):
 
 
 def agent_capability_hints_from_task(task, workspace_exists):
+    """Last-resort structural hints when the LLM selector is unavailable.
+
+    This function must not interpret human-language intent. It may only surface
+    already-structured inputs: concrete Git remotes, public URLs, explicit
+    target_capability_name/capability fields, and explicit commands.
+    """
     capabilities = []
     remote_url = agent_remote_url_from_task(task)
-    # Last-resort hints are deliberately structural only. New workspace
-    # intent must come from TaskSpec, not from parsing human-language "repo"
-    # phrases in gateway core.
-    bootstrap_name = ""
-    meta_capability = agent_meta_capability_from_task(task)
     target_capability_name = agent_target_capability_name_from_task(task)
     public_url = agent_public_url_from_task(task)
-    inferred_followups = agent_infer_followup_actions(task)
-    if meta_capability:
-        capabilities.append(meta_capability)
-    if agent_workspace_search_query_from_task(task) and workspace_exists:
-        capabilities.append("workspace_search")
-    if bootstrap_name:
-        capabilities.append("workspace_repo_bootstrap")
-    if target_capability_name or agent_capability_develop_requested(task):
+    explicit_command = agent_infer_command_from_task(task)
+    if target_capability_name:
         capabilities.append("agent_capability_develop")
-    if remote_url and workspace_exists and not bootstrap_name:
+    if remote_url and workspace_exists:
         capabilities.append("workspace_git_publish")
-    if agent_ssh_key_show_public_requested(task):
-        capabilities.append("workspace_ssh_key_show_public")
-    elif agent_ssh_key_create_requested(task):
-        capabilities.append("workspace_ssh_key_create")
-    if agent_deploy_requested(task):
-        capabilities.append("stack_deploy")
     if public_url and not remote_url:
         capabilities.append("public_web_access")
-    elif agent_web_question_requested(task) and not remote_url:
-        capabilities.append("public_web_search")
-    inferred_action = agent_infer_action_from_task(task)
-    if inferred_action:
-        capabilities.append(f"workspace_action:{inferred_action}")
-    if len(inferred_followups) >= 2:
-        capabilities.append("workspace_action_chain")
-    if agent_preview_requested(task):
-        capabilities.append("workspace_expose_preview")
-    if agent_user_confirmation_requested(task):
-        capabilities.append("await_user_confirmation")
-    if agent_edit_requested(task):
-        capabilities.append("workspace_edit")
-    explicit_command = agent_infer_command_from_task(task)
     if explicit_command:
         capabilities.append("workspace_run")
-    elif agent_executable_task_requested(task) and not capabilities:
-        capabilities.append("workspace_autopilot")
     if not capabilities:
         capabilities.append("clarify_or_infer_capability")
     return canonicalize_agent_capabilities(capabilities)
@@ -3009,7 +2976,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         answer_visibility = "summary"
     fallback_workspace = requested_workspace if workspace_exists else controller_workspace
     requested_new_workspace = _boolish(spec.get("is_new_workspace_request"), default=False) or intent_class == "workspace_bootstrap"
-    bootstrap_repo = bootstrap_repo_name_from_text(task) if requested_new_workspace else ""
+    bootstrap_repo = ""
     remote_url = str(spec.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
     read_only = True if intent_class in {"direct_answer", "creative_answer", "capability_help"} else _boolish(spec.get("read_only"), default=False)
     current_workspace = str(spec.get("current_workspace") or "").strip() or target_workspace or fallback_workspace
@@ -3037,20 +3004,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
             desired_end_state = "new_workspace_registered_with_git_and_ssh_ready"
         elif remote_url and workspace_exists:
             desired_end_state = "git_init_origin_commit_push_main"
-        elif agent_ssh_key_show_public_requested(task):
-            desired_end_state = "workspace_public_key_returned"
-        elif agent_ssh_key_create_requested(task):
-            desired_end_state = "workspace_ssh_key_ready"
-        elif agent_deploy_requested(task):
-            desired_end_state = "ai_stack_deployed"
         elif agent_public_url_from_task(task):
             desired_end_state = "public_web_answer_returned"
-        elif agent_workspace_search_query_from_task(task):
-            desired_end_state = "workspace_search_results_returned"
-        elif agent_edit_requested(task):
-            desired_end_state = "requested_changes_applied_and_verified_if_needed"
-        elif agent_infer_action_from_task(task):
-            desired_end_state = f"workspace_action_{agent_infer_action_from_task(task)}_completed"
         elif agent_infer_command_from_task(task):
             desired_end_state = "explicit_command_completed"
         else:
@@ -3059,8 +3014,6 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         _string_list(spec.get("required_capabilities")) + execution_plan_capabilities
     )
     intent_capabilities = []
-    if not intent_class and agent_capability_help_requested(task):
-        intent_class = "capability_help"
     if intent_class == "direct_answer":
         intent_capabilities.append("direct_answer")
     elif intent_class == "creative_answer":
@@ -3119,15 +3072,25 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     required_capabilities = canonicalize_agent_capabilities(required_capabilities)
     if intent_capabilities:
         required_capabilities = canonicalize_agent_capabilities(intent_capabilities + required_capabilities)
-    meta_capability = agent_meta_capability_from_task(task)
+    meta_capability = ""
     if intent_class == "capability_help":
         meta_capability = "capability_catalog_show"
+    else:
+        meta_capability = next(
+            (
+                capability
+                for capability in required_capabilities
+                if capability in {
+                    "workspace_context_set",
+                    "workspace_context_status",
+                    "capability_catalog_show",
+                    "agent_runtime_status",
+                }
+            ),
+            "",
+        )
     if meta_capability and meta_capability not in required_capabilities:
         required_capabilities.insert(0, meta_capability)
-    if agent_preview_requested(task) and "workspace_expose_preview" not in required_capabilities:
-        required_capabilities.append("workspace_expose_preview")
-    if agent_user_confirmation_requested(task) and "await_user_confirmation" not in required_capabilities:
-        required_capabilities.insert(0, "await_user_confirmation")
     if is_new_workspace_request and "workspace_repo_bootstrap" not in required_capabilities:
         required_capabilities.insert(0, "workspace_repo_bootstrap")
     if target_capability_name and "agent_capability_develop" not in required_capabilities:
@@ -3151,17 +3114,8 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         required_capabilities.insert(0, "ssh_key_show_public")
     if "ssh_key_show_public" in required_capabilities and "ssh_key_create" in required_capabilities:
         required_capabilities = [cap for cap in required_capabilities if cap != "ssh_key_create"]
-    if agent_ssh_key_show_public_requested(task) and "ssh_key_show_public" not in required_capabilities:
-        required_capabilities.insert(0, "ssh_key_show_public")
-        required_capabilities = [cap for cap in required_capabilities if cap != "ssh_key_create"]
-    elif (
-        agent_ssh_key_create_requested(task)
-        and "ssh_key_create" not in required_capabilities
-        and "ssh_key_show_public" not in required_capabilities
-    ):
-        required_capabilities.insert(0, "ssh_key_create")
     referent_topic = str(referents.get("to") or "").strip()
-    search_query = str(spec.get("search_query") or "").strip() or agent_workspace_search_query_from_task(task)
+    search_query = str(spec.get("search_query") or "").strip()
     if placeholder_followup_text(search_query):
         search_query = ""
     if not search_query and referent_topic and intent_class in {"web_search", "web_fetch"}:
@@ -3186,9 +3140,6 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         and "public_web_search" not in required_capabilities
         and "await_user_confirmation" not in required_capabilities
         and not meta_capability
-        and not agent_ssh_key_show_public_requested(task)
-        and not agent_ssh_key_create_requested(task)
-        and not agent_deploy_requested(task)
         and not agent_explicit_command_requested(task)
     ):
         required_capabilities = ["review"]
@@ -3214,7 +3165,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         missing_inputs.append("search_query")
     risk_level = str(spec.get("risk_level") or "").strip().lower()
     if risk_level not in {"low", "medium", "high"}:
-        risk_level = "low" if read_only else ("medium" if remote_url or agent_edit_requested(task) else "low")
+        risk_level = "low" if read_only else ("medium" if remote_url else "low")
     recovery_plan = str(spec.get("recovery_plan") or "").strip()
     if not recovery_plan and isinstance(llm_capability_selection, dict):
         recovery_plan = str(llm_capability_selection.get("recovery_plan") or "").strip()
@@ -3231,7 +3182,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if not action and isinstance(llm_capability_selection, dict):
         action = str(llm_capability_selection.get("action") or "").strip().lower()
     if action not in AGENT_LOOP_ACTIONS:
-        action = agent_infer_action_from_task(task)
+        action = ""
     run_after = str(spec.get("run_after") or "").strip().lower()
     if not run_after and isinstance(llm_capability_selection, dict):
         run_after = str(llm_capability_selection.get("run_after") or "").strip().lower()
@@ -3246,8 +3197,6 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
             for item in _string_list(llm_capability_selection.get("followup_actions"))
             if item.lower() in AGENT_LOOP_ACTIONS
         ]
-    if is_new_workspace_request and not followup_actions:
-        followup_actions = agent_infer_followup_actions(task)
     unresolved_followup_search = False
     question = str(spec.get("question") or "").strip()
     if placeholder_followup_text(question):
@@ -3363,7 +3312,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
     elif spec.get("is_new_workspace_request"):
         workflow = "bootstrap"
         repo_name = str(spec.get("target_repo_name") or "").strip()
-    elif workspace_exists and ("workspace_git_publish" in capabilities or (remote_url and agent_git_publish_requested(task))):
+    elif workspace_exists and ("workspace_git_publish" in capabilities or remote_url):
         workflow = "workspace_git_publish"
     elif workspace_exists and "ssh_key_show_public" in capabilities:
         workflow = "ssh_key_show_public"
@@ -3371,7 +3320,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         workflow = "ssh_key_create"
     elif "agent_capability_develop" in capabilities or "agent_self_improve" in capabilities:
         workflow = "self_improve"
-    elif "stack_deploy" in capabilities or agent_deploy_requested(task):
+    elif "stack_deploy" in capabilities:
         workflow = "deploy"
     elif "public_web_search" in capabilities or intent_class == "web_search":
         workflow = "web_search"
@@ -3383,12 +3332,11 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         "workspace_action_chain" in capabilities
         or "workspace_expose_preview" in capabilities
         or "workspace_autopilot" in capabilities
-        or agent_executable_task_requested(task)
     ):
         workflow = "autopilot"
     elif read_only:
         workflow = "review"
-    elif "workspace_edit" in capabilities or agent_edit_requested(task):
+    elif "workspace_edit" in capabilities:
         workflow = "edit"
         run_after = str(spec.get("run_after") or "").strip().lower()
     elif action_capability or spec.get("action"):
