@@ -212,15 +212,19 @@ def run_capability_develop_mode() -> None:
         generated_result_file = Path(payload["artifact_dir"]) / "cycle-01/generated-diff-result.json"
         report_file = Path(payload["artifact_dir"]) / "self-improve-report.json"
         manifest_file = Path(payload["artifact_dir"]) / "guarded-apply-manifest.json"
+        packet_file = Path(payload["artifact_dir"]) / "execution-packet.json"
         if not generated_file.is_file() or not generated_result_file.is_file():
             raise SystemExit(f"expected generated unified diff artifacts under {payload['artifact_dir']}")
         if not report_file.is_file():
             raise SystemExit(f"expected final self-improve report artifact under {payload['artifact_dir']}")
         if not manifest_file.is_file():
             raise SystemExit(f"expected guarded apply manifest artifact under {payload['artifact_dir']}")
+        if not packet_file.is_file():
+            raise SystemExit(f"expected execution packet artifact under {payload['artifact_dir']}")
         generated = json.loads(generated_result_file.read_text(encoding="utf-8"))
         report = json.loads(report_file.read_text(encoding="utf-8"))
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        packet = json.loads(packet_file.read_text(encoding="utf-8"))
         if not generated.get("ok") or generated.get("git_apply_check_exit_code") != 0:
             raise SystemExit(f"expected applicable generated diff, got {generated!r}")
         safe_apply_patch_file = Path(str(generated.get("safe_apply_candidate_patch_file") or ""))
@@ -285,6 +289,23 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected completed codex-local smoke execution in report, got {report!r}")
         if "applying runtime patches" not in (report.get("codex_senior_review_required_for") or []):
             raise SystemExit(f"expected senior review report, got {report!r}")
+        if packet.get("kind") != "codex-local-execution-packet":
+            raise SystemExit(f"expected execution packet kind, got {packet!r}")
+        if packet.get("target_capability_name") != "workspace_profile":
+            raise SystemExit(f"expected execution packet target capability, got {packet!r}")
+        if "repository exploration" not in ((packet.get("offload") or {}).get("safe_to_codex_local") or []):
+            raise SystemExit(f"expected codex-local offload packet, got {packet!r}")
+        if "applying runtime patches" not in ((packet.get("offload") or {}).get("requires_senior_codex") or []):
+            raise SystemExit(f"expected senior review packet, got {packet!r}")
+        if not ((packet.get("apply_path") or {}).get("safe_apply_commands") or []):
+            raise SystemExit(f"expected safe apply commands in execution packet, got {packet!r}")
+        if "python3 codex/bin/gateway_runtime_fingerprint_check.py" != ((packet.get("runtime_gate") or {}).get("command") or ""):
+            raise SystemExit(f"expected runtime gate command in execution packet, got {packet!r}")
+        capability_artifacts = packet.get("capability_artifacts") or {}
+        if capability_artifacts.get("implementation_workorder") != "docs/capability-drafts/workspace_profile.implementation-workorder.json":
+            raise SystemExit(f"expected implementation workorder path in execution packet, got {packet!r}")
+        if capability_artifacts.get("executor_contract") != "docs/capability-drafts/workspace_profile.executor-contract.json":
+            raise SystemExit(f"expected executor contract path in execution packet, got {packet!r}")
         if str(report.get("safe_apply_candidate_patch_file") or "") != str(safe_apply_patch_file):
             raise SystemExit(f"expected safe apply patch file in report, got {report!r}")
         if str(report.get("review_only_patch_file") or "") != str(review_only_patch_file):
@@ -648,9 +669,13 @@ def run_verify_dry_run() -> None:
         report = payload.get("report") or {}
         artifact_dir = Path(payload["artifact_dir"])
         manifest_file = artifact_dir / "guarded-apply-manifest.json"
+        packet_file = artifact_dir / "execution-packet.json"
         if not manifest_file.is_file():
             raise SystemExit(f"expected guarded apply manifest in verify dry-run: {artifact_dir}")
+        if not packet_file.is_file():
+            raise SystemExit(f"expected execution packet in verify dry-run: {artifact_dir}")
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        packet = json.loads(packet_file.read_text(encoding="utf-8"))
         if report.get("patch_application_decision") not in {"not_applied", "validated_only"}:
             raise SystemExit(f"expected report patch decision in verify dry-run, got {payload!r}")
         if (report.get("phase_status") or {}).get("verify") != "ok":
@@ -677,6 +702,10 @@ def run_verify_dry_run() -> None:
             commands = manifest.get("runtime_promotion_commands") or []
             if len(commands) < 3 or "gateway_runtime_fingerprint_check.py" not in " ".join(commands):
                 raise SystemExit(f"expected runtime promotion commands in manifest, got {manifest!r}")
+        if packet.get("kind") != "codex-local-execution-packet":
+            raise SystemExit(f"expected execution packet in verify dry-run, got {packet!r}")
+        if packet.get("verify", {}).get("all_green") is not True:
+            raise SystemExit(f"expected verify summary in execution packet, got {packet!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
 
 

@@ -430,6 +430,8 @@ Pro návrh nové capability slouží režim `capability_develop`:
 
 Nově k tomu manifest přidává i konkrétní `safe_apply_commands`, `runtime_promotion_commands` a jednotný `runtime_gate_command`, takže codex-local vrací nejen diff bundle, ale i další auditovaný orchestration krok pro senior review a následný apply/deploy.
 
+Vedle reportu a manifestu teď vzniká i `execution-packet.json`: strojově čitelný work packet, který na jednom místě shrne offload split, capability draft artefakty, verify příkazy, safe-apply cestu, runtime gate a doporučené další kroky pro codex-local i senior Codex review.
+
 U `capability_develop` navíc LLM draft nenahrazuje povinný capability bundle; zůstává jen jako další review-only runtime návrh. Self-improve k němu proto ukládá i samostatný audit artifact `runtime-promotable-candidate.diff`, tedy přímo použitelný runtime patch draft vytažený z capability promotion kandidáta, ale pořád mimo auto-apply cestu.
 
 Přes gateway existuje stejná capability jako `agent_self_improve` a přímý endpoint `/v1/admin/agent/self-improve`. CLI cesta:

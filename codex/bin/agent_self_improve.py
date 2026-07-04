@@ -3940,6 +3940,95 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
     }
 
 
+def build_execution_packet(
+    summary: dict[str, Any],
+    proposal_result: dict[str, Any],
+    generated_diff_result: dict[str, Any],
+    report: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    capability = str(report.get("target_capability_name") or "")
+    capability_artifacts: dict[str, str] = {}
+    if capability:
+        capability_artifacts = {
+            "draft": f"docs/capability-drafts/{capability}.json",
+            "smoke_contract": f"docs/capability-drafts/{capability}.smoke.json",
+            "gateway_integration": f"docs/capability-drafts/{capability}.gateway-integration.json",
+            "gateway_patch_fragment": f"docs/capability-drafts/{capability}.gateway.patch.md",
+            "runtime_patch_candidate": f"docs/capability-drafts/{capability}.runtime.patch.diff",
+            "promotion_patch": f"docs/capability-drafts/{capability}.promotion.patch.diff",
+            "executor_contract": f"docs/capability-drafts/{capability}.executor-contract.json",
+            "executor_dispatch": f"docs/capability-drafts/{capability}.executor-dispatch.json",
+            "implementation_workorder": f"docs/capability-drafts/{capability}.implementation-workorder.json",
+            "executor_stub": f"codex/bin/capability_drafts/{capability}_executor_stub.py",
+            "runtime_hook_stub": f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
+            "smoke_stub": f"codex/bin/capability_drafts/{capability}_smoke.py",
+        }
+    verify_summary = report.get("verify_summary") or {}
+    acceptance_evidence = report.get("acceptance_evidence_status") or []
+    return {
+        "kind": "codex-local-execution-packet",
+        "workspace": str(summary.get("workspace") or ""),
+        "mode": str(summary.get("mode") or ""),
+        "dry_run": bool(summary.get("dry_run")),
+        "target_capability_name": capability,
+        "diagnosis_category": str(summary.get("diagnosis_category") or ""),
+        "root_cause": str(summary.get("root_cause") or ""),
+        "offload": {
+            "ratio_percent": report.get("offload_ratio_percent"),
+            "safe_to_codex_local": report.get("safe_to_offload_to_codex_local") or [],
+            "completed_this_run": report.get("completed_by_codex_local_in_this_run") or [],
+            "pending_codex_local": report.get("pending_codex_local_work") or [],
+            "requires_senior_codex": report.get("codex_senior_review_required_for") or [],
+        },
+        "apply_path": {
+            "decision": manifest.get("decision"),
+            "safe_apply_candidate_patch_file": manifest.get("safe_apply_candidate_patch_file") or "",
+            "safe_apply_commands": manifest.get("safe_apply_commands") or [],
+            "review_only_patch_file": manifest.get("review_only_patch_file") or "",
+            "promotable_runtime_patch_file": manifest.get("promotable_runtime_patch_file") or "",
+            "runtime_promotion_commands": manifest.get("runtime_promotion_commands") or [],
+            "promotion_blockers": manifest.get("promotion_blockers") or [],
+        },
+        "runtime_gate": {
+            "command": manifest.get("runtime_gate_command") or "",
+            "status": manifest.get("runtime_gate_status") or {},
+        },
+        "verify": {
+            "all_green": verify_summary.get("all_green"),
+            "command_count": verify_summary.get("command_count"),
+            "commands": manifest.get("minimum_verify_commands") or [],
+            "failed_commands": verify_summary.get("failed_commands") or [],
+        },
+        "acceptance_evidence": acceptance_evidence,
+        "capability_artifacts": capability_artifacts,
+        "generated_diff": {
+            "patch_file": generated_diff_result.get("patch_file") or "",
+            "source": generated_diff_result.get("source") or "",
+            "git_apply_check_exit_code": generated_diff_result.get("git_apply_check_exit_code"),
+            "blocked_paths": generated_diff_result.get("blocked_paths") or [],
+            "paths": generated_diff_result.get("paths") or [],
+        },
+        "proposal": {
+            "acceptance_criteria": proposal_result.get("acceptance_criteria") or [],
+            "offload_split": proposal_result.get("offload_split") or {},
+            "proposed_file_changes": proposal_result.get("proposed_file_changes") or [],
+        },
+        "next_actions": {
+            "codex_local": [
+                "Read the executor contract and implementation workorder artifacts.",
+                "Use the generated unified diff and verify commands as the default bounded execution plan.",
+                "If verify fails, feed the failure into the next max_cycles iteration instead of widening scope.",
+            ],
+            "senior_codex": [
+                "Review runtime patch candidates before touching gateway.py.",
+                "Approve or reject the guarded safe-apply candidate.",
+                "Require runtime fingerprint check before deploy or runtime promotion.",
+            ],
+        },
+    }
+
+
 def write_final_report(
     audit_dir: Path,
     summary: dict[str, Any],
@@ -3949,8 +4038,15 @@ def write_final_report(
     report = build_report(summary, proposal_result, generated_diff_result)
     summary["report"] = report
     manifest = build_guarded_apply_manifest(summary, generated_diff_result)
+    packet = build_execution_packet(summary, proposal_result, generated_diff_result, report, manifest)
+    generated_artifacts = list(report.get("generated_artifacts") or [])
+    for rel in ("execution-packet.json", "self-improve-report.json", "guarded-apply-manifest.json"):
+        if rel not in generated_artifacts:
+            generated_artifacts.append(rel)
+    report["generated_artifacts"] = sorted(generated_artifacts)
     write_json(audit_dir / "self-improve-report.json", report)
     write_json(audit_dir / "guarded-apply-manifest.json", manifest)
+    write_json(audit_dir / "execution-packet.json", packet)
     lines = [
         "# Agent Self-Improve Report",
         "",
@@ -4062,6 +4158,16 @@ def write_final_report(
     lines.extend(["", "## Artifacts", ""])
     for item in report["generated_artifacts"]:
         lines.append(f"- `{item}`")
+    lines.extend(["", "## Execution Packet", ""])
+    lines.append("- file: `execution-packet.json`")
+    if packet.get("offload", {}).get("safe_to_codex_local"):
+        lines.append("- codex-local work packet:")
+        for item in packet["offload"]["safe_to_codex_local"]:
+            lines.append(f"  - {item}")
+    if packet.get("offload", {}).get("requires_senior_codex"):
+        lines.append("- senior review packet:")
+        for item in packet["offload"]["requires_senior_codex"]:
+            lines.append(f"  - {item}")
     lines.extend(["", "## Guarded Apply Manifest", ""])
     lines.append(f"- decision: `{manifest.get('decision')}`")
     if manifest.get("runtime_gate_status"):
