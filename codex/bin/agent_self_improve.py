@@ -1155,6 +1155,172 @@ def capability_smoke_stub_file(capability: str, feature_request: str, reasoning:
     return rel, unified_diff_for_file(rel, before, after)
 
 
+def failure_case_slug(regression: dict[str, Any], diagnosis: dict[str, Any], reasoning: dict[str, Any]) -> str:
+    cases = regression.get("cases") or []
+    for case in cases:
+        if isinstance(case, dict) and case.get("name"):
+            return slugify(str(case.get("name")), "observed_case")
+    prompt = str((reasoning.get("task_spec") or {}).get("user_goal") or "")
+    if prompt:
+        digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
+        return slugify(digest, "observed_case")
+    return slugify(str(diagnosis.get("category") or "observed_case"), "observed_case")
+
+
+def failure_regression_case_file(
+    regression_slug: str,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> tuple[str, str]:
+    rel = f"docs/self-improve-cases/{regression_slug}.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    first_case = next((case for case in (regression.get("cases") or []) if isinstance(case, dict)), {})
+    payload = {
+        "kind": "codex-local-self-improve-case",
+        "case_name": regression_slug,
+        "diagnosis_category": diagnosis.get("category"),
+        "root_cause": diagnosis.get("root_cause"),
+        "workspace": task_spec.get("current_workspace") or "",
+        "prompt": first_case.get("prompt") or task_spec.get("user_goal") or "",
+        "expected_behavior": regression.get("expected_behavior") or task_spec.get("desired_end_state") or "",
+        "expected_workflow": first_case.get("expected_workflow") or "",
+        "expected_capability": first_case.get("expected_capability") or "",
+        "expected_marker": first_case.get("expected_marker") or "",
+        "patch_scope": diagnosis.get("patch_scope") or [],
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "reproduce_commands": REPRODUCE_COMMANDS,
+        "notes": [
+            "This artifact is a safe self-improve bundle for a smaller feature/fix or recovery case.",
+            "It is intentionally registry/taskspec/recovery first and does not auto-apply runtime changes.",
+        ],
+    }
+    after = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def failure_regression_smoke_contract_file(
+    regression_slug: str,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> tuple[str, str]:
+    rel = f"docs/self-improve-cases/{regression_slug}.smoke.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    first_case = next((case for case in (regression.get("cases") or []) if isinstance(case, dict)), {})
+    payload = {
+        "kind": "codex-local-self-improve-case-smoke",
+        "case_name": regression_slug,
+        "diagnosis_category": diagnosis.get("category"),
+        "expected": {
+            "workspace": task_spec.get("current_workspace") or "",
+            "workflow": first_case.get("expected_workflow") or "",
+            "capability": first_case.get("expected_capability") or "",
+            "marker": first_case.get("expected_marker") or "",
+        },
+        "required_paths": [
+            f"docs/self-improve-cases/{regression_slug}.json",
+            f"docs/self-improve-cases/{regression_slug}.patch.md",
+            f"codex/bin/self_improve_cases/{regression_slug}_smoke.py",
+        ],
+        "required_markers": {
+            "case_kind": "codex-local-self-improve-case",
+            "patch_fragment_kind": "codex-local-self-improve-patch-fragment",
+            "smoke_stub_marker": "SELF_IMPROVE_CASE_SMOKE_SCAFFOLD",
+        },
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+    }
+    after = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def failure_regression_patch_fragment_file(
+    regression_slug: str,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> tuple[str, str]:
+    rel = f"docs/self-improve-cases/{regression_slug}.patch.md"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    first_case = next((case for case in (regression.get("cases") or []) if isinstance(case, dict)), {})
+    scope_lines = "\n".join(f"- `{item}`" for item in (diagnosis.get("patch_scope") or [])) or "- `codex/gateway/gateway.py`"
+    after = (
+        f"# Self-Improve Patch Fragment for `{regression_slug}`\n\n"
+        "kind: codex-local-self-improve-patch-fragment\n"
+        f"diagnosis_category: {diagnosis.get('category') or ''}\n"
+        f"workspace: {task_spec.get('current_workspace') or ''}\n"
+        "status: draft\n\n"
+        "## Intended Patch Scope\n\n"
+        f"{scope_lines}\n\n"
+        "## Regression Guard Fragment\n\n"
+        "```diff\n"
+        "@@ add or extend regression smoke @@\n"
+        f"+# case: {regression_slug}\n"
+        f"+# expected_workflow: {first_case.get('expected_workflow') or ''}\n"
+        f"+# expected_capability: {first_case.get('expected_capability') or ''}\n"
+        f"+# expected_marker: {first_case.get('expected_marker') or ''}\n"
+        "```\n\n"
+        "## TaskSpec / Capability Fragment\n\n"
+        "```diff\n"
+        "@@ planner or capability canonicalization layer @@\n"
+        f"+# desired_end_state: {task_spec.get('desired_end_state') or ''}\n"
+        "+# preserve user intent, do not widen into unrelated workflow fallback\n"
+        "```\n\n"
+        "## Recovery Fragment\n\n"
+        "```diff\n"
+        "@@ failure recovery output @@\n"
+        f"+# root_cause: {diagnosis.get('root_cause') or ''}\n"
+        f"+# recovery: {diagnosis.get('recovery') or ''}\n"
+        "```\n"
+    )
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def failure_regression_smoke_stub_file(
+    regression_slug: str,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> tuple[str, str]:
+    rel = f"codex/bin/self_improve_cases/{regression_slug}_smoke.py"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    first_case = next((case for case in (regression.get("cases") or []) if isinstance(case, dict)), {})
+    expected = {
+        "case_name": regression_slug,
+        "diagnosis_category": diagnosis.get("category"),
+        "workspace": task_spec.get("current_workspace") or "",
+        "workflow": first_case.get("expected_workflow") or "",
+        "capability": first_case.get("expected_capability") or "",
+        "marker": first_case.get("expected_marker") or "",
+    }
+    after = (
+        "#!/usr/bin/env python3\n"
+        f'"""Draft smoke scaffold for self-improve case `{regression_slug}`.\n\n'
+        "Generated by agent_self_improve. This is a bounded smoke stub for a\n"
+        "smaller failure/fix case and should be promoted to a real regression once\n"
+        "the runtime patch is reviewed.\n"
+        '"""\n\n'
+        "from __future__ import annotations\n\n"
+        "import json\n\n"
+        f"EXPECTED = {json.dumps(expected, ensure_ascii=False, indent=4)}\n\n"
+        "def main() -> int:\n"
+        "    print('SELF_IMPROVE_CASE_SMOKE_SCAFFOLD')\n"
+        "    print(json.dumps(EXPECTED, ensure_ascii=False, indent=2))\n"
+        "    return 0\n\n"
+        'if __name__ == "__main__":\n'
+        "    raise SystemExit(main())\n"
+    )
+    return rel, unified_diff_for_file(rel, before, after)
+
+
 def check_patch_text(patch_text: str, timeout: int) -> dict[str, Any]:
     paths = changed_paths_from_patch(patch_text)
     blocked = [path for path in paths if not patch_path_allowed(path)]
@@ -1223,8 +1389,16 @@ def generate_unified_diff(
                     patch_parts.append(diff)
             source = "capability_development_template"
         else:
-            patch_parts = []
-            source = "no_safe_generator"
+            regression_slug = failure_case_slug(regression, diagnosis, reasoning)
+            for rel, diff in (
+                failure_regression_case_file(regression_slug, diagnosis, regression, reasoning),
+                failure_regression_smoke_contract_file(regression_slug, diagnosis, regression, reasoning),
+                failure_regression_patch_fragment_file(regression_slug, diagnosis, regression, reasoning),
+                failure_regression_smoke_stub_file(regression_slug, diagnosis, regression, reasoning),
+            ):
+                if diff:
+                    patch_parts.append(diff)
+            source = "failure_regression_template"
         patch_text = "".join(patch_parts)
 
     patch_file = audit_dir / "generated-unified.diff"

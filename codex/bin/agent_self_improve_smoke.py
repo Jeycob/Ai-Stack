@@ -119,7 +119,6 @@ def run_proposal_mode() -> None:
                 str(Path(tmp) / "audit"),
             ],
             timeout=240,
-            expect_ok=False,
         )
         proposal_file = Path(payload["artifact_dir"]) / "cycle-01/patch-proposal.json"
         if not proposal_file.is_file():
@@ -128,8 +127,27 @@ def run_proposal_mode() -> None:
         if not proposal.get("proposal"):
             raise SystemExit(f"expected proposal content, got {proposal!r}")
         generated = payload.get("generated_diff") or {}
-        if generated.get("source") != "no_safe_generator" or not generated.get("patch_file") in {"", None}:
-            raise SystemExit(f"expected explicit no-generator recovery for non-capability proposal, got {payload!r}")
+        if generated.get("source") != "failure_regression_template" or not generated.get("ok"):
+            raise SystemExit(f"expected generated failure regression bundle for non-capability proposal, got {payload!r}")
+        paths = generated.get("paths") or []
+        if "docs/self-improve-cases/ssh_public_key_alias_test2.json" not in paths:
+            raise SystemExit(f"expected self-improve regression case file in generated diff, got {generated!r}")
+        if "docs/self-improve-cases/ssh_public_key_alias_test2.smoke.json" not in paths:
+            raise SystemExit(f"expected self-improve smoke contract file in generated diff, got {generated!r}")
+        if "docs/self-improve-cases/ssh_public_key_alias_test2.patch.md" not in paths:
+            raise SystemExit(f"expected self-improve patch fragment file in generated diff, got {generated!r}")
+        if "codex/bin/self_improve_cases/ssh_public_key_alias_test2_smoke.py" not in paths:
+            raise SystemExit(f"expected self-improve smoke scaffold in generated diff, got {generated!r}")
+        patch_file = Path(generated["patch_file"])
+        patch_text = patch_file.read_text(encoding="utf-8")
+        for marker in (
+            '"kind": "codex-local-self-improve-case"',
+            '"kind": "codex-local-self-improve-case-smoke"',
+            "codex-local-self-improve-patch-fragment",
+            "SELF_IMPROVE_CASE_SMOKE_SCAFFOLD",
+        ):
+            if marker not in patch_text:
+                raise SystemExit(f"expected marker {marker!r} in non-capability generated diff:\n{patch_text}")
         print("AGENT_SELF_IMPROVE_PATCH_PROPOSAL_OK")
 
 
