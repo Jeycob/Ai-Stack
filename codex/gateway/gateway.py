@@ -840,18 +840,42 @@ def admin_web_answer(payload):
     return result
 
 
-def agent_direct_answer_response(task, intent_class="direct_answer"):
+def agent_direct_answer_response(task, intent_class="direct_answer", conversation_context=""):
+    now = time.localtime()
+    runtime_context = {
+        "local_time": time.strftime("%Y-%m-%d %H:%M:%S %Z", now),
+        "local_weekday": time.strftime("%A", now),
+        "timezone": time.tzname[0] if time.tzname else "",
+        "agent_name": "codex-local",
+        "agent_surface": "OpenWebUI",
+        "recent_conversation_context": str(conversation_context or "")[-6000:],
+        "capability_summary": agent_capability_human_summary(max_items_per_scope=6),
+        "implemented_capabilities": sorted(
+            name for name, spec in agent_capability_registry().items()
+            if isinstance(spec, dict) and spec.get("implemented")
+        ),
+    }
     messages = [
         {
             "role": "system",
             "content": (
-                "Answer the user's ordinary chat request directly and concisely. "
+                "Answer the user's ordinary chat request directly and concisely from the supplied runtime context. "
                 "Do not inspect repositories, do not mention missing workspace capabilities, and do not invent tool execution. "
-                "If the user writes Czech, answer Czech. For simple arithmetic, give the result plainly. "
-                "For creative writing, write the requested text."
+                "If the user writes Czech, answer Czech. For date/time questions, derive the answer from runtime_context. "
+                "For questions about who you are or what you can do, use runtime_context and the capability summary. "
+                "For simple arithmetic, give the result plainly. For creative writing, write the requested text. "
+                "For follow-ups like 'vypiš výsledky', use recent_conversation_context instead of switching to repository work."
             ),
         },
-        {"role": "user", "content": str(task or "").strip()},
+        {
+            "role": "user",
+            "content": (
+                "runtime_context:\n"
+                + json.dumps(runtime_context, ensure_ascii=False, indent=2)
+                + "\n\nuser_request:\n"
+                + str(task or "").strip()
+            ),
+        },
     ]
     response = ollama_chat(codex_local_runtime_model_name(task=task, role=ROLE_DIRECT), messages, timeout=120)
     answer = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
@@ -884,6 +908,19 @@ def parse_search_results_from_html(source, limit=5):
             assert_public_web_url(href)
         except Exception:
             continue
+        parsed_href = urllib.parse.urlparse(href)
+        host = (parsed_href.hostname or "").lower()
+        title_lower = title.lower()
+        if (
+            host.endswith("duckduckgo.com")
+            or host.endswith("bing.com")
+            or host.endswith("microsoft.com")
+        ) and (
+            parsed_href.path in {"", "/", "/html/", "/lite/", "/search"}
+            or "duckduckgo" in title_lower
+            or "bing" in title_lower
+        ):
+            continue
         if any(item["url"] == href for item in results):
             continue
         results.append({"title": title[:180], "url": href})
@@ -892,54 +929,115 @@ def parse_search_results_from_html(source, limit=5):
     return results
 
 
+def public_web_search_queries(query):
+    base = " ".join(str(query or "").split())
+    if not base:
+        return []
+    queries = [base]
+    lower = base.lower()
+    temporal_cues = (
+        "dnes",
+        "dneska",
+        "dnešní",
+        "dnesni",
+        "today",
+        "current",
+        "aktuální",
+        "aktualni",
+    )
+    if any(cue in lower for cue in temporal_cues):
+        now = time.localtime()
+        queries.append(f"{base} {time.strftime('%Y-%m-%d', now)}")
+        queries.append(f"{base} {time.strftime('%B %d %Y', now)}")
+    deduped = []
+    seen = set()
+    for item in queries:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:3]
+
+
+def public_web_search_urls(query):
+    encoded = urllib.parse.quote_plus(query)
+    return [
+        ("duckduckgo_html", "https://duckduckgo.com/html/?q=" + encoded),
+        ("duckduckgo_lite", "https://lite.duckduckgo.com/lite/?q=" + encoded),
+        ("bing", "https://www.bing.com/search?q=" + encoded),
+    ]
+
+
+def fetch_public_search_html(url, timeout=20, max_bytes=400_000):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirectHandler)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; CodexLocalGateway/1.0)",
+            "Accept": "text/html,*/*;q=0.5",
+        },
+    )
+    with opener.open(req, timeout=timeout) as resp:
+        return resp.read(max_bytes).decode("utf-8", "replace")
+
+
 def admin_public_web_search(payload):
     query = str(payload.get("query") or payload.get("question") or "").strip()
     if not query or len(query) > 300:
         raise ValueError("PUBLIC_WEB_SEARCH_QUERY_REQUIRED")
-    search_url = "https://duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
-    try:
-        fetch = admin_web_fetch({"url": search_url, "max_bytes": 400_000, "text_limit": 30_000, "timeout": 20})
-    except Exception as exc:
-        return {
-            "ok": False,
-            "action": "public_web_search",
-            "query": query,
-            "search_url": search_url,
-            "error": f"{type(exc).__name__}: {exc}",
-            "recovery": "Zkontroluj outbound HTTP z gateway runtime nebo nastav alternativní veřejný search provider.",
-        }
-    raw_html = ""
-    try:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirectHandler)
-        req = urllib.request.Request(
-            search_url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; CodexLocalGateway/1.0)",
-                "Accept": "text/html,*/*;q=0.5",
-            },
-        )
-        with opener.open(req, timeout=20) as resp:
-            raw_html = resp.read(400_000).decode("utf-8", "replace")
-    except Exception:
-        raw_html = ""
-    results = parse_search_results_from_html(raw_html, limit=5)
-    if not results:
-        text = str(fetch.get("text") or "").strip()
-        if text:
-            results = [{"title": preview_text(text, 160), "url": search_url}]
+    attempts = []
+    results = []
+    selected_url = ""
+    selected_provider = ""
+    for search_query in public_web_search_queries(query):
+        for provider, search_url in public_web_search_urls(search_query):
+            try:
+                raw_html = fetch_public_search_html(search_url, timeout=20)
+                parsed_results = parse_search_results_from_html(raw_html, limit=5)
+                attempts.append(
+                    {
+                        "provider": provider,
+                        "query": search_query,
+                        "url": search_url,
+                        "result_count": len(parsed_results),
+                    }
+                )
+                if parsed_results:
+                    results = parsed_results
+                    selected_url = search_url
+                    selected_provider = provider
+                    break
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "provider": provider,
+                        "query": search_query,
+                        "url": search_url,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        if results:
+            break
     answer = ""
     if results:
         bullets = "\n".join(f"- {item['title']}: {item['url']}" for item in results)
         answer = f"Našel jsem veřejné výsledky pro `{query}`:\n{bullets}"
     else:
-        answer = f"Veřejné vyhledání pro `{query}` nevrátilo parsovatelné výsledky."
+        answer = (
+            f"Veřejné vyhledání pro `{query}` nevrátilo parsovatelné výsledky. "
+            "Nechci jako výsledek vracet homepage vyhledávače."
+        )
     return {
         "ok": bool(results),
         "action": "public_web_search",
         "query": query,
-        "search_url": search_url,
+        "search_url": selected_url or (attempts[0]["url"] if attempts else ""),
+        "provider": selected_provider,
+        "attempts": attempts,
         "results": results,
         "answer": answer,
+        "recovery": "" if results else "Zkontroluj outbound HTTP z gateway runtime nebo nastav alternativní veřejný search provider.",
     }
 
 
@@ -1769,6 +1867,36 @@ def agent_capability_human_summary(max_items_per_scope=4):
 
 
 def agent_infer_action_from_task(task):
+    """Legacy fallback only; normal action selection is LLM TaskSpec-driven."""
+    return ""
+
+
+def agent_infer_followup_actions(task):
+    """Legacy fallback only; normal follow-up action selection is LLM TaskSpec-driven."""
+    return []
+
+
+def agent_edit_requested(task):
+    """Legacy fallback only; workspace edit intent must come from TaskSpec/capability selection."""
+    return False
+
+
+def agent_bootstrap_requested(task):
+    """Legacy fallback disabled; bootstrap intent must come from TaskSpec."""
+    return False
+
+
+def agent_ssh_key_show_public_requested(task):
+    """Legacy fallback only; SSH public-key intent must come from TaskSpec/capability selection."""
+    return False
+
+
+def agent_ssh_key_create_requested(task):
+    """Legacy fallback only; SSH key intent must come from TaskSpec/capability selection."""
+    return False
+
+
+def agent_infer_action_from_task_legacy(task):
     lower = str(task or "").lower()
     registry = load_workspace_action_registry()
     for action, spec in registry.items():
@@ -1780,7 +1908,7 @@ def agent_infer_action_from_task(task):
     return ""
 
 
-def agent_infer_followup_actions(task):
+def agent_infer_followup_actions_legacy(task):
     lower = str(task or "").lower()
     registry = load_workspace_action_registry()
     scored = []
@@ -1861,7 +1989,7 @@ def agent_infer_followup_actions(task):
     return ordered
 
 
-def agent_edit_requested(task):
+def agent_edit_requested_legacy(task):
     lower = str(task or "").lower()
     cues = (
         "uprav",
@@ -1884,7 +2012,7 @@ def agent_edit_requested(task):
     return any(cue in lower for cue in cues)
 
 
-def agent_bootstrap_requested(task):
+def agent_bootstrap_requested_legacy(task):
     lower = str(task or "").lower()
     cues = (
         "vytvor repo",
@@ -1905,7 +2033,7 @@ def agent_bootstrap_requested(task):
     return any(cue in lower for cue in cues)
 
 
-def agent_ssh_key_show_public_requested(task):
+def agent_ssh_key_show_public_requested_legacy(task):
     lower = str(task or "").lower()
     public_cues = (
         "public key",
@@ -1927,7 +2055,7 @@ def agent_ssh_key_show_public_requested(task):
     return any(cue in lower for cue in public_cues) or ("public" in lower and any(cue in lower for cue in ("ssh", "klic", "klíč", "key")))
 
 
-def agent_ssh_key_create_requested(task):
+def agent_ssh_key_create_requested_legacy(task):
     lower = str(task or "").lower()
     create_cues = (
         "ssh klic",
@@ -1960,13 +2088,18 @@ def normalize_capability_identifier(value):
 
 
 def agent_target_capability_name_from_task(task):
+    """Extract only explicit structured capability identifiers.
+
+    Natural-language requests such as "přidej capability X" belong to the
+    TaskSpec planner. This helper is a guard for already-structured fields
+    typed into chat or passed by admin tooling.
+    """
     text = strip_routing(str(task or "")).strip()
     if not text:
         return ""
     patterns = (
         r"(?i)\btarget_capability_name\s*[:=]\s*[`'\"]?([A-Za-z][A-Za-z0-9_.:-]{1,79})[`'\"]?",
-        r"(?i)\b(?:capability|capabilities|schopnost|schopnosti|feature)\s*[:=]\s*[`'\"]?([A-Za-z][A-Za-z0-9_.:-]{1,79})[`'\"]?",
-        r"(?i)\b(?:add|create|implement|develop|improve|pridej|přidej|vytvor|vytvoř|navrhni|rozsir|rozšiř)\s+(?:new\s+)?(?:codex-local\s+)?(?:capability|feature|schopnost)\s+[`'\"]?([A-Za-z][A-Za-z0-9_.:-]{1,79})[`'\"]?",
+        r"(?i)\b(?:capability|capabilities|feature)\s*[:=]\s*[`'\"]?([A-Za-z][A-Za-z0-9_.:-]{1,79})[`'\"]?",
     )
     for pattern in patterns:
         match = re.search(pattern, text)
@@ -1979,26 +2112,10 @@ def agent_target_capability_name_from_task(task):
 
 
 def agent_capability_develop_requested(task):
-    lower = str(task or "").lower()
+    """Legacy fallback only; capability-development intent belongs to TaskSpec."""
     if agent_target_capability_name_from_task(task):
         return True
-    cues = (
-        "nova capability",
-        "nova schopnost",
-        "new capability",
-        "implement capability",
-        "develop capability",
-        "improve capability",
-        "pridej capability",
-        "přidej capability",
-        "pridej schopnost",
-        "přidej schopnost",
-        "navrhni capability",
-        "navrhni schopnost",
-        "rozsir capability",
-        "rozšiř capability",
-    )
-    return any(cue in lower for cue in cues)
+    return False
 
 
 def agent_workspace_ssh_comment(task, workspace):
@@ -2027,54 +2144,18 @@ def agent_remote_url_from_task(task):
 
 
 def agent_git_publish_requested(task):
-    lower = str(task or "").lower()
-    git_cues = (
-        "git push",
-        "pushni",
-        "pushnout",
-        "push to",
-        "nastav origin",
-        "set origin",
-        "git remote",
-        "remote origin",
-        "initni git",
-        "init git",
-        "git init",
-        "commitni",
-        "commit changes",
-    )
-    return agent_remote_url_from_task(task) != "" and any(cue in lower for cue in git_cues)
+    """Structural fallback: a concrete Git remote URL is enough to publish an existing workspace."""
+    return agent_remote_url_from_task(task) != ""
 
 
 def agent_new_workspace_request(task):
-    return bool(bootstrap_repo_name_from_text(task))
+    """Legacy fallback disabled; new workspace intent must come from TaskSpec."""
+    return False
 
 
 def agent_executable_task_requested(task):
-    lower = str(task or "").lower()
-    generic_cues = (
-        "udělej",
-        "udelej",
-        "proveď",
-        "proved",
-        "spusť",
-        "spust",
-        "nainstaluj",
-        "doinstaluj",
-        "oprav",
-        "fixni",
-        "vytvoř",
-        "vytvor",
-        "přidej",
-        "pridej",
-        "rozběhni",
-        "rozbehni",
-        "commitni",
-        "pushni",
-        "initni",
-        "nastav",
-    )
-    return any(cue in lower for cue in generic_cues)
+    """Legacy fallback disabled; execution intent is TaskSpec/capability-selector work."""
+    return False
 
 
 def agent_public_url_from_task(task):
@@ -2082,149 +2163,37 @@ def agent_public_url_from_task(task):
     match = re.search(r"https?://[^\s<>'\")]+", text)
     if match:
         return match.group(0).rstrip(".,;:!?)]}")
-    lower = text.lower()
-    if "seznam.cz" in lower and ("svatek" in lower or "svátek" in lower):
-        return "https://search.seznam.cz/?q=" + urllib.parse.quote_plus("kdo má dnes svátek")
-    known = {
-        "seznam.cz": "https://www.seznam.cz/",
-        "novinky.cz": "https://www.novinky.cz/",
-        "idnes.cz": "https://www.idnes.cz/",
-        "github.com": "https://github.com/",
-        "example.com": "https://example.com/",
-    }
-    for domain, url in known.items():
-        if domain in lower:
-            return url
     return ""
 
 
 def agent_web_question_requested(task):
-    lower = str(task or "").lower()
-    cues = (
-        "?",
-        "kdo ",
-        "co ",
-        "jaky ",
-        "jaký ",
-        "jaka ",
-        "jaká ",
-        "jake ",
-        "jaké ",
-        "kdy ",
-        "kde ",
-        "proc ",
-        "proč ",
-        "who ",
-        "what ",
-        "when ",
-        "where ",
-        "why ",
-        "svatek",
-        "svátek",
-        "dneska",
-        "dnes ",
-    )
-    return any(cue in lower for cue in cues)
+    """Legacy fallback disabled; public-web intent belongs to TaskSpec."""
+    return False
 
 
 def agent_capability_help_requested(task):
-    lower = str(task or "").strip().lower()
-    if not lower:
-        return False
-    cues = (
-        "co umis",
-        "co umiš",
-        "co dokazes",
-        "co dokážeš",
-        "jake mas capability",
-        "jaké máš capability",
-        "jake mas schopnosti",
-        "jaké máš schopnosti",
-        "jake mas tooly",
-        "jaké máš tooly",
-        "capability help",
-        "capability catalog",
-        "capability katalog",
-        "help capabilities",
-    )
-    return any(cue in lower for cue in cues)
+    """Legacy fallback disabled; help/capability intent belongs to TaskSpec."""
+    return False
 
 
 def agent_preview_requested(task):
-    lower = str(task or "").lower()
-    cues = (
-        "preview",
-        "nahled",
-        "náhled",
-        "vystav",
-        "expose",
-        "open app",
-        "otevri app",
-        "otevři app",
-        "ukaz appku",
-        "ukaž appku",
-        "spust appku",
-        "spusť appku",
-    )
-    return any(cue in lower for cue in cues)
+    """Legacy fallback disabled; preview intent belongs to TaskSpec."""
+    return False
 
 
 def agent_user_confirmation_requested(task):
-    lower = str(task or "").lower()
-    cues = (
-        "pockej na potvrzeni",
-        "počkej na potvrzení",
-        "az potvrdim",
-        "až potvrdím",
-        "po potvrzeni",
-        "po potvrzení",
-        "cekaj na potvrzeni",
-        "čekej na potvrzení",
-        "await confirmation",
-        "wait for confirmation",
-        "before push",
-        "before deploy",
-    )
-    return any(cue in lower for cue in cues)
+    """Legacy fallback disabled; confirmation checkpoints belong to TaskSpec safety fields."""
+    return False
 
 
 def agent_deploy_requested(task):
-    lower = str(task or "").lower()
-    cues = (
-        "deploy",
-        "self deploy",
-        "self-deploy",
-        "nasad",
-        "nasaď",
-        "nasazeni",
-        "nasazení",
-        "restartni stack",
-        "restartuj stack",
-        "pullni ai-stack",
-        "pull ai-stack",
-        "aktualizuj ai-stack",
-        "update ai-stack",
-    )
-    return any(cue in lower for cue in cues)
+    """Legacy fallback disabled; stack deploy intent belongs to TaskSpec/admin capability."""
+    return False
 
 
 def agent_run_requested(task):
-    lower = str(task or "").lower()
-    cues = (
-        "spust prikaz",
-        "spusť příkaz",
-        "spust command",
-        "spusť command",
-        "run command",
-        "execute command",
-        "shell command",
-        "terminal command",
-        "vypis verzi",
-        "vypiš verzi",
-        "ukaz verzi",
-        "ukaž verzi",
-    )
-    return any(cue in lower for cue in cues)
+    """Legacy fallback disabled; explicit commands are detected structurally by agent_infer_command_from_task."""
+    return False
 
 
 def agent_explicit_command_requested(task):
@@ -2234,11 +2203,9 @@ def agent_explicit_command_requested(task):
         return True
     if re.search(r"`([^`\n]{1,300})`", text):
         return True
-    if re.search(r"(?is)\b(?:spust|spusť|run|execute)\s+(?:prikaz|příkaz|command)\s*:?\s*(.+)$", text):
-        return True
     if any(token in lower for token in ("git status", "pwd", "ls -", "python --version", "python3 --version", "node --version", "npm --version")):
         return True
-    return agent_run_requested(task)
+    return False
 
 
 def agent_infer_command_from_task(task):
@@ -2252,91 +2219,34 @@ def agent_infer_command_from_task(task):
     inline = re.search(r"`([^`\n]{1,300})`", text)
     if inline:
         return ["sh", "-lc", inline.group(1).strip()]
-    command_match = re.search(
-        r"(?is)\b(?:spust|spusť|run|execute)\s+(?:prikaz|příkaz|command)\s*:?\s*(.+)$",
-        text,
-    )
-    if command_match:
-        candidate = command_match.group(1).strip()
-        if candidate:
-            return ["sh", "-lc", candidate[:500]]
     if "git status" in lower:
         return ["git", "status", "--short", "--branch"]
-    if re.search(r"\b(pwd|kde jsem|working directory)\b", lower):
+    if re.fullmatch(r"\s*pwd\s*", lower) or "working directory" in lower:
         return ["pwd"]
-    if re.search(r"\b(ls|vypis soubory|vypiš soubory|seznam souboru|seznam souborů)\b", lower):
+    if re.fullmatch(r"\s*ls(?:\s+-[A-Za-z]+)?\s*", lower):
         return ["ls", "-la"]
-    if "python" in lower and ("verzi" in lower or "version" in lower):
+    if "python" in lower and ("--version" in lower or "version" in lower):
         return ["python3", "--version"]
-    if "node" in lower and ("verzi" in lower or "version" in lower):
+    if "node" in lower and ("--version" in lower or "version" in lower):
         return ["node", "--version"]
-    if "npm" in lower and ("verzi" in lower or "version" in lower):
+    if "npm" in lower and ("--version" in lower or "version" in lower):
         return ["npm", "--version"]
     return []
 
 
 def agent_meta_capability_from_task(task):
-    lower = str(task or "").strip().lower()
-    if not lower:
-        return ""
-    if agent_capability_help_requested(task):
-        return "capability_catalog_show"
-    if any(cue in lower for cue in ("prepni se do workspace", "přepni se do workspace", "switch workspace", "set workspace", "zmen workspace", "změň workspace")):
-        return "workspace_context_set"
-    if any(cue in lower for cue in ("kde ted jsi", "kde teď jsi", "current workspace", "workspace status", "v jakem workspace", "v jakém workspace")):
-        return "workspace_context_status"
-    if any(cue in lower for cue in ("agent runtime", "runtime status", "gateway status", "codex status")):
-        return "agent_runtime_status"
+    """Legacy fallback disabled; meta intents belong to TaskSpec required_capabilities."""
     return ""
 
 
 def agent_workspace_search_query_from_task(task):
-    text = strip_routing(str(task or "")).strip()
-    if not text:
-        return ""
-    lower = text.lower()
-    explicit_repo_search = any(cue in lower for cue in ("prohledej", "hledej", "vyhledej", "grep", "rg", "find mentions"))
-    if agent_capability_develop_requested(task) and not explicit_repo_search:
-        return ""
-    search_with_scope = "search" in lower and any(
-        cue in lower for cue in ("repo", "repository", "repozitar", "repozitář", "workspace", "soubor", "files", "codebase")
-    )
-    if not (explicit_repo_search or search_with_scope):
-        return ""
-    cleaned = re.sub(
-        r"(?is)\b(?:prohledej|prohledat|vyhledej|hledej|search|grep|rg|find mentions(?: of)?)\b",
-        " ",
-        text,
-    )
-    cleaned = re.sub(
-        r"(?is)\b(?:repo|repository|repozitar|repozitář|projekt|workspace|soubor(?:y|ech)?|zminky|zmínky|o|of|for|a|and|najdi)\b",
-        " ",
-        cleaned,
-    )
-    cleaned = " ".join(cleaned.replace(":", " ").split())
-    return cleaned[:160] or "capability"
+    """Legacy fallback disabled; repository search query belongs to TaskSpec.search_query."""
+    return ""
 
 
 def looks_like_followup_reference(task):
-    lower = str(task or "").strip().lower()
-    if not lower:
-        return False
-    patterns = (
-        r"\bto\b",
-        r"\btam\b",
-        r"\bten projekt\b",
-        r"\bv nem\b",
-        r"\bv něm\b",
-        r"\bdo nej\b",
-        r"\bdo něj\b",
-        r"\bpokracuj\b",
-        r"\bpokračuj\b",
-        r"\bvyhledej to\b",
-        r"\bhledej to\b",
-        r"\bfind it\b",
-        r"\bsearch it\b",
-    )
-    return any(re.search(pattern, lower) for pattern in patterns)
+    """Legacy detector disabled; follow-up references must come from TaskSpec."""
+    return False
 
 
 def placeholder_followup_text(text):
@@ -2352,6 +2262,14 @@ def placeholder_followup_text(text):
         "do něj",
         "pokracuj",
         "pokračuj",
+        "vysledky",
+        "výsledky",
+        "vypis vysledky",
+        "vypiš výsledky",
+        "ukaz vysledky",
+        "ukaž výsledky",
+        "show results",
+        "list results",
         "vyhledej to",
         "hledej to",
         "find it",
@@ -2363,8 +2281,14 @@ def placeholder_followup_text(text):
         "to ",
         "vyhledej to ",
         "hledej to ",
+        "vypis vysledky ",
+        "vypiš výsledky ",
+        "ukaz vysledky ",
+        "ukaž výsledky ",
         "find it ",
         "search it ",
+        "show results ",
+        "list results ",
     )
     return any(normalized.startswith(prefix) for prefix in prefixes)
 
@@ -2396,16 +2320,14 @@ def recent_nontrivial_context_message(conversation_context, current_task=""):
 
 
 def resolved_referents(task, conversation_context, requested_workspace="", controller_workspace=""):
-    referents = {}
-    if not looks_like_followup_reference(task):
-        return referents
-    recent = recent_nontrivial_context_message(conversation_context, task)
-    if recent:
-        referents["to"] = recent
-    workspace_hint = requested_workspace or controller_workspace
-    if workspace_hint:
-        referents["tam"] = workspace_hint
-    return referents
+    """Do not infer human-language pronouns in gateway core.
+
+    The LLM TaskSpec planner receives recent conversation context and should
+    return explicit referents. Gateway validation can reject unresolved
+    placeholders, but it must not decide what "to/tam/výsledky" means by
+    keyword matching.
+    """
+    return {}
 
 
 def agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists):
@@ -2423,6 +2345,7 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
     search_query = agent_workspace_search_query_from_task(task)
 
     bootstrap_requested = agent_bootstrap_requested(task)
+    provenance = "fallback:structural"
     if meta_capability:
         workflow = "meta"
     elif search_query and workspace_exists:
@@ -2433,6 +2356,7 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         workflow = "deploy"
     elif bootstrap_requested:
         workflow = "bootstrap"
+        provenance = "fallback:legacy_heuristic"
     elif workspace_exists and agent_git_publish_requested(task):
         workflow = "workspace_git_publish"
     elif workspace_exists and agent_ssh_key_show_public_requested(task):
@@ -2454,7 +2378,7 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
 
     raw = {
         "workflow": workflow,
-        "reason": "Deterministic capability intent matched.",
+        "reason": "Deterministic bounded fallback matched after LLM planner failure.",
         "read_only": workflow == "review",
         "workspace": requested_workspace if workspace_exists else controller_workspace,
         "action": inferred_action if workflow == "action" else "",
@@ -2470,6 +2394,8 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         "search_query": search_query if workflow == "workspace_search" else "",
         "meta_capability": meta_capability if workflow == "meta" else "",
         "required_capabilities": [meta_capability] if workflow == "meta" else (["workspace_search"] if workflow == "workspace_search" else []),
+        "routing_provenance": provenance,
+        "capability_locked": True,
         "ssh_comment": agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
         if workflow in {"ssh_key_create", "ssh_key_show_public"}
         else "",
@@ -2644,7 +2570,10 @@ def _string_list(value):
 def agent_capability_hints_from_task(task, workspace_exists):
     capabilities = []
     remote_url = agent_remote_url_from_task(task)
-    bootstrap_name = bootstrap_repo_name_from_text(task)
+    # Last-resort hints are deliberately structural only. New workspace
+    # intent must come from TaskSpec, not from parsing human-language "repo"
+    # phrases in gateway core.
+    bootstrap_name = ""
     meta_capability = agent_meta_capability_from_task(task)
     target_capability_name = agent_target_capability_name_from_task(task)
     public_url = agent_public_url_from_task(task)
@@ -2936,6 +2865,34 @@ def split_agent_capabilities(capabilities):
     return implemented, missing
 
 
+def taskspec_desired_public_ssh_key(spec, desired_end_state=""):
+    """Return True when TaskSpec semantics require returning a public SSH key."""
+    if not isinstance(spec, dict):
+        spec = {}
+    fields = [
+        desired_end_state,
+        spec.get("desired_end_state"),
+        spec.get("target_capability_name"),
+    ]
+    for step in spec.get("execution_plan") or []:
+        if not isinstance(step, dict):
+            continue
+        fields.extend([step.get("goal"), step.get("desired_end_state"), step.get("capability")])
+
+    normalized = " ".join(normalize_capability_identifier(item).lower() for item in fields if item)
+    public_key_markers = {
+        "workspace_public_key_returned",
+        "public_key_returned",
+        "ssh_public_key_returned",
+        "ssh_key_show_public",
+        "workspace_ssh_key_show_public",
+    }
+    if any(marker in normalized for marker in public_key_markers):
+        return True
+    capabilities = canonicalize_agent_capabilities(_string_list(spec.get("required_capabilities")))
+    return "ssh_key_show_public" in capabilities
+
+
 def agent_taskspec_messages(requested_workspace, controller_workspace, workspace_exists, task, snapshot, conversation_context=""):
     registry = load_registry()[1]
     workspace_list = ", ".join(sorted(registry))
@@ -2983,7 +2940,8 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 "- Capability/help questions are capability_help, not repository review.\n"
                 "- Public web questions without a concrete URL are web_search; public web questions with a URL are web_fetch/web_search as appropriate.\n"
                 "- Resolve follow-up referents such as to/tam/ten projekt from the conversation context when it is present.\n"
-                "- If the current message contains pronouns like it/that/to/tam/ten projekt, resolve them from Recent conversation context before selecting a capability.\n"
+                "- If the current message contains pronouns or follow-up placeholders like it/that/to/tam/ten projekt/výsledky/results, resolve them from Recent conversation context before selecting a capability.\n"
+                "- Follow-ups asking to list/show previous results should answer from Recent conversation context when the results are already present, or continue the previous web_search/web_fetch if more fetching is needed; do not switch to repository work.\n"
                 "- For multi-step app work, use workspace_action_chain with an execution_plan instead of inventing missing capabilities like build.\n"
                 "- Before push/deploy/destructive steps that need user confirmation, include await_user_confirmation in required_capabilities and set needs_user_input=true.\n"
                 "- If an existing workspace is the target and the user mentions git init, origin, remote, push, or a remote URL, prefer existing-workspace git publishing instead of bootstrap.\n"
@@ -3053,14 +3011,14 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if answer_visibility not in {"summary", "details", "hidden_debug"}:
         answer_visibility = "summary"
     fallback_workspace = requested_workspace if workspace_exists else controller_workspace
-    bootstrap_repo = bootstrap_repo_name_from_text(task)
-    inferred_repo = agent_extract_repo_name(task)
+    requested_new_workspace = _boolish(spec.get("is_new_workspace_request"), default=False) or intent_class == "workspace_bootstrap"
+    bootstrap_repo = bootstrap_repo_name_from_text(task) if requested_new_workspace else ""
     remote_url = str(spec.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
     requested_read_only = agent_read_only_requested(task)
     read_only = True if requested_read_only or intent_class in {"direct_answer", "creative_answer", "capability_help"} else _boolish(spec.get("read_only"), default=False)
     current_workspace = str(spec.get("current_workspace") or "").strip() or target_workspace or fallback_workspace
     user_goal = str(spec.get("user_goal") or "").strip() or str(task or "").strip()
-    target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo or inferred_repo
+    target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo
     target_capability_name = str(spec.get("target_capability_name") or "").strip()
     if not target_capability_name:
         target_capability_name = agent_target_capability_name_from_task(task)
@@ -3068,7 +3026,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         current_workspace = controller_workspace
     is_new_workspace_request = _boolish(
         spec.get("is_new_workspace_request"),
-        default=bool(bootstrap_repo) or intent_class == "workspace_bootstrap",
+        default=intent_class == "workspace_bootstrap",
     )
     if bootstrap_repo:
         is_new_workspace_request = True
@@ -3180,13 +3138,21 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         required_capabilities.insert(0, "agent_capability_develop")
     if "agent_capability_develop" in required_capabilities:
         required_capabilities = [
-            cap for cap in required_capabilities if cap not in {"workspace_edit", "edit", "workspace_autopilot", "autopilot"}
+            cap
+            for cap in required_capabilities
+            if cap not in {"workspace_edit", "edit", "workspace_autopilot", "autopilot", "clarify_or_infer_capability"}
         ]
     if remote_url and workspace_exists and not is_new_workspace_request and "workspace_git_publish" not in required_capabilities:
         required_capabilities.insert(0, "workspace_git_publish")
     # Capability precedence is semantic rather than prompt-specific: returning the
     # public key is a superset operation because it idempotently creates the key
     # when needed, so it wins over plain key creation whenever both are present.
+    if (
+        "ssh_key_create" in required_capabilities
+        and "ssh_key_show_public" not in required_capabilities
+        and taskspec_desired_public_ssh_key(spec, desired_end_state)
+    ):
+        required_capabilities.insert(0, "ssh_key_show_public")
     if "ssh_key_show_public" in required_capabilities and "ssh_key_create" in required_capabilities:
         required_capabilities = [cap for cap in required_capabilities if cap != "ssh_key_create"]
     if agent_ssh_key_show_public_requested(task) and "ssh_key_show_public" not in required_capabilities:
@@ -3286,6 +3252,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         ]
     if is_new_workspace_request and not followup_actions:
         followup_actions = agent_infer_followup_actions(task)
+    unresolved_followup_search = False
     question = str(spec.get("question") or "").strip() or (
         str(task or "").strip() if intent_class in {"web_search", "web_fetch"} or agent_web_question_requested(task) else ""
     )
@@ -3294,7 +3261,14 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     if not question and referent_topic and intent_class in {"web_search", "web_fetch"}:
         question = referent_topic
     if intent_class == "web_search" and not search_query:
-        search_query = question or str(task or "").strip()
+        if question:
+            search_query = question
+        elif placeholder_followup_text(task):
+            unresolved_followup_search = True
+        else:
+            search_query = str(task or "").strip()
+    if unresolved_followup_search and "resolved_search_query" not in missing_inputs:
+        missing_inputs.append("resolved_search_query")
     ssh_comment = str(spec.get("ssh_comment") or "").strip() or agent_workspace_ssh_comment(task, target_repo_name or fallback_workspace)
     confidence = str(spec.get("confidence") or "medium").strip().lower()
     if confidence == "medium" and isinstance(llm_capability_selection, dict) and llm_capability_selection.get("confidence"):
@@ -3623,6 +3597,7 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         "meta_capability": str(plan.get("meta_capability") or "").strip(),
         "search_query": str(plan.get("search_query") or "").strip(),
         "capability_locked": capability_locked,
+        "routing_provenance": str(plan.get("routing_provenance") or "").strip(),
     }
 
 
@@ -3722,9 +3697,11 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
             "issues": agent_capability_registry_issues(),
             "catalog": agent_capability_catalog(),
             "answer": (
-                "Umim bezny chat, verejny web, praci ve workspacech i self-improve/deploy workflow. "
+                "Jsem codex-local, lokální Codex-like agent v OpenWebUI. "
+                "Umím běžný chat, veřejný web, práci ve workspacech a repozitářích, kód, testy, "
+                "Git/SSH/push/deploy i self-improve workflow. "
                 + agent_capability_human_summary()
-                + ". Pro konkretni repo staci napsat treba `repo: Test2` a pak normalni zadani."
+                + ". Pro konkrétní repo stačí napsat třeba `repo: Test2` a pak normální zadání."
             ),
         }
     if capability == "agent_runtime_status":
@@ -3990,21 +3967,50 @@ def admin_agent_loop(payload):
         plan, taskspec, raw_plan = agent_plan(task, requested_workspace, controller_workspace, workspace_exists, conversation_context)
     except Exception as exc:
         fallback = agent_fallback_plan(task, requested_workspace, controller_workspace, workspace_exists)
-        if not fallback:
-            raise RuntimeError(f"agent planner failed and no bounded fallback matched: {exc}") from exc
-        plan, raw_plan = fallback
+        if fallback:
+            plan, raw_plan = fallback
+        else:
+            raw_plan = {
+                "error": f"{type(exc).__name__}: {exc}",
+                "recovery": "Restart or reconnect the LLM backend, then retry. Gateway will not infer natural-language intent with keyword routing.",
+            }
+            plan = {
+                "workflow": "clarify",
+                "reason": "LLM planner unavailable and no structural fallback applies.",
+                "read_only": True,
+                "workspace": requested_workspace if workspace_exists else controller_workspace,
+                "action": "",
+                "command": [],
+                "run_after": "",
+                "followup_actions": [],
+                "repo_name": "",
+                "github": False,
+                "remote_url": "",
+                "desired_end_state": "planner_recovered_or_user_retries",
+                "url": "",
+                "question": "",
+                "ssh_comment": "",
+                "confidence": "low",
+                "required_capabilities": ["clarify_or_infer_capability"],
+                "missing_capabilities": [],
+                "missing_inputs": ["llm_planner_online"],
+                "meta_capability": "",
+                "search_query": "",
+                "capability_locked": True,
+                "routing_provenance": "fallback:planner_offline",
+            }
         taskspec = {
             "current_workspace": requested_workspace if workspace_exists else controller_workspace,
             "user_goal": str(task or "").strip(),
-            "is_new_workspace_request": bool(agent_bootstrap_requested(task)),
-            "is_existing_workspace_task": bool(workspace_exists and not agent_bootstrap_requested(task)),
+            "is_new_workspace_request": bool(plan.get("workflow") == "bootstrap"),
+            "is_existing_workspace_task": bool(workspace_exists and plan.get("workflow") != "bootstrap"),
             "target_repo_name": agent_extract_repo_name(task),
             "remote_url": agent_remote_url_from_task(task),
             "desired_end_state": str(plan.get("desired_end_state") or plan.get("workflow") or "").strip(),
-            "required_capabilities": agent_capability_hints_from_task(task, workspace_exists),
-            "missing_inputs": [],
+            "required_capabilities": _string_list(plan.get("required_capabilities")) or ["clarify_or_infer_capability"],
+            "missing_inputs": _string_list(plan.get("missing_inputs")),
             "risk_level": "medium",
-            "recovery_plan": "LLM planner failed; deterministic fallback selected the narrowest bounded capability.",
+            "recovery_plan": str(raw_plan.get("recovery") if isinstance(raw_plan, dict) else "") or "LLM planner failed; deterministic structural fallback selected the narrowest bounded capability.",
             "read_only": bool(plan.get("read_only")),
             "command": plan.get("command") or [],
             "action": str(plan.get("action") or "").strip(),
@@ -4014,6 +4020,7 @@ def admin_agent_loop(payload):
             "question": str(plan.get("question") or "").strip(),
             "ssh_comment": str(plan.get("ssh_comment") or "").strip(),
             "confidence": "medium",
+            "routing_provenance": str(plan.get("routing_provenance") or "fallback:structural"),
         }
         planner_source = "fallback"
 
@@ -4029,6 +4036,10 @@ def admin_agent_loop(payload):
         "taskspec": taskspec,
         "raw_plan": raw_plan,
         "planner_source": planner_source,
+        "routing_provenance": (
+            str(taskspec.get("routing_provenance") or "").strip()
+            or ("llm_task_spec" if planner_source == "llm" else "fallback:structural")
+        ),
         "workflow": plan["workflow"],
         "read_only": plan["read_only"],
     }
@@ -4080,7 +4091,7 @@ def admin_agent_loop(payload):
         return result
 
     if workflow == "direct_answer":
-        execution = agent_direct_answer_response(task, plan.get("intent_class") or "direct_answer")
+        execution = agent_direct_answer_response(task, plan.get("intent_class") or "direct_answer", conversation_context)
         result["execution"] = execution
         result["ok"] = bool(execution.get("ok"))
         result["summary"] = "Direct answer completed." if result["ok"] else "Direct answer failed."
@@ -6710,6 +6721,7 @@ def agent_loop_response_text(result):
         f"requested_workspace={result.get('requested_workspace', '')}",
         f"controller_workspace={result.get('controller_workspace', '')}",
         f"planner_source={result.get('planner_source', '')}",
+        f"routing_provenance={result.get('routing_provenance', '')}",
         f"workflow={workflow}",
         f"read_only={result.get('read_only', plan.get('read_only', ''))}",
         f"summary={result.get('summary', '')}",

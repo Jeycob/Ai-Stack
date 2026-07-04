@@ -125,17 +125,46 @@ def main() -> int:
             expect(natural is not None, "natural-loop-payload", repr(natural))
             expect(natural["workspace"] == "TestCode", "natural-loop-workspace", json.dumps(natural, ensure_ascii=False))
 
-            plan = gateway.normalize_agent_plan(
+            public_key_taskspec = gateway.normalize_agent_taskspec(
+                {
+                    "current_workspace": "TestCode",
+                    "user_goal": "show workspace SSH public key",
+                    "is_new_workspace_request": False,
+                    "is_existing_workspace_task": True,
+                    "target_repo_name": "",
+                    "remote_url": "",
+                    "desired_end_state": "workspace_public_key_returned",
+                    "required_capabilities": ["ssh_key_show_public"],
+                    "missing_inputs": [],
+                    "risk_level": "low",
+                    "recovery_plan": "Create the key idempotently if it is missing, then return the public key.",
+                    "read_only": False,
+                },
+                "TestCode",
+                "TestCode",
+                True,
+                "TestCode Vrat mi public key SSH klice",
+            )
+            plan = gateway.agent_taskspec_to_plan(public_key_taskspec, "TestCode", "TestCode", True, "TestCode Vrat mi public key SSH klice")
+            expect(plan["workflow"] == "ssh_key_show_public", "show-public-intent", json.dumps(plan, ensure_ascii=False))
+
+            raw_review_plan = gateway.normalize_agent_plan(
                 {"workflow": "review"},
                 "TestCode",
                 "TestCode",
                 True,
                 "TestCode Vrat mi public key SSH klice",
             )
-            expect(plan["workflow"] == "ssh_key_show_public", "show-public-intent", json.dumps(plan, ensure_ascii=False))
+            expect(raw_review_plan["workflow"] == "review", "raw-review-does-not-parse-public-key", json.dumps(raw_review_plan, ensure_ascii=False))
 
             plan = gateway.normalize_agent_plan(
-                {"workflow": "run", "command": ["sh", "-lc", "ssh-keygen -t ed25519 -C \"your_email@example.com\""]},
+                {
+                    "workflow": "ssh_key_create",
+                    "command": [],
+                    "required_capabilities": ["ssh_key_create"],
+                    "capability_locked": True,
+                    "ssh_comment": "your_email@example.com",
+                },
                 "TestCode",
                 "TestCode",
                 True,
@@ -145,7 +174,12 @@ def main() -> int:
             expect(plan["ssh_comment"] == "your_email@example.com", "ssh-comment", json.dumps(plan, ensure_ascii=False))
 
             bootstrap_plan = gateway.normalize_agent_plan(
-                {"workflow": "review"},
+                {
+                    "workflow": "bootstrap",
+                    "repo_name": "TestCode",
+                    "required_capabilities": ["workspace_repo_bootstrap"],
+                    "capability_locked": True,
+                },
                 "ai-stack",
                 "ai-stack",
                 True,
@@ -154,7 +188,12 @@ def main() -> int:
             expect(bootstrap_plan["workflow"] == "bootstrap", "bootstrap-over-ssh-workflow", json.dumps(bootstrap_plan, ensure_ascii=False))
             expect(bootstrap_plan["repo_name"] == "TestCode", "bootstrap-over-ssh-repo-name", json.dumps(bootstrap_plan, ensure_ascii=False))
             semicolon_bootstrap = gateway.normalize_agent_plan(
-                {"workflow": "review"},
+                {
+                    "workflow": "bootstrap",
+                    "repo_name": "TestCode",
+                    "required_capabilities": ["workspace_repo_bootstrap"],
+                    "capability_locked": True,
+                },
                 "ai-stack",
                 "ai-stack",
                 True,
@@ -165,7 +204,12 @@ def main() -> int:
 
             publish_task = "initni git repo a pushni sem git@github.com:owner/repo.git"
             publish_plan = gateway.normalize_agent_plan(
-                {"workflow": "review"},
+                {
+                    "workflow": "workspace_git_publish",
+                    "remote_url": "git@github.com:owner/repo.git",
+                    "required_capabilities": ["workspace_git_publish"],
+                    "capability_locked": True,
+                },
                 "TestCode",
                 "ai-stack",
                 True,

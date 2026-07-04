@@ -22,6 +22,20 @@ if str(ROOT) not in sys.path:
 from codex.gateway import gateway
 
 
+def assert_no_hardcoded_direct_answer_router() -> None:
+    text = (ROOT / "codex/gateway/gateway.py").read_text(encoding="utf-8")
+    forbidden = (
+        "czech_runtime_date_text",
+        "direct_identity_answer_requested",
+        "direct_runtime_date_requested",
+        "deterministic_direct_answer",
+    )
+    found = [name for name in forbidden if name in text]
+    if found:
+        raise SystemExit(f"direct_answer must stay LLM/context-first; forbidden hardcoded helpers found: {found!r}")
+    print("NO_HARDCODED_DIRECT_ANSWER_ROUTER_OK")
+
+
 def assert_agent_loop_parse() -> None:
     parsed = gateway.explicit_agent_loop_request(
         "repo: ai-stack\n"
@@ -35,12 +49,9 @@ def assert_agent_loop_parse() -> None:
 def assert_fallback_plans() -> None:
     cases = [
         ("Prohlédni architekturu. Nic needituj.", "review"),
-        ("vytvor repozitar: svatektest", "bootstrap"),
-        ("vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic", "bootstrap"),
         ("repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git", "workspace_git_publish"),
-        ("kdo ma dneska svatek? stahni mi to z seznam.cz", "web_answer"),
-        ("spust prikaz: pwd", "run"),
-        ("pullni ai-stack a nasad", "deploy"),
+        ("https://www.seznam.cz/", "web_fetch"),
+        ("`pwd`", "run"),
     ]
     for task, workflow in cases:
         plan = gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True)
@@ -49,17 +60,19 @@ def assert_fallback_plans() -> None:
         got = plan[0].get("workflow")
         if got != workflow:
             raise SystemExit(f"expected workflow={workflow!r}, got {got!r} for {task!r}")
+    if gateway.agent_fallback_plan("kdo ma dneska svatek? stahni mi to z seznam.cz", "ai-stack", "ai-stack", True):
+        raise SystemExit("natural-language web question without URL must require LLM planner, not fallback phrase routing")
+    if gateway.agent_fallback_plan("pullni ai-stack a nasad", "ai-stack", "ai-stack", True):
+        raise SystemExit("natural-language deploy request must require LLM planner, not fallback phrase routing")
+    if gateway.agent_fallback_plan("vytvor repozitar: svatektest", "ai-stack", "ai-stack", True):
+        raise SystemExit("natural-language bootstrap must require LLM TaskSpec, not fallback phrase routing")
     print("AGENT_FALLBACK_PLAN_OK")
 
 
 def assert_bootstrap_followup_inference() -> None:
     task = "vytvor repozitar: svatektest a pak stahni co je treba a pust to"
-    plan, _raw = gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True)
-    if plan.get("workflow") != "bootstrap":
-        raise SystemExit(f"expected bootstrap workflow for follow-up inference, got {plan!r}")
-    followups = plan.get("followup_actions") or []
-    if "install" not in followups or "smoke" not in followups:
-        raise SystemExit(f"expected install+smoke followups, got {plan!r}")
+    if gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True):
+        raise SystemExit("legacy fallback must not bootstrap or infer follow-up actions from Czech/English phrases")
 
     normalized = gateway.normalize_agent_plan(
         {
@@ -68,8 +81,9 @@ def assert_bootstrap_followup_inference() -> None:
             "read_only": False,
             "workspace": "ai-stack",
             "repo_name": "svatektest",
-            "followup_actions": [],
+            "followup_actions": ["install", "smoke"],
             "confidence": "high",
+            "capability_locked": True,
         },
         "ai-stack",
         "ai-stack",
@@ -78,26 +92,29 @@ def assert_bootstrap_followup_inference() -> None:
     )
     followups = normalized.get("followup_actions") or []
     if "install" not in followups or "smoke" not in followups:
-        raise SystemExit(f"expected normalized install+smoke followups, got {normalized!r}")
+        raise SystemExit(f"TaskSpec-provided install+smoke followups should be preserved, got {normalized!r}")
     print("BOOTSTRAP_FOLLOWUP_INFERENCE_OK")
 
 
 def assert_bootstrap_beats_workspace_ssh_for_new_repo() -> None:
-    for task in (
-        "vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic",
-        "vytvor mi nove repository TestCode; vygeneruj do nej ssh klic",
-        "Test11:\nvytvoř repository a vygeneruj ssh klic; pred push/deploy pockej na potvrzeni",
-    ):
-        plan, _raw = gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True)
-        if plan.get("workflow") != "bootstrap":
-            raise SystemExit(f"expected bootstrap workflow for combined bootstrap+ssh prompt, got {plan!r}")
+    cases = (
+        ("vytvor mi nove repository TestCode\nvygeneruj do nej ssh klic", "TestCode"),
+        ("vytvor mi nove repository TestCode; vygeneruj do nej ssh klic", "TestCode"),
+        ("Test11:\nvytvoř repository a vygeneruj ssh klic; pred push/deploy pockej na potvrzeni", "Test11"),
+    )
+    for task, expected_name in cases:
+        if gateway.agent_fallback_plan(task, "ai-stack", "ai-stack", True):
+            raise SystemExit(f"combined bootstrap+ssh prompt must require TaskSpec planner, got fallback for {task!r}")
         normalized = gateway.normalize_agent_plan(
             {
-                "workflow": "review",
-                "reason": "planner drift smoke",
+                "workflow": "bootstrap",
+                "reason": "TaskSpec selected new workspace bootstrap",
                 "read_only": False,
                 "workspace": "ai-stack",
+                "repo_name": expected_name,
                 "confidence": "medium",
+                "capability_locked": True,
+                "required_capabilities": ["workspace_repo_bootstrap"],
             },
             "ai-stack",
             "ai-stack",
@@ -106,7 +123,6 @@ def assert_bootstrap_beats_workspace_ssh_for_new_repo() -> None:
         )
         if normalized.get("workflow") != "bootstrap":
             raise SystemExit(f"expected normalized bootstrap workflow for combined bootstrap+ssh prompt, got {normalized!r}")
-        expected_name = "Test11" if task.startswith("Test11:") else "TestCode"
         if normalized.get("repo_name") != expected_name:
             raise SystemExit(f"expected repo_name={expected_name!r}, got {normalized!r}")
     print("BOOTSTRAP_BEATS_SSH_INTENT_OK")
@@ -114,35 +130,46 @@ def assert_bootstrap_beats_workspace_ssh_for_new_repo() -> None:
 
 def assert_verify_prefers_action_over_run_without_explicit_command() -> None:
     task = "Ověř projekt a vrať stručný audit výsledků."
-    with patch.object(
-        gateway,
-        "load_workspace_action_registry",
-        return_value={
-            "verify": {
-                "cues": ["ověř projekt", "over projekt", "verify project"],
-            }
+    normalized = gateway.normalize_agent_plan(
+        {
+            "workflow": "action",
+            "reason": "TaskSpec selected verify",
+            "read_only": False,
+            "workspace": "ai-stack",
+            "action": "verify",
+            "command": [],
+            "confidence": "medium",
+            "capability_locked": True,
+            "required_capabilities": ["workspace_action:verify"],
         },
-    ):
-        normalized = gateway.normalize_agent_plan(
-            {
-                "workflow": "run",
-                "reason": "planner drift smoke",
-                "read_only": False,
-                "workspace": "ai-stack",
-                "command": ["pwd"],
-                "confidence": "medium",
-            },
-            "ai-stack",
-            "ai-stack",
-            True,
-            task,
-        )
+        "ai-stack",
+        "ai-stack",
+        True,
+        task,
+    )
     if normalized.get("workflow") != "action":
-        raise SystemExit(f"expected action workflow for verify prompt, got {normalized!r}")
+        raise SystemExit(f"TaskSpec-provided action workflow should stay action, got {normalized!r}")
     if normalized.get("action") != "verify":
         raise SystemExit(f"expected verify action for verify prompt, got {normalized!r}")
     if normalized.get("command") != []:
         raise SystemExit(f"expected command to be cleared after run->action normalization, got {normalized!r}")
+
+    drift = gateway.normalize_agent_plan(
+        {
+            "workflow": "run",
+            "reason": "planner drift smoke",
+            "read_only": False,
+            "workspace": "ai-stack",
+            "command": ["pwd"],
+            "confidence": "medium",
+        },
+        "ai-stack",
+        "ai-stack",
+        True,
+        task,
+    )
+    if drift.get("workflow") != "run":
+        raise SystemExit(f"natural-language verify phrase must not rewrite run workflow without TaskSpec capability, got {drift!r}")
     print("VERIFY_ACTION_NORMALIZATION_OK")
 
 
@@ -788,10 +815,11 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
         raise SystemExit(f"capability_help should map to meta catalog, got {help_spec!r} {help_plan!r}")
     help_meta = gateway.admin_agent_meta(help_plan, "ai-stack", "ai-stack", True, {"ai-stack": {"path": "/repo/ai-stack"}})
     help_answer = str(help_meta.get("answer") or "")
-    if "Umim bezny chat" not in help_answer or "`repo: Test2`" not in help_answer:
+    if "codex-local" not in help_answer or "`repo: Test2`" not in help_answer:
         raise SystemExit(f"capability_help answer should be human and practical, got {help_meta!r}")
     generic_help = gateway.normalize_agent_taskspec(
         {
+            "intent_class": "capability_help",
             "current_workspace": "ai-stack",
             "user_goal": "show capabilities",
             "is_new_workspace_request": False,
@@ -811,7 +839,30 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
         "co umis?",
     )
     if generic_help.get("intent_class") != "capability_help" or "capability_catalog_show" not in generic_help.get("required_capabilities", []):
-        raise SystemExit(f"generic capability help should normalize to capability_help, got {generic_help!r}")
+        raise SystemExit(f"TaskSpec capability_help should normalize to capability catalog, got {generic_help!r}")
+
+    offline_help = gateway.normalize_agent_taskspec(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "show capabilities",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": False,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "human capability summary returned",
+            "required_capabilities": [],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "",
+            "read_only": True,
+        },
+        "ai-stack",
+        "ai-stack",
+        True,
+        "co umis?",
+    )
+    if offline_help.get("intent_class") == "capability_help" or "capability_catalog_show" in offline_help.get("required_capabilities", []):
+        raise SystemExit(f"gateway core must not infer capability_help from raw language without TaskSpec, got {offline_help!r}")
 
     context_meta = gateway.admin_agent_meta(
         {"meta_capability": "workspace_context_status"},
@@ -845,6 +896,7 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
         {
             **direct,
             "intent_class": "web_search",
+            "referents": {"to": "kdo ma dneska svatek?"},
             "required_capabilities": [],
             "question": "",
             "search_query": "",
@@ -857,6 +909,23 @@ def assert_taskspec_v2_intents_and_renderer() -> None:
     )
     if followup_web.get("search_query") != "kdo ma dneska svatek?" or "public_web_search" not in followup_web.get("required_capabilities", []):
         raise SystemExit(f"follow-up web referent should reuse previous topic, got {followup_web!r}")
+
+    unresolved_followup_web = gateway.normalize_agent_taskspec(
+        {
+            **direct,
+            "intent_class": "web_search",
+            "required_capabilities": [],
+            "question": "",
+            "search_query": "",
+        },
+        "Test2",
+        "ai-stack",
+        True,
+        "vyhledej to kdekoliv",
+        "user: kdo ma dneska svatek?\nassistant: Muzu to dohledat na webu.\nuser: vyhledej to kdekoliv",
+    )
+    if "resolved_search_query" not in unresolved_followup_web.get("missing_inputs", []):
+        raise SystemExit(f"gateway core must not resolve follow-up web text without TaskSpec referent, got {unresolved_followup_web!r}")
 
     chain_spec, chain_plan = _taskspec_plan(
         {
@@ -1044,12 +1113,38 @@ def assert_agent_self_improve_capability() -> None:
             workspace="ai-stack",
             workspace_exists=True,
         )
+    if taskspec.get("target_capability_name"):
+        raise SystemExit(f"gateway core must not infer target_capability_name from natural language, got {taskspec!r}")
+    if taskspec.get("required_capabilities") != ["clarify_or_infer_capability"] or plan.get("workflow") != "clarify":
+        raise SystemExit(f"natural capability prompt without TaskSpec should clarify instead of parsing language, got {taskspec!r} {plan!r}")
+
+    with patch.object(gateway, "agent_select_capabilities_with_llm", side_effect=RuntimeError("offline smoke")):
+        taskspec, plan = _taskspec_plan(
+            {
+                "current_workspace": "ai-stack",
+                "user_goal": "přidej capability workspace_search_index pro rychlejší capability search workflow",
+                "is_new_workspace_request": False,
+                "is_existing_workspace_task": True,
+                "target_repo_name": "",
+                "target_capability_name": "workspace_search_index",
+                "remote_url": "",
+                "desired_end_state": "workspace_search_index capability patch draft created",
+                "required_capabilities": ["agent_capability_develop"],
+                "missing_inputs": [],
+                "risk_level": "medium",
+                "recovery_plan": "generate guarded capability patch draft",
+                "read_only": False,
+            },
+            "přidej capability workspace_search_index pro rychlejší capability search workflow",
+            workspace="ai-stack",
+            workspace_exists=True,
+        )
     if taskspec.get("target_capability_name") != "workspace_search_index":
-        raise SystemExit(f"expected natural capability prompt to infer target_capability_name, got {taskspec!r}")
+        raise SystemExit(f"expected TaskSpec target_capability_name to survive normalization, got {taskspec!r}")
     if taskspec.get("required_capabilities") != ["agent_capability_develop"]:
-        raise SystemExit(f"expected inferred target capability to canonicalize to agent_capability_develop, got {taskspec!r}")
+        raise SystemExit(f"expected TaskSpec target capability to canonicalize to agent_capability_develop, got {taskspec!r}")
     if plan.get("workflow") != "self_improve" or plan.get("target_capability_name") != "workspace_search_index":
-        raise SystemExit(f"expected natural capability prompt to route into self_improve, got {plan!r}")
+        raise SystemExit(f"expected TaskSpec capability prompt to route into self_improve, got {plan!r}")
     with tempfile.TemporaryDirectory(prefix="gateway-cap-roadmap-") as tmp:
         roadmap_path = Path(tmp) / "roadmap.json"
         roadmap_path.write_text(
@@ -1919,6 +2014,7 @@ def assert_agent_loop_passes_conversation_context() -> None:
 
 
 def main() -> int:
+    assert_no_hardcoded_direct_answer_router()
     assert_agent_loop_parse()
     assert_fallback_plans()
     assert_bootstrap_followup_inference()
