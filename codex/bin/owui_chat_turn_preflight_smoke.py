@@ -301,6 +301,90 @@ def assert_foreign_clone_same_commit_reaches_completion(turn) -> None:
     print("OWUI_PREFLIGHT_FOREIGN_CLONE_SAME_COMMIT_OK")
 
 
+def assert_foreign_clone_different_commit_blocks_regular_chat(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        raise AssertionError("completion endpoint should not be reached for regular chat during clone drift")
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = lambda _args: {
+        "ok": True,
+        "codex_local_ready": True,
+        "capability_mode": "agent-first",
+        "natural_codex_local_route": "agent_loop",
+        "runtime_fingerprint": "remote-fingerprint-different",
+        "runtime_repo_root": "/mnt/c/Repositories/ai-stack",
+        "runtime_commit": "old123",
+        "gateway_admin": {"lan_admin_ready": True},
+        "readiness_issues": [],
+    }
+    turn.run_codex_reconcile_check = lambda _args: {"ok": True}
+    turn.local_repo_root = lambda: "/mnt/c/newRepos/Ai-Stack"
+    turn.local_repo_commit_short = lambda: "new456"
+    turn.local_repo_tracking_commit_short = lambda ref="origin/main": "new456"
+    turn.local_repo_status_short = lambda: ""
+    turn.local_gateway_runtime_fingerprint = lambda: "local-fingerprint-different"
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nProhlédni workspace.")
+    joined = "\n".join(text_chunks)
+    if rc != 23:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_DIFF_COMMIT_BLOCK_FAILED\nreason=unexpected exit code {rc}")
+    if "CODEX_LOCAL_RUNTIME_CLONE_DRIFT" not in joined:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_DIFF_COMMIT_BLOCK_FAILED\nreason=missing marker in {joined!r}")
+    if calls:
+        raise SystemExit(f"PREFLIGHT_FOREIGN_CLONE_DIFF_COMMIT_BLOCK_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_FOREIGN_CLONE_DIFF_COMMIT_BLOCK_OK")
+
+
+def assert_explicit_deploy_recovers_foreign_clone_drift(turn) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http(http_args, method: str, path: str, body=None, allow_error: bool = False):
+        calls.append((method, path))
+        if path != "/api/chat/completions":
+            raise AssertionError(f"deploy drift recovery touched unexpected endpoint: {method} {path}")
+        return 200, {"choices": [{"message": {"content": "STACK_DEPLOY_SCHEDULED"}}]}
+
+    turn.http_request = fake_http
+    turn.gateway_health_status = lambda _args: {
+        "ok": True,
+        "codex_local_ready": True,
+        "capability_mode": "agent-first",
+        "natural_codex_local_route": "agent_loop",
+        "runtime_fingerprint": "remote-fingerprint-different",
+        "runtime_repo_root": "/mnt/c/Repositories/ai-stack",
+        "runtime_commit": "old123",
+        "gateway_admin": {"lan_admin_ready": True},
+        "readiness_issues": [],
+    }
+    turn.run_codex_reconcile_check = lambda _args: {
+        "ok": False,
+        "issues": ["CODEX_LOCAL_FILTER_STALE"],
+        "recovery": "This must be bypassed only for explicit deploy drift recovery.",
+    }
+    turn.local_repo_root = lambda: "/mnt/c/newRepos/Ai-Stack"
+    turn.local_repo_commit_short = lambda: "new456"
+    turn.local_repo_tracking_commit_short = lambda ref="origin/main": "new456"
+    turn.local_repo_status_short = lambda: ""
+    turn.local_gateway_runtime_fingerprint = lambda: "local-fingerprint-different"
+    text_chunks: list[str] = []
+    turn.print = lambda *args, **kwargs: text_chunks.append(" ".join(str(x) for x in args))
+
+    rc = turn.run_stateless_completion(SmokeArgs(), "repo: ai-stack\nGATEWAY_ADMIN_DEPLOY_STACK main --force")
+    joined = "\n".join(text_chunks)
+    if rc != 0:
+        raise SystemExit(f"PREFLIGHT_DEPLOY_DRIFT_RECOVERY_FAILED\nreason=unexpected exit code {rc}")
+    if "STACK_DEPLOY_SCHEDULED" not in joined:
+        raise SystemExit(f"PREFLIGHT_DEPLOY_DRIFT_RECOVERY_FAILED\nreason=missing deploy response in {joined!r}")
+    if calls != [("POST", "/api/chat/completions")]:
+        raise SystemExit(f"PREFLIGHT_DEPLOY_DRIFT_RECOVERY_FAILED\nreason=unexpected HTTP calls {calls!r}")
+    print("OWUI_PREFLIGHT_DEPLOY_DRIFT_RECOVERY_OK")
+
+
 def main() -> int:
     _args = parse_args()
     turn = load_turn_module()
@@ -313,6 +397,10 @@ def main() -> int:
     assert_same_checkout_same_commit_ignores_fingerprint_warning(turn)
     turn = load_turn_module()
     assert_foreign_clone_same_commit_reaches_completion(turn)
+    turn = load_turn_module()
+    assert_foreign_clone_different_commit_blocks_regular_chat(turn)
+    turn = load_turn_module()
+    assert_explicit_deploy_recovers_foreign_clone_drift(turn)
     turn = load_turn_module()
     assert_ready_reaches_completion(turn)
     turn = load_turn_module()

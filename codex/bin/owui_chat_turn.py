@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -351,6 +352,66 @@ def local_repo_commit_short() -> str:
     return (proc.stdout or "").strip()
 
 
+def local_repo_tracking_commit_short(ref: str = "origin/main") -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", ref],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def local_repo_status_short() -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        return "STATUS_UNAVAILABLE"
+    return (proc.stdout or "").strip()
+
+
+def stack_deploy_prompt(text: str) -> bool:
+    return bool(re.search(r"(?im)^\s*GATEWAY_ADMIN_DEPLOY_STACK(?:\s+|$)", text or ""))
+
+
+def deploy_drift_recovery_allowed(technical_prompt: str, health: dict, checkout: dict[str, str | bool]) -> tuple[bool, dict]:
+    local_commit = str(checkout.get("local_repo_commit") or "").strip()
+    tracking_commit = local_repo_tracking_commit_short()
+    status_short = local_repo_status_short()
+    details = {
+        "deploy_prompt": stack_deploy_prompt(technical_prompt),
+        "local_repo_commit": local_commit,
+        "tracking_commit": tracking_commit,
+        "local_status_clean": status_short == "",
+        "gateway_admin": health.get("gateway_admin", {}),
+    }
+    allowed = (
+        details["deploy_prompt"] is True
+        and status_short == ""
+        and bool(local_commit)
+        and bool(tracking_commit)
+        and local_commit == tracking_commit
+        and health.get("gateway_admin", {}).get("lan_admin_ready") is True
+    )
+    if status_short:
+        details["local_status_short"] = status_short[:2000]
+    return allowed, details
+
+
 def runtime_checkout_identity(health: dict) -> dict[str, str | bool]:
     local_root = local_repo_root()
     local_commit = local_repo_commit_short()
@@ -423,7 +484,7 @@ def codex_preflight_failure_text(marker: str, recovery: str, *, details: dict | 
     return "\n".join(lines).strip()
 
 
-def codex_preflight_guard(args: argparse.Namespace) -> str | None:
+def codex_preflight_guard(args: argparse.Namespace, technical_prompt: str = "") -> str | None:
     if args.skip_codex_preflight or not is_codex_local_model(args.model):
         return None
 
@@ -482,14 +543,23 @@ def codex_preflight_guard(args: argparse.Namespace) -> str | None:
         )
     if not bool(checkout.get("same_checkout")) and local_fingerprint and remote_fingerprint != local_fingerprint:
         if not same_commit:
+            deploy_allowed, deploy_details = deploy_drift_recovery_allowed(technical_prompt, health, checkout)
+            if deploy_allowed:
+                return None
             return codex_preflight_failure_text(
                 "CODEX_LOCAL_RUNTIME_CLONE_DRIFT",
-                "Lokální clone není na stejném commitu jako běžící runtime. Synchronizuj repo nebo helper spusť z live runtime checkoutu.",
+                (
+                    "Lokální clone není na stejném commitu jako běžící runtime. "
+                    "Běžný chat/E2E je blokovaný. Pro nasazení použij explicitní "
+                    "GATEWAY_ADMIN_DEPLOY_STACK z čistého checkoutu, jehož HEAD odpovídá origin/main, "
+                    "nebo helper spusť z live runtime checkoutu."
+                ),
                 details={
                     "gateway_health": health,
                     "local_runtime_fingerprint": local_fingerprint,
                     "remote_runtime_fingerprint": remote_fingerprint,
                     "checkout": checkout,
+                    "deploy_drift_recovery": deploy_details,
                 },
             )
 
@@ -846,7 +916,7 @@ def follow_scheduled_admin_job(
 
 def run_stateless_completion(args: argparse.Namespace, technical_prompt: str, skip_preflight: bool = False) -> int:
     if not skip_preflight:
-        preflight = codex_preflight_guard(args)
+        preflight = codex_preflight_guard(args, technical_prompt)
         if preflight:
             if args.out:
                 Path(args.out).write_text(preflight, encoding="utf-8")
@@ -879,7 +949,7 @@ def main() -> int:
     technical_prompt = read_prompt(args)
     if args.stateless:
         return run_stateless_completion(args, technical_prompt)
-    preflight = codex_preflight_guard(args)
+    preflight = codex_preflight_guard(args, technical_prompt)
     if preflight:
         if args.out:
             Path(args.out).write_text(preflight, encoding="utf-8")
