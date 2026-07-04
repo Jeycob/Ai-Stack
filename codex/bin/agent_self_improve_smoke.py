@@ -191,6 +191,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected executor contract change plan in capability proposal, got {proposal!r}")
         if not any(item.get("path") == "docs/capability-drafts/workspace_profile.executor-dispatch.json" for item in proposed_file_changes if isinstance(item, dict)):
             raise SystemExit(f"expected executor dispatch change plan in capability proposal, got {proposal!r}")
+        if not any(item.get("path") == "docs/capability-drafts/workspace_profile.promotion.patch.diff" for item in proposed_file_changes if isinstance(item, dict)):
+            raise SystemExit(f"expected promotion patch change plan in capability proposal, got {proposal!r}")
         if not any(item.get("path") == "docs/capability-drafts/workspace_profile.implementation-workorder.json" for item in proposed_file_changes if isinstance(item, dict)):
             raise SystemExit(f"expected implementation workorder change plan in capability proposal, got {proposal!r}")
         if not any(item.get("path") == "codex/bin/capability_drafts/workspace_profile_executor_stub.py" for item in proposed_file_changes if isinstance(item, dict)):

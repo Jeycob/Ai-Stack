@@ -606,6 +606,12 @@ def proposal_change_plan(
                 "acceptance_criteria": acceptance,
             },
             {
+                "path": f"docs/capability-drafts/{capability}.promotion.patch.diff",
+                "change_type": "create_or_update",
+                "intent": "Prepare a review-ready promotion diff against gateway.py so senior Codex can inspect the exact runtime wiring delta before guarded apply.",
+                "acceptance_criteria": acceptance,
+            },
+            {
                 "path": f"docs/capability-drafts/{capability}.wiring.json",
                 "change_type": "create_or_update",
                 "intent": "Capture file-level implementation steps, recovery rules, and offload split for the new capability.",
