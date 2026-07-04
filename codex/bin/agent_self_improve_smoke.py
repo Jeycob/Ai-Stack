@@ -182,6 +182,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected capability smoke contract file in generated diff:\n{patch_text}")
         if "docs/capability-drafts/workspace_profile.gateway-integration.json" not in patch_text:
             raise SystemExit(f"expected capability gateway integration draft file in generated diff:\n{patch_text}")
+        if "docs/capability-drafts/workspace_profile.gateway.patch.md" not in patch_text:
+            raise SystemExit(f"expected capability gateway patch fragment file in generated diff:\n{patch_text}")
         if "docs/capability-drafts/workspace_profile.wiring.json" not in patch_text:
             raise SystemExit(f"expected capability wiring blueprint file in generated diff:\n{patch_text}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in patch_text:
@@ -202,6 +204,10 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected wiring blueprint metadata in generated diff:\n{patch_text}")
         if '"kind": "codex-local-capability-gateway-integration-draft"' not in patch_text:
             raise SystemExit(f"expected gateway integration draft metadata in generated diff:\n{patch_text}")
+        if "codex-local-capability-gateway-patch-fragment" not in patch_text:
+            raise SystemExit(f"expected gateway patch fragment metadata in generated diff:\n{patch_text}")
+        if "@@ AGENT_CAPABILITY_TO_WORKFLOW @@" not in patch_text:
+            raise SystemExit(f"expected gateway workflow patch fragment in generated diff:\n{patch_text}")
         if '"integration_order": [' not in patch_text:
             raise SystemExit(f"expected gateway integration order metadata in generated diff:\n{patch_text}")
         if '"touchpoints": [' not in patch_text:
@@ -243,6 +249,8 @@ def run_generate_unified_diff_mode() -> None:
             raise SystemExit(f"expected capability smoke contract path in generated diff, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.gateway-integration.json" not in paths:
             raise SystemExit(f"expected capability gateway integration draft path in generated diff, got {generated!r}")
+        if "docs/capability-drafts/workspace_profile.gateway.patch.md" not in paths:
+            raise SystemExit(f"expected capability gateway patch fragment path in generated diff, got {generated!r}")
         if "docs/capability-drafts/workspace_profile.wiring.json" not in paths:
             raise SystemExit(f"expected capability wiring blueprint path in generated diff, got {generated!r}")
         if "codex/bin/capability_drafts/workspace_profile_executor_stub.py" not in paths:

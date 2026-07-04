@@ -931,6 +931,7 @@ def assert_capability_draft_contracts() -> None:
                 raise SystemExit(f"required capability draft path missing for {capability}: {rel}")
         markers = contract.get("verifier_expectations", {}).get("required_markers") or {}
         gateway_integration_path = ROOT / f"docs/capability-drafts/{capability}.gateway-integration.json"
+        gateway_patch_fragment_path = ROOT / f"docs/capability-drafts/{capability}.gateway.patch.md"
         wiring_path = ROOT / f"docs/capability-drafts/{capability}.wiring.json"
         executor_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_executor_stub.py"
         runtime_hook_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py"
@@ -942,6 +943,19 @@ def assert_capability_draft_contracts() -> None:
             workflow_map = (((integration.get("snippets") or {}).get("workflow_map") or {}).get("code") or {})
             if capability not in workflow_map:
                 raise SystemExit(f"gateway integration draft missing workflow map for {capability}: {integration!r}")
+        if gateway_patch_fragment_path.is_file():
+            patch_fragment_text = gateway_patch_fragment_path.read_text(encoding="utf-8")
+            if str(markers.get("gateway_patch_fragment_marker") or "").strip() not in patch_fragment_text:
+                raise SystemExit(f"gateway patch fragment marker mismatch for {capability}: {gateway_patch_fragment_path}")
+            for required in (
+                "@@ AGENT_CAPABILITY_TO_WORKFLOW @@",
+                "@@ CANONICAL_AGENT_CAPABILITY_ALIASES @@",
+                "@@ agent_capability_registry @@",
+                "@@ agent_taskspec_to_plan @@",
+                "@@ executor_or_admin_handler @@",
+            ):
+                if required not in patch_fragment_text:
+                    raise SystemExit(f"gateway patch fragment missing {required!r} for {capability}: {gateway_patch_fragment_path}")
         if wiring_path.is_file():
             wiring = json.loads(wiring_path.read_text(encoding="utf-8"))
             if str(wiring.get("kind") or "") != str(markers.get("wiring_kind") or ""):

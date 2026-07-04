@@ -778,6 +778,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
             "required_paths": [
                 f"docs/capability-drafts/{capability}.json",
                 f"docs/capability-drafts/{capability}.gateway-integration.json",
+                f"docs/capability-drafts/{capability}.gateway.patch.md",
                 f"docs/capability-drafts/{capability}.wiring.json",
                 f"codex/bin/capability_drafts/{capability}_executor_stub.py",
                 f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py",
@@ -786,6 +787,7 @@ def capability_smoke_contract_file(capability: str, feature_request: str, diagno
             ],
             "required_markers": {
                 "gateway_integration_kind": "codex-local-capability-gateway-integration-draft",
+                "gateway_patch_fragment_marker": "codex-local-capability-gateway-patch-fragment",
                 "wiring_kind": "codex-local-capability-wiring-blueprint",
                 "runtime_hook_marker": "CAPABILITY_RUNTIME_HOOK_STUB",
                 "executor_capability_constant": capability,
@@ -962,6 +964,63 @@ def capability_gateway_integration_file(capability: str, feature_request: str, r
         "generated_by": "agent_self_improve.generate_unified_diff",
     }
     after = json.dumps(integration, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def capability_gateway_patch_fragment_file(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.gateway.patch.md"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    planned_workflow = "self_improve" if capability.startswith("agent_") else shape["workflow"]
+    alias_lines = "\n".join(f'+    "{alias}": "{capability}",' for alias in shape["aliases"])
+    after = (
+        f"# Gateway Patch Fragment for `{capability}`\n\n"
+        "kind: codex-local-capability-gateway-patch-fragment\n"
+        f"capability_name: {capability}\n"
+        "target_file: codex/gateway/gateway.py\n"
+        "status: draft\n\n"
+        "This artifact is a review-friendly fragment draft. It is not auto-applied;\n"
+        "the guarded apply path still operates on the generated unified diff and must\n"
+        "pass `git apply --check` before any runtime patch is considered.\n\n"
+        "## Workflow Map Fragment\n\n"
+        "```diff\n"
+        "@@ AGENT_CAPABILITY_TO_WORKFLOW @@\n"
+        f'+    "{capability}": "{planned_workflow}",\n'
+        "```\n\n"
+        "## Canonical Alias Fragment\n\n"
+        "```diff\n"
+        "@@ CANONICAL_AGENT_CAPABILITY_ALIASES @@\n"
+        f"{alias_lines}\n"
+        "```\n\n"
+        "## Registry Fragment\n\n"
+        "```diff\n"
+        "@@ agent_capability_registry @@\n"
+        f'+    "{capability}": {{\n'
+        f'+        "workflow": "{planned_workflow}",\n'
+        f'+        "scope": "{shape["scope"]}",\n'
+        '+        "implemented": False,\n'
+        '+        "draft": True,\n'
+        f'+        "executor": "{shape["executor"]}",\n'
+        f'+        "summary": "{shape["summary"]}",\n'
+        "+    },\n"
+        "```\n\n"
+        "## TaskSpec Binding Fragment\n\n"
+        "```diff\n"
+        "@@ agent_taskspec_to_plan @@\n"
+        f'+# capability: {capability}\n'
+        f'+# desired_end_state: {task_spec.get("desired_end_state") or ""}\n'
+        f'+# planned_workflow: {planned_workflow}\n'
+        "```\n\n"
+        "## Executor Hook Fragment\n\n"
+        "```diff\n"
+        "@@ executor_or_admin_handler @@\n"
+        f'+# executor_pattern: {shape["executor"]}\n'
+        f'+# capability: {capability}\n'
+        "+# manual_gate: True\n"
+        "```\n"
+    )
     return rel, unified_diff_for_file(rel, before, after)
 
 
@@ -1154,6 +1213,7 @@ def generate_unified_diff(
                 capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_smoke_contract_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_gateway_integration_file(capability, feature_request, reasoning),
+                capability_gateway_patch_fragment_file(capability, feature_request, reasoning),
                 capability_wiring_blueprint_file(capability, feature_request, diagnosis, regression, reasoning),
                 capability_executor_stub_file(capability, feature_request, reasoning),
                 capability_runtime_hook_stub_file(capability, feature_request, reasoning),
