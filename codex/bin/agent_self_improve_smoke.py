@@ -265,6 +265,10 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected safe apply patch file in manifest, got {manifest!r}")
         if str(manifest.get("review_only_patch_file") or "") != str(review_only_patch_file):
             raise SystemExit(f"expected review-only patch file in manifest, got {manifest!r}")
+        if manifest.get("verify_all_green") is not True:
+            raise SystemExit(f"expected manifest verify_all_green flag, got {manifest!r}")
+        if manifest.get("missing_acceptance_evidence") not in ([], None):
+            raise SystemExit(f"expected no missing acceptance evidence in manifest, got {manifest!r}")
         if manifest.get("promotion_ready") is not False:
             raise SystemExit(f"expected promotion_ready false while runtime review is required, got {manifest!r}")
         blockers = manifest.get("promotion_blockers") or []

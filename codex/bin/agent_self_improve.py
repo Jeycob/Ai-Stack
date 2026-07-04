@@ -2731,6 +2731,9 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
     verify_commands = [" ".join(command) for command in effective_verify_commands()]
     generated_diff_ok = bool(generated_diff_result.get("ok"))
     blocked_paths = generated_diff_result.get("blocked_paths") or []
+    verify_info = verify_summary(summary_phase_payload(summary, "verify"))
+    readiness = ((summary.get("report") or {}).get("capability_patch_readiness") or {}) if isinstance(summary.get("report"), dict) else {}
+    missing_acceptance_evidence = readiness.get("missing_acceptance_evidence") or []
     if blocked_paths:
         decision = "blocked_paths"
     elif review_only_artifacts:
@@ -2757,6 +2760,8 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         "promotable_runtime_candidates": promotable_runtime_candidates,
         "blocked_paths": blocked_paths,
         "minimum_verify_commands": verify_commands,
+        "verify_all_green": verify_info.get("all_green"),
+        "missing_acceptance_evidence": missing_acceptance_evidence,
         "runtime_gate_required_for": ["deploy", "e2e", "runtime_apply_promotion"],
         "manual_review_required": [
             "review runtime patch candidates before touching gateway.py",
@@ -2774,8 +2779,24 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
                 if promotable_runtime_candidates
                 else []
             )
+            + (
+                ["verify commands are not all green"]
+                if verify_info.get("all_green") is not True
+                else []
+            )
+            + (
+                [f"missing acceptance evidence: {item}" for item in missing_acceptance_evidence]
+                if missing_acceptance_evidence
+                else []
+            )
         ),
-        "promotion_ready": bool(generated_diff_ok and not blocked_paths and not promotable_runtime_candidates),
+        "promotion_ready": bool(
+            generated_diff_ok
+            and not blocked_paths
+            and not promotable_runtime_candidates
+            and verify_info.get("all_green") is True
+            and not missing_acceptance_evidence
+        ),
         "manual_promotion_steps": [
             "Review runtime patch candidate diff against current gateway.py.",
             "Promote only the approved hunk set into a guarded unified diff patch file.",
@@ -2800,6 +2821,7 @@ def write_final_report(
     generated_diff_result: dict[str, Any],
 ) -> dict[str, Any]:
     report = build_report(summary, proposal_result, generated_diff_result)
+    summary["report"] = report
     manifest = build_guarded_apply_manifest(summary, generated_diff_result)
     write_json(audit_dir / "self-improve-report.json", report)
     write_json(audit_dir / "guarded-apply-manifest.json", manifest)
