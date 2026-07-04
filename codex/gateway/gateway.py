@@ -177,6 +177,26 @@ def load_workspace_action_registry():
         return {}
     return {str(name): spec for name, spec in actions.items() if isinstance(spec, dict)}
 
+
+def load_capability_roadmap_registry():
+    capabilities = load_capability_roadmap_payload().get("capabilities")
+    if not isinstance(capabilities, dict):
+        return {}
+    return {str(name): spec for name, spec in capabilities.items() if isinstance(spec, dict)}
+
+
+def load_dynamic_capability_aliases():
+    aliases = {}
+    for name, spec in load_capability_roadmap_registry().items():
+        canonical = str(name or "").strip()
+        if not canonical:
+            continue
+        for alias in spec.get("aliases") or []:
+            key = capability_key(alias)
+            if key and key not in aliases:
+                aliases[key] = canonical
+    return aliases
+
 def content_to_text(content):
     if isinstance(content, list):
         return "\n".join(str(x.get("text", x)) for x in content)
@@ -1162,7 +1182,7 @@ def canonicalize_agent_capability(value):
     if key.startswith("workspace_action_"):
         action = canonicalize_workspace_action(key.removeprefix("workspace_action_"))
         return f"workspace_action:{action}" if action else ""
-    return CANONICAL_AGENT_CAPABILITY_ALIASES.get(key, raw)
+    return CANONICAL_AGENT_CAPABILITY_ALIASES.get(key) or load_dynamic_capability_aliases().get(key) or raw
 
 
 def canonicalize_agent_capabilities(capabilities):
@@ -1385,17 +1405,30 @@ def agent_controller_workspace(requested_workspace):
 def agent_capability_registry():
     registry = {name: dict(spec) for name, spec in CORE_AGENT_CAPABILITIES.items()}
 
-    for name, spec in load_capability_roadmap_payload().get("capabilities", {}).items():
-        if not isinstance(spec, dict):
-            continue
+    for name, spec in load_capability_roadmap_registry().items():
         capability = canonicalize_agent_capability(name)
         if not capability:
             continue
         entry = registry.setdefault(capability, {})
-        entry.setdefault("workflow", AGENT_CAPABILITY_TO_WORKFLOW.get(capability, "clarify"))
+        workflow = str(spec.get("workflow") or entry.get("workflow") or AGENT_CAPABILITY_TO_WORKFLOW.get(capability, "clarify")).strip()
+        entry["workflow"] = workflow or "clarify"
         entry["summary"] = str(spec.get("summary") or entry.get("summary") or "").strip()
         entry["scope"] = str(spec.get("scope") or entry.get("scope") or "").strip()
         entry["implemented"] = bool(spec.get("implemented", True))
+        aliases = canonicalize_agent_capabilities(spec.get("aliases") or [])
+        if aliases:
+            entry["aliases"] = aliases
+        planned_workflow = str(spec.get("planned_workflow") or "").strip()
+        if planned_workflow:
+            entry["planned_workflow"] = planned_workflow
+        executor = str(spec.get("executor") or "").strip()
+        if executor:
+            entry["executor"] = executor
+        tests = [str(item).strip() for item in (spec.get("tests") or []) if str(item).strip()]
+        if tests:
+            entry["tests"] = tests
+        if spec.get("draft") is not None:
+            entry["draft"] = bool(spec.get("draft"))
 
     for action, spec in load_workspace_action_registry().items():
         capability = f"workspace_action:{str(action).strip().lower()}"
@@ -1482,6 +1515,21 @@ def agent_capability_catalog():
         spec = capability_registry.get(f"workspace_action:{action}") or {}
         summary = str(spec.get("summary", "")).strip()
         lines.append(f"- {action}: {summary or 'audited workspace action'}")
+    draft_lines = []
+    for name in sorted(capability_registry):
+        spec = capability_registry.get(name) or {}
+        if spec.get("implemented"):
+            continue
+        summary = str(spec.get("summary") or "").strip() or "planned capability draft"
+        planned_workflow = str(spec.get("planned_workflow") or spec.get("workflow") or "clarify").strip()
+        aliases = ", ".join(spec.get("aliases") or [])
+        suffix = f" (planned workflow: {planned_workflow})"
+        if aliases:
+            suffix += f" aliases: {aliases}"
+        draft_lines.append(f"- {name}: {summary}{suffix}")
+    if draft_lines:
+        lines.extend(["", "Planned capabilities:"])
+        lines.extend(draft_lines)
     return "\n".join(lines)
 
 

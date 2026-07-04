@@ -78,6 +78,8 @@ VERIFY_COMMANDS = [
         "codex/bin/gateway_runtime_health_smoke.py",
         "codex/bin/gateway_runtime_fingerprint_check.py",
     ],
+    ["python3", "codex/bin/owui_chat_turn_preflight_smoke.py"],
+    ["python3", "codex/bin/agent_self_improve_smoke.py"],
     ["python3", "codex/bin/workspace_context_regression_smoke.py"],
     ["python3", "codex/bin/gateway_recovery_smoke.py"],
     ["python3", "codex/bin/filter_route_smoke.py", "--json"],
@@ -619,6 +621,55 @@ def unified_diff_for_file(rel: str, before: str, after: str) -> str:
     )
 
 
+def capability_draft_shape(capability: str, feature_request: str, reasoning: dict[str, Any]) -> dict[str, Any]:
+    capability = slugify(capability, "new_capability")
+    if capability.startswith("workspace_action_"):
+        action = capability.removeprefix("workspace_action_")
+        return {
+            "scope": "workspace_runtime",
+            "workflow": "action",
+            "planned_workflow": "action",
+            "executor": f"reuse_workspace_action_runner:{action}",
+            "aliases": [capability, f"workspace_action:{action}", action],
+            "summary": feature_request or f"Draft audited workspace action capability for {action}.",
+        }
+    if capability.startswith("workspace_"):
+        return {
+            "scope": "workspace_capability",
+            "workflow": "clarify",
+            "planned_workflow": "autopilot",
+            "executor": "reuse_bounded_workspace_executor_or_add_explicit_workspace_handler",
+            "aliases": [capability],
+            "summary": feature_request or f"Draft workspace-scoped capability for {capability}.",
+        }
+    if capability.startswith("agent_"):
+        return {
+            "scope": "stack_runtime",
+            "workflow": "clarify",
+            "planned_workflow": "self_improve",
+            "executor": "guarded_stack_runtime_executor_or_existing_admin_capability_reuse",
+            "aliases": [capability],
+            "summary": feature_request or f"Draft stack/runtime capability for {capability}.",
+        }
+    if capability.startswith("web_") or "web" in capability:
+        return {
+            "scope": "public_web",
+            "workflow": "clarify",
+            "planned_workflow": "web_answer",
+            "executor": "reuse_public_web_fetch_or_answer_executor",
+            "aliases": [capability],
+            "summary": feature_request or f"Draft public-web capability for {capability}.",
+        }
+    return {
+        "scope": "workspace_capability",
+        "workflow": "clarify",
+        "planned_workflow": "clarify",
+        "executor": "pending_guarded_executor_or_existing_pattern_reuse",
+        "aliases": [capability],
+        "summary": feature_request or f"Draft capability proposed by agent_self_improve for {capability}.",
+    }
+
+
 def roadmap_with_capability(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
     rel = "docs/codex-local-capability-roadmap.json"
     path = ROOT / rel
@@ -628,16 +679,24 @@ def roadmap_with_capability(capability: str, feature_request: str, reasoning: di
     except json.JSONDecodeError:
         payload = {"version": 1, "capabilities": {}}
     capabilities = payload.setdefault("capabilities", {})
-    capabilities.setdefault(
-        capability,
-        {
-            "scope": "workspace_capability",
-            "status": "draft",
-            "summary": feature_request or f"Draft capability proposed by agent_self_improve for {capability}.",
-            "executor": "pending_guarded_executor_or_existing_pattern_reuse",
-            "acceptance_criteria": (reasoning.get("task_spec") or {}).get("acceptance_criteria") or [],
-        },
-    )
+    shape = capability_draft_shape(capability, feature_request, reasoning)
+    capabilities[capability] = {
+        **(capabilities.get(capability) if isinstance(capabilities.get(capability), dict) else {}),
+        "scope": shape["scope"],
+        "workflow": shape["workflow"],
+        "planned_workflow": shape["planned_workflow"],
+        "implemented": False,
+        "draft": True,
+        "summary": shape["summary"],
+        "executor": shape["executor"],
+        "aliases": shape["aliases"],
+        "acceptance_criteria": (reasoning.get("task_spec") or {}).get("acceptance_criteria") or [],
+        "tests": [
+            "TaskSpec normalization preserves target_capability_name and canonical capability selection.",
+            "Gateway recovery smoke covers routing into agent_capability_develop/self_improve.",
+            "Generated unified diff passes git apply --check before guarded apply.",
+        ],
+    }
     after = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     return rel, unified_diff_for_file(rel, before, after)
 
@@ -647,6 +706,7 @@ def capability_draft_file(capability: str, feature_request: str, diagnosis: dict
     path = ROOT / rel
     before = read_text(path) if path.is_file() else ""
     task_spec = reasoning.get("task_spec") or {}
+    shape = capability_draft_shape(capability, feature_request, reasoning)
     draft = {
         "kind": "codex-local-capability-draft",
         "capability_name": capability,
@@ -656,19 +716,23 @@ def capability_draft_file(capability: str, feature_request: str, diagnosis: dict
         "desired_end_state": task_spec.get("desired_end_state") or "",
         "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
         "registry_entry": {
-            "workflow": "pending",
-            "scope": "workspace_capability",
+            "workflow": shape["workflow"],
+            "planned_workflow": shape["planned_workflow"],
+            "scope": shape["scope"],
             "implemented": False,
-            "summary": feature_request or f"Draft implementation plan for {capability}.",
+            "summary": shape["summary"],
         },
-        "aliases": [capability],
+        "aliases": shape["aliases"],
         "workflow_mapping": {
             "status": "draft",
-            "note": "Senior review should choose an existing executor pattern or add one bounded workflow executor before marking implemented=true.",
+            "effective_runtime_workflow": shape["workflow"],
+            "planned_workflow": shape["planned_workflow"],
+            "note": "The draft stays non-implemented until senior review approves a bounded executor or pattern reuse.",
         },
         "executor_plan": [
+            f"Preferred executor pattern: {shape['executor']}.",
             "Define explicit inputs and preconditions.",
-            "Reuse an existing bounded workspace executor when possible.",
+            "Reuse an existing bounded executor when possible instead of adding prompt-specific routing.",
             "Return NEEDS_ATTENTION or MANUAL_STEP_REQUIRED with concrete recovery on blocker.",
         ],
         "tests": [
@@ -892,6 +956,13 @@ def run_command(command: list[str], timeout: int) -> dict[str, Any]:
         }
 
 
+def effective_verify_commands() -> list[list[str]]:
+    commands = list(VERIFY_COMMANDS)
+    if os.getenv("AGENT_SELF_IMPROVE_SMOKE_RUNNING") or os.getenv("AGENT_SELF_IMPROVE_NESTED_VERIFY"):
+        commands = [command for command in commands if command != ["python3", "codex/bin/agent_self_improve_smoke.py"]]
+    return commands
+
+
 def runtime_gate(args: argparse.Namespace, audit_dir: Path, phase: str) -> dict[str, Any]:
     if args.dry_run:
         result = {
@@ -930,7 +1001,7 @@ def runtime_gate(args: argparse.Namespace, audit_dir: Path, phase: str) -> dict[
 
 
 def verify(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
-    commands = VERIFY_COMMANDS
+    commands = effective_verify_commands()
     results = [run_command(command, args.command_timeout) for command in commands]
     ok = all(item.get("exit_code") == 0 for item in results)
     lines = []

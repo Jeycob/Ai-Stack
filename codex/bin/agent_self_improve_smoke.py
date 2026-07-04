@@ -168,6 +168,12 @@ def run_capability_develop_mode() -> None:
         patch_text = generated_file.read_text(encoding="utf-8")
         if "docs/capability-drafts/workspace_profile.json" not in patch_text:
             raise SystemExit(f"expected capability draft file in generated diff:\n{patch_text}")
+        if "docs/codex-local-capability-roadmap.json" not in patch_text:
+            raise SystemExit(f"expected roadmap entry in generated diff:\n{patch_text}")
+        if '"planned_workflow": "autopilot"' not in patch_text:
+            raise SystemExit(f"expected planned workflow metadata in generated diff:\n{patch_text}")
+        if '"aliases": [' not in patch_text:
+            raise SystemExit(f"expected aliases metadata in generated diff:\n{patch_text}")
         print("AGENT_SELF_IMPROVE_CAPABILITY_DEVELOP_OK")
 
 
@@ -192,8 +198,11 @@ def run_generate_unified_diff_mode() -> None:
         generated = payload.get("generated_diff") or {}
         if not generated.get("ok") or generated.get("source") != "capability_development_template":
             raise SystemExit(f"expected generated diff mode to produce a valid draft diff, got {payload!r}")
-        if "docs/capability-drafts/workspace_profile.json" not in (generated.get("paths") or []):
+        paths = generated.get("paths") or []
+        if "docs/capability-drafts/workspace_profile.json" not in paths:
             raise SystemExit(f"expected capability draft path in generated diff, got {generated!r}")
+        if "docs/codex-local-capability-roadmap.json" not in paths:
+            raise SystemExit(f"expected roadmap path in generated diff, got {generated!r}")
         print("AGENT_SELF_IMPROVE_GENERATE_UNIFIED_DIFF_OK")
 
 
@@ -285,6 +294,7 @@ def run_verify_dry_run() -> None:
                 "--json",
             ],
             cwd=ROOT,
+            env={**os.environ, "AGENT_SELF_IMPROVE_SMOKE_RUNNING": "1"},
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -293,12 +303,13 @@ def run_verify_dry_run() -> None:
         if proc.returncode != 0:
             raise SystemExit(f"verify dry-run should pass:\n{proc.stdout}")
         payload = json.loads(proc.stdout)
-        if payload.get("verify", {}).get("command_count", 0) < 4:
+        if payload.get("verify", {}).get("command_count", 0) < 6:
             raise SystemExit(f"expected smoke commands in verify result, got {payload!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
 
 
 def main() -> int:
+    os.environ.setdefault("AGENT_SELF_IMPROVE_SMOKE_RUNNING", "1")
     run_case("context-status", "repo: Test2\nkde ted jsi?", "meta_workspace_status_test2")
     run_case("capability-catalog", "repo: Test2\njake mas capability?", "meta_capability_catalog_test2")
     run_case("ssh-public", "repo: Test2\nvytvor tam ssh klic a vypis mi public", "ssh_public_key_alias_test2")

@@ -800,6 +800,37 @@ def assert_agent_self_improve_capability() -> None:
         raise SystemExit(f"expected target capability to imply agent_capability_develop, got {taskspec!r}")
     if plan.get("workflow") != "self_improve" or plan.get("target_capability_name") != "workspace_profile":
         raise SystemExit(f"expected self_improve plan with target capability, got {plan!r}")
+    with tempfile.TemporaryDirectory(prefix="gateway-cap-roadmap-") as tmp:
+        roadmap_path = Path(tmp) / "roadmap.json"
+        roadmap_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "capabilities": {
+                        "workspace_profile": {
+                            "scope": "workspace_capability",
+                            "workflow": "clarify",
+                            "planned_workflow": "autopilot",
+                            "implemented": False,
+                            "draft": True,
+                            "summary": "Draft bounded workspace profiling capability.",
+                            "aliases": ["profile_workspace", "workspace-profiling"],
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(gateway, "CAPABILITY_ROADMAP_FILE", roadmap_path):
+            registry = gateway.agent_capability_registry()
+            runtime_draft = registry.get("workspace_profile") or {}
+            if runtime_draft.get("implemented") is not False:
+                raise SystemExit(f"expected roadmap-backed draft capability to stay unimplemented, got {runtime_draft!r}")
+            if runtime_draft.get("planned_workflow") != "autopilot":
+                raise SystemExit(f"expected runtime draft planned workflow from roadmap metadata, got {runtime_draft!r}")
+            if gateway.canonicalize_agent_capability("workspace-profiling") != "workspace_profile":
+                raise SystemExit("expected dynamic roadmap alias to canonicalize to workspace_profile")
     print("AGENT_SELF_IMPROVE_CAPABILITY_OK")
 
 
