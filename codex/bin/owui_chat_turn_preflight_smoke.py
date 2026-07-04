@@ -166,6 +166,26 @@ def assert_ready_reaches_completion(turn) -> None:
     print("OWUI_PREFLIGHT_READY_OK")
 
 
+def assert_sse_completion_response_parses(turn) -> None:
+    raw = "\n".join(
+        [
+            'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":123,"model":"codex-local","choices":[{"index":0,"delta":{"role":"assistant","content":"AGENT_"},"finish_reason":null}]}',
+            "",
+            'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":123,"model":"codex-local","choices":[{"index":0,"delta":{"content":"LOOP_OK"},"finish_reason":"stop"}]}',
+            "",
+            "data: [DONE]",
+            "",
+        ]
+    )
+    parsed = turn.parse_openwebui_response(raw, "text/event-stream")
+    text = turn.response_text(parsed)
+    if text != "AGENT_LOOP_OK":
+        raise SystemExit(f"PREFLIGHT_SSE_PARSE_FAILED\nreason=unexpected parsed text {text!r}")
+    if parsed.get("model") != "codex-local":
+        raise SystemExit(f"PREFLIGHT_SSE_PARSE_FAILED\nreason=unexpected model {parsed!r}")
+    print("OWUI_SSE_COMPLETION_PARSE_OK")
+
+
 def assert_runtime_split_brain_short_circuits(turn) -> None:
     calls: list[tuple[str, str]] = []
 
@@ -295,6 +315,8 @@ def main() -> int:
     assert_foreign_clone_same_commit_reaches_completion(turn)
     turn = load_turn_module()
     assert_ready_reaches_completion(turn)
+    turn = load_turn_module()
+    assert_sse_completion_response_parses(turn)
     print("OWUI_CHAT_TURN_PREFLIGHT_SMOKE_OK")
     return 0
 

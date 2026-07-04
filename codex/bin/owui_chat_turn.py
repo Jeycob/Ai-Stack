@@ -142,6 +142,82 @@ def openwebui_api_key(args: argparse.Namespace) -> str:
     )
 
 
+def parse_sse_completion(raw: str) -> dict:
+    chunks: list[dict] = []
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text.startswith("data:"):
+            continue
+        data = text[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            parsed = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            chunks.append(parsed)
+
+    content_parts: list[str] = []
+    role = "assistant"
+    completion_id = ""
+    model = ""
+    created = int(time.time())
+    finish_reason = "stop"
+    usage = None
+
+    for chunk in chunks:
+        completion_id = completion_id or str(chunk.get("id") or "")
+        model = model or str(chunk.get("model") or "")
+        if isinstance(chunk.get("created"), int):
+            created = chunk["created"]
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+        choices = chunk.get("choices") or []
+        if not choices or not isinstance(choices[0], dict):
+            continue
+        choice = choices[0]
+        if choice.get("finish_reason"):
+            finish_reason = str(choice.get("finish_reason"))
+        delta = choice.get("delta") or {}
+        message = choice.get("message") or {}
+        if isinstance(delta, dict):
+            if isinstance(delta.get("role"), str):
+                role = delta["role"]
+            if isinstance(delta.get("content"), str):
+                content_parts.append(delta["content"])
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            content_parts.append(message["content"])
+
+    payload = {
+        "id": completion_id or f"chatcmpl-sse-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": role, "content": "".join(content_parts)},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return payload
+
+
+def parse_openwebui_response(raw: str, content_type: str = "") -> dict | list | str:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        if "text/event-stream" in str(content_type).lower() or raw.lstrip().startswith("data:"):
+            return parse_sse_completion(raw)
+        return raw
+
+
 def http_request(
     args: argparse.Namespace,
     method: str,
@@ -169,14 +245,10 @@ def http_request(
         try:
             with client.open(req, timeout=args.timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
-                return resp.status, json.loads(raw) if raw else {}
+                return resp.status, parse_openwebui_response(raw, resp.headers.get("content-type", ""))
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
-            parsed: dict | list | str
-            try:
-                parsed = json.loads(raw) if raw else {}
-            except json.JSONDecodeError:
-                parsed = raw
+            parsed = parse_openwebui_response(raw, exc.headers.get("content-type", ""))
             if allow_error or exc.code not in RETRY_STATUSES:
                 return exc.code, parsed
             last_error = exc
