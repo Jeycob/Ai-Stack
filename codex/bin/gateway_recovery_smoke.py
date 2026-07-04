@@ -875,6 +875,38 @@ def assert_capability_draft_contracts() -> None:
         for rel in contract.get("verifier_expectations", {}).get("required_paths") or []:
             if not (ROOT / rel).is_file():
                 raise SystemExit(f"required capability draft path missing for {capability}: {rel}")
+        markers = contract.get("verifier_expectations", {}).get("required_markers") or {}
+        gateway_integration_path = ROOT / f"docs/capability-drafts/{capability}.gateway-integration.json"
+        wiring_path = ROOT / f"docs/capability-drafts/{capability}.wiring.json"
+        executor_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_executor_stub.py"
+        runtime_hook_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_runtime_hook_stub.py"
+        smoke_stub_path = ROOT / f"codex/bin/capability_drafts/{capability}_smoke.py"
+        if gateway_integration_path.is_file():
+            integration = json.loads(gateway_integration_path.read_text(encoding="utf-8"))
+            if str(integration.get("kind") or "") != str(markers.get("gateway_integration_kind") or ""):
+                raise SystemExit(f"gateway integration kind mismatch for {capability}: {integration!r}")
+            workflow_map = (((integration.get("snippets") or {}).get("workflow_map") or {}).get("code") or {})
+            if capability not in workflow_map:
+                raise SystemExit(f"gateway integration draft missing workflow map for {capability}: {integration!r}")
+        if wiring_path.is_file():
+            wiring = json.loads(wiring_path.read_text(encoding="utf-8"))
+            if str(wiring.get("kind") or "") != str(markers.get("wiring_kind") or ""):
+                raise SystemExit(f"wiring kind mismatch for {capability}: {wiring!r}")
+            if not (wiring.get("touchpoints") or []):
+                raise SystemExit(f"wiring blueprint missing touchpoints for {capability}: {wiring!r}")
+        if executor_stub_path.is_file():
+            executor_text = executor_stub_path.read_text(encoding="utf-8")
+            capability_constant = str(markers.get("executor_capability_constant") or "").strip()
+            if capability_constant and f"CAPABILITY_NAME = '{capability_constant}'" not in executor_text and f'CAPABILITY_NAME = "{capability_constant}"' not in executor_text:
+                raise SystemExit(f"executor stub capability constant mismatch for {capability}: {executor_stub_path}")
+        if runtime_hook_stub_path.is_file():
+            runtime_hook_text = runtime_hook_stub_path.read_text(encoding="utf-8")
+            if str(markers.get("runtime_hook_marker") or "").strip() and str(markers.get("runtime_hook_marker")).strip() not in runtime_hook_text:
+                raise SystemExit(f"runtime hook stub marker missing for {capability}: {runtime_hook_stub_path}")
+        if smoke_stub_path.is_file():
+            smoke_text = smoke_stub_path.read_text(encoding="utf-8")
+            if str(markers.get("smoke_marker") or "").strip() and str(markers.get("smoke_marker")).strip() not in smoke_text:
+                raise SystemExit(f"smoke stub marker missing for {capability}: {smoke_stub_path}")
     print("CAPABILITY_DRAFT_CONTRACTS_OK")
 
 
