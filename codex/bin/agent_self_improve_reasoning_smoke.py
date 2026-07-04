@@ -68,7 +68,7 @@ def run_llm_reasoning_uses_gateway_normalizer() -> None:
         ],
     }
     diagnosis = asi.classify_failure("unsupported capability workspace_ssh_key_show_public", "", "")
-    regression = asi.infer_regression(transcript, diagnosis, make_args())
+    regression = asi.build_regression(transcript, diagnosis, make_args())
 
     def fake_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
         return (
@@ -230,6 +230,100 @@ def run_llm_diagnosis_falls_back_cleanly() -> None:
     with_gateway_helpers(helpers, run)
 
 
+def run_llm_regression_uses_runtime_output() -> None:
+    transcript = {
+        "id": "chat-regression",
+        "messages": [
+            {"role": "user", "content": "repo: Test2\nprohledej repo a hledej zminky o capability implementaci"},
+            {"role": "assistant", "content": "obecne shrnuti bez skutecneho search"},
+        ],
+    }
+    diagnosis = asi.classify_failure("repo search was hallucinated", "", "")
+    args = make_args(prompt="repo: Test2\nprohledej repo a hledej zminky o capability implementaci")
+
+    def fake_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
+        return (
+            {
+                "cases": [
+                    {
+                        "name": "workspace_search_capability_test2",
+                        "prompt": "repo: Test2\nprohledej repo a hledej zminky o capability implementaci",
+                        "expected_workflow": "workspace_search",
+                        "expected_capability": "workspace_search",
+                        "expected_marker": "matches",
+                    }
+                ]
+            },
+            '{"cases":[{"name":"workspace_search_capability_test2"}]}',
+            {},
+        )
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": fake_structured_json_chat,
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "workspace_search",
+        "extract_unified_diff": lambda text: text,
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        result = asi.build_regression(transcript, diagnosis, args)
+        if result.get("source") != "llm_regression_runtime":
+            raise SystemExit(f"expected llm regression source, got {result!r}")
+        cases = result.get("cases") or []
+        if len(cases) != 1 or cases[0].get("expected_capability") != "workspace_search":
+            raise SystemExit(f"expected workspace_search regression case, got {result!r}")
+        if not result.get("llm_raw"):
+            raise SystemExit(f"expected llm raw regression artifact, got {result!r}")
+        print("AGENT_SELF_IMPROVE_LLM_REGRESSION_OK")
+
+    with_gateway_helpers(helpers, run)
+
+
+def run_llm_regression_falls_back_cleanly() -> None:
+    transcript = {
+        "id": "chat-regression-fallback",
+        "messages": [
+            {"role": "user", "content": "repo: Test2\nkde ted jsi?"},
+            {"role": "assistant", "content": "WORKSPACE_RUN_FAILED recurse"},
+        ],
+    }
+    diagnosis = asi.classify_failure("WORKSPACE_RUN_FAILED recurse", "", "")
+    args = make_args(prompt="repo: Test2\nkde ted jsi?")
+
+    def failing_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
+        raise RuntimeError("regression backend unavailable")
+
+    helpers = {
+        "ok": True,
+        "structured_json_chat": failing_structured_json_chat,
+        "codex_local_runtime_model_name": lambda **_: "codex-local",
+        "normalize_agent_taskspec": lambda spec, *_args: spec,
+        "agent_taskspec_schema": lambda: {"type": "object"},
+        "agent_capability_catalog": lambda: "workspace_context_status",
+        "extract_unified_diff": lambda text: text,
+        "ROLE_PLANNER": "planner",
+        "ROLE_AGENT": "agent",
+    }
+
+    def run():
+        result = asi.build_regression(transcript, diagnosis, args)
+        if result.get("source") != "structured_regression_runtime_fallback":
+            raise SystemExit(f"expected regression fallback marker, got {result!r}")
+        cases = result.get("cases") or []
+        if not cases or cases[0].get("expected_capability") != "workspace_context_status":
+            raise SystemExit(f"expected deterministic fallback regression case, got {result!r}")
+        if "regression backend unavailable" not in str(result.get("llm_error") or ""):
+            raise SystemExit(f"expected regression fallback error detail, got {result!r}")
+        print("AGENT_SELF_IMPROVE_LLM_REGRESSION_FALLBACK_OK")
+
+    with_gateway_helpers(helpers, run)
+
+
 def run_llm_reasoning_falls_back_cleanly() -> None:
     transcript = {
         "id": "chat-test",
@@ -245,7 +339,7 @@ def run_llm_reasoning_falls_back_cleanly() -> None:
         feature_request="Add bounded workspace profiling capability.",
     )
     diagnosis = asi.classify_failure("timeout and disconnect", "", "")
-    regression = asi.infer_regression(transcript, diagnosis, args)
+    regression = asi.build_regression(transcript, diagnosis, args)
 
     def failing_structured_json_chat(model_id, messages, schema_name, schema, timeout=0):
         raise RuntimeError("planner backend unavailable")
@@ -382,6 +476,8 @@ def run_llm_diff_generation_uses_runtime_draft() -> None:
 def main() -> int:
     run_llm_diagnosis_uses_runtime_output()
     run_llm_diagnosis_falls_back_cleanly()
+    run_llm_regression_uses_runtime_output()
+    run_llm_regression_falls_back_cleanly()
     run_llm_reasoning_uses_gateway_normalizer()
     run_llm_reasoning_falls_back_cleanly()
     run_llm_diff_generation_uses_runtime_draft()

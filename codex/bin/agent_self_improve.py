@@ -555,7 +555,7 @@ def build_diagnosis(args: argparse.Namespace, transcript: dict[str, Any]) -> dic
     return diagnosis
 
 
-def infer_regression(transcript: dict[str, Any], diagnosis: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+def deterministic_regression(transcript: dict[str, Any], diagnosis: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     prompt = args.prompt or last_user_prompt(transcript)
     text = transcript_text(transcript)
     expected = args.expected_behavior or diagnosis.get("expected_behavior") or ""
@@ -620,6 +620,158 @@ def infer_regression(transcript: dict[str, Any], diagnosis: dict[str, Any], args
             "If a new capability is required, add it to registry, executor, roadmap and tests before marking fixed.",
         ],
     }
+
+
+def self_improve_regression_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "cases": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "name": {"type": "string"},
+                        "prompt": {"type": "string"},
+                        "expected_workflow": {"type": "string"},
+                        "expected_capability": {"type": "string"},
+                        "expected_marker": {"type": "string"},
+                        "expected_behavior": {"type": "string"},
+                    },
+                    "required": ["name", "prompt"],
+                },
+            },
+        },
+        "required": ["cases"],
+    }
+
+
+def normalize_regression_cases(cases: Any, fallback_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in cases or []:
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt:
+            continue
+        name = slugify(str(item.get("name") or ""), "")
+        if not name:
+            name = slugify(hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12], "observed_case")
+        if name in seen:
+            continue
+        seen.add(name)
+        normalized.append(
+            {
+                "name": name,
+                "prompt": prompt,
+                "expected_workflow": str(item.get("expected_workflow") or "").strip(),
+                "expected_capability": str(item.get("expected_capability") or "").strip(),
+                "expected_marker": str(item.get("expected_marker") or "").strip(),
+                "expected_behavior": str(item.get("expected_behavior") or "").strip(),
+            }
+        )
+    return normalized or list(fallback_cases)
+
+
+def self_improve_regression_messages(
+    transcript: dict[str, Any],
+    diagnosis: dict[str, Any],
+    fallback: dict[str, Any],
+    args: argparse.Namespace,
+) -> list[dict[str, str]]:
+    transcript_excerpt = transcript_text(transcript)
+    if len(transcript_excerpt) > 12000:
+        transcript_excerpt = transcript_excerpt[-12000:]
+    prompt = args.prompt or last_user_prompt(transcript) or ""
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the regression planning mode for codex-local agent_self_improve. "
+                "Return JSON only. Do not explain. "
+                "Propose one or more bounded regression cases that would prove the failure is fixed. "
+                "Prefer TaskSpec/capability semantics over prompt-specific keyword behavior."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Latest user prompt:\n{prompt}\n\n"
+                f"Diagnosis category: {diagnosis.get('category')}\n"
+                f"Root cause: {diagnosis.get('root_cause')}\n"
+                f"Expected behavior: {args.expected_behavior or diagnosis.get('expected_behavior') or fallback.get('expected_behavior')}\n"
+                f"Fallback regression:\n{json.dumps(fallback, ensure_ascii=False)}\n\n"
+                f"Transcript excerpt:\n{transcript_excerpt}"
+            ),
+        },
+    ]
+
+
+def llm_reasoning_regression(
+    transcript: dict[str, Any],
+    diagnosis: dict[str, Any],
+    args: argparse.Namespace,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    helpers = gateway_reasoning_helpers()
+    if not helpers.get("ok"):
+        return {
+            "ok": False,
+            "planner": "llm_regression_runtime",
+            "error": helpers.get("error") or "gateway_reasoning_helpers_unavailable",
+        }
+    prompt = args.prompt or last_user_prompt(transcript) or ""
+    messages = self_improve_regression_messages(transcript, diagnosis, fallback, args)
+    model_id = helpers["codex_local_runtime_model_name"](task=prompt, role=helpers["ROLE_PLANNER"])
+    try:
+        parsed, raw, _meta = helpers["structured_json_chat"](
+            model_id,
+            messages,
+            "agent_self_improve_regression",
+            self_improve_regression_schema(),
+            timeout=min(args.command_timeout, 60),
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "planner": "llm_regression_runtime",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    merged = dict(fallback)
+    merged["cases"] = normalize_regression_cases(parsed.get("cases"), list(fallback.get("cases") or []))
+    return {
+        "ok": True,
+        "planner": "llm_regression_runtime",
+        "raw": raw,
+        "regression": merged,
+    }
+
+
+def build_regression(transcript: dict[str, Any], diagnosis: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    fallback = deterministic_regression(transcript, diagnosis, args)
+    source = "deterministic_fallback"
+    llm_raw = ""
+    llm_error = ""
+    regression = dict(fallback)
+    use_llm_regression = not env_truthy("AGENT_SELF_IMPROVE_SMOKE_RUNNING") and not env_truthy("AGENT_SELF_IMPROVE_DISABLE_LLM_REGRESSION")
+    if use_llm_regression:
+        llm_result = llm_reasoning_regression(transcript, diagnosis, args, fallback)
+        if llm_result.get("ok"):
+            regression = llm_result.get("regression") or fallback
+            source = str(llm_result.get("planner") or "llm_regression_runtime")
+            llm_raw = str(llm_result.get("raw") or "")
+        else:
+            source = "structured_regression_runtime_fallback"
+            llm_error = str(llm_result.get("error") or "")
+    regression["source"] = source
+    if llm_raw:
+        regression["llm_raw"] = llm_raw
+    if llm_error:
+        regression["llm_error"] = llm_error
+    return regression
 
 
 def reproduce(args: argparse.Namespace, audit_dir: Path, regression: dict[str, Any]) -> dict[str, Any]:
@@ -3322,6 +3474,7 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
     readiness = capability_patch_readiness(summary, proposal_result, generated_diff_result, evidence_status)
     report = {
         "diagnosis_source": summary.get("diagnosis_source") or "",
+        "regression_source": summary.get("regression_source") or "",
         "safe_to_offload_to_codex_local": codex_local_offload,
         "completed_by_codex_local_in_this_run": completed_offload,
         "pending_codex_local_work": pending_offload,
@@ -3491,6 +3644,7 @@ def write_final_report(
         f"- dry_run: `{summary.get('dry_run')}`",
         f"- diagnosis_category: `{summary.get('diagnosis_category')}`",
         f"- diagnosis_source: `{report.get('diagnosis_source') or '-'}`",
+        f"- regression_source: `{report.get('regression_source') or '-'}`",
         f"- root_cause: `{summary.get('root_cause')}`",
         f"- cycles_completed: `{summary.get('cycles_completed')}` / `{summary.get('cycles_requested')}`",
         f"- target_capability_name: `{report.get('target_capability_name') or '-'}'",
@@ -3828,7 +3982,7 @@ def main() -> int:
     )
     write_json(audit_dir / "diagnosis.json", diagnosis)
 
-    regression = infer_regression(transcript, diagnosis, args)
+    regression = build_regression(transcript, diagnosis, args)
     write_json(audit_dir / "regression.json", regression)
 
     patch_result: dict[str, Any] = {"ok": True, "skipped": True}
@@ -3987,6 +4141,7 @@ def main() -> int:
         "cycles": cycle_results,
         "diagnosis_category": diagnosis.get("category"),
         "diagnosis_source": diagnosis.get("source") or "",
+        "regression_source": regression.get("source") or "",
         "root_cause": diagnosis.get("root_cause"),
         "patch_scope": diagnosis.get("patch_scope"),
         "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
