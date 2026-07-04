@@ -44,7 +44,7 @@ DEFAULT_GATEWAY_URL = "http://192.168.0.48:9101"
 SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
     re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----.*?-----END OPENSSH PRIVATE KEY-----", re.S),
-    re.compile(r"(?im)^.*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY).*?$"),
+    re.compile(r"(?im)^.*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)\s*[:=].*?$"),
 ]
 
 ALLOWED_PATCH_PREFIXES = (
@@ -84,6 +84,23 @@ VERIFY_COMMANDS = [
     ["python3", "codex/bin/gateway_runtime_health_smoke.py"],
 ]
 
+REPRODUCE_COMMANDS = [
+    ["python3", "codex/bin/gateway_recovery_smoke.py"],
+    ["python3", "codex/bin/filter_route_smoke.py", "--json"],
+    ["python3", "codex/bin/workspace_context_regression_smoke.py"],
+]
+
+SELF_IMPROVE_PHASES = [
+    "collect_context",
+    "reproduce",
+    "reason",
+    "propose_patch",
+    "apply_guarded_patch",
+    "verify",
+    "e2e",
+    "report",
+]
+
 
 def utc_stamp() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -92,6 +109,25 @@ def utc_stamp() -> str:
 def slugify(value: str, fallback: str = "case") -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-")
     return (slug or fallback)[:80]
+
+
+def artifact_dir_for(args: argparse.Namespace) -> Path:
+    case_hint = args.failure_marker or args.expected_behavior or args.chat_id or args.chat_url or args.prompt or args.feature_request or "case"
+    digest_source = "\n".join(
+        [
+            str(args.workspace),
+            str(args.chat_id or args.chat_url),
+            str(args.failure_marker),
+            str(args.expected_behavior),
+            str(args.prompt),
+            str(args.feature_request),
+            str(os.getpid()),
+            str(time.time_ns()),
+        ]
+    )
+    digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()[:10]
+    dirname = f"{utc_stamp()}-{digest}-pid{os.getpid()}-{slugify(case_hint)}"
+    return Path(args.audit_root) / dirname
 
 
 def redact(value: Any) -> Any:
@@ -388,6 +424,177 @@ def infer_regression(transcript: dict[str, Any], diagnosis: dict[str, Any], args
     }
 
 
+def reproduce(args: argparse.Namespace, audit_dir: Path, regression: dict[str, Any]) -> dict[str, Any]:
+    commands = list(REPRODUCE_COMMANDS)
+    results = [run_command(command, args.command_timeout) for command in commands]
+    ok = all(item.get("exit_code") == 0 for item in results)
+    payload = {
+        "ok": ok,
+        "phase": "reproduce",
+        "mode": args.mode,
+        "case_count": len(regression.get("cases") or []),
+        "commands": results,
+    }
+    write_json(audit_dir / "reproduce-results.json", payload)
+    lines = []
+    for item in results:
+        command = " ".join(shlex.quote(part) for part in item["command"])
+        lines.append(f"$ {command}")
+        lines.append(f"exit_code={item['exit_code']} duration_ms={item['duration_ms']}")
+        output = str(item.get("output") or "").strip()
+        if output:
+            lines.append(output)
+        lines.append("")
+    write_text(audit_dir / "reproduce-results.txt", "\n".join(lines))
+    return payload
+
+
+def reasoning_task_spec(transcript: dict[str, Any], diagnosis: dict[str, Any], regression: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    prompt = args.prompt or last_user_prompt(transcript) or args.feature_request
+    capability_hint = args.capability_name or ""
+    required_capabilities = []
+    for case in regression.get("cases") or []:
+        if isinstance(case, dict) and case.get("expected_capability"):
+            required_capabilities.append(case["expected_capability"])
+    if capability_hint:
+        required_capabilities.append(capability_hint)
+    required_capabilities = sorted({str(item) for item in required_capabilities if item})
+    missing_inputs = []
+    if args.mode == "capability_develop" and not (args.capability_name or args.feature_request or prompt):
+        missing_inputs.append("feature_request_or_capability_name")
+
+    return {
+        "current_workspace": args.workspace,
+        "user_goal": prompt,
+        "is_new_workspace_request": False,
+        "is_existing_workspace_task": True,
+        "target_repo_name": "",
+        "remote_url": "",
+        "desired_end_state": args.expected_behavior
+        or diagnosis.get("expected_behavior")
+        or "codex-local failure is reproduced, understood, guarded by a regression, and has a small reviewed patch path.",
+        "required_capabilities": required_capabilities,
+        "missing_inputs": missing_inputs,
+        "risk_level": "medium" if args.mode in {"patch", "deploy", "full", "capability_develop"} else "low",
+        "recovery_plan": diagnosis.get("recovery"),
+        "acceptance_criteria": [
+            "A regression artifact exists before any patch is applied.",
+            "Patch paths stay inside audited ai-stack runtime/code/doc paths.",
+            "Verification smoke suite passes before deploy or E2E is reported as complete.",
+            "Runtime fingerprint/source epoch gate passes before live E2E/deploy.",
+        ],
+    }
+
+
+def reason(args: argparse.Namespace, audit_dir: Path, transcript: dict[str, Any], diagnosis: dict[str, Any], regression: dict[str, Any]) -> dict[str, Any]:
+    task_spec = reasoning_task_spec(transcript, diagnosis, regression, args)
+    payload = {
+        "ok": not task_spec.get("missing_inputs"),
+        "phase": "reason",
+        "planner": "structured_taskspec_runtime",
+        "llm_first_contract": {
+            "intent_source": "TaskSpec fields and capability registry",
+            "deterministic_code_role": "canonicalize, validate, execute, recover",
+            "forbidden_shortcut": "prompt-specific workflow if/else patches",
+        },
+        "task_spec": task_spec,
+        "diagnosis_category": diagnosis.get("category"),
+    }
+    write_json(audit_dir / "reasoning.json", payload)
+    return payload
+
+
+def capability_development_plan(args: argparse.Namespace, diagnosis: dict[str, Any], regression: dict[str, Any]) -> dict[str, Any]:
+    capability = slugify(args.capability_name or "new_capability", "new_capability")
+    feature = args.feature_request or args.prompt or diagnosis.get("expected_behavior") or "Extend codex-local with an audited capability."
+    return {
+        "ok": True,
+        "phase": "capability_develop",
+        "capability_name": capability,
+        "feature_request": feature,
+        "architecture_contract": "OpenWebUI filter -> gateway agent loop -> TaskSpec -> capability registry -> workflow executor -> tests/E2E",
+        "implementation_checklist": [
+            "Add canonical capability name and aliases to registry.",
+            "Map capability to a workflow without adding prompt-specific router branches.",
+            "Implement or reuse a bounded executor with explicit inputs and recovery.",
+            "Add roadmap entry and README/docs section.",
+            "Add unit/smoke regression for TaskSpec path and failure recovery.",
+            "Run py_compile, route/filter/recovery smoke, and dry-run E2E artifact.",
+        ],
+        "expected_files": [
+            "codex/gateway/gateway.py",
+            "docs/codex-local-capability-roadmap.json",
+            "codex/bin/gateway_recovery_smoke.py",
+            "README.md",
+        ],
+        "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
+        "safety_boundaries": [
+            "No secrets, .env, tokens, or private SSH keys in artifacts.",
+            "No destructive host operation outside explicit audited capability.",
+            "ai-stack runtime changes require guarded patch, verify, fingerprint gate, and deploy/E2E report.",
+        ],
+    }
+
+
+def propose_patch(
+    args: argparse.Namespace,
+    audit_dir: Path,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+) -> dict[str, Any]:
+    patch_text = read_text(Path(args.patch_file)) if args.patch_file else ""
+    paths = changed_paths_from_patch(patch_text) if patch_text else []
+    capability_plan = capability_development_plan(args, diagnosis, regression) if args.mode == "capability_develop" or args.capability_name else None
+    proposal = {
+        "ok": True,
+        "phase": "propose_patch",
+        "has_patch_file": bool(args.patch_file),
+        "patch_file": args.patch_file,
+        "changed_paths": paths,
+        "blocked_paths": [path for path in paths if not patch_path_allowed(path)],
+        "minimal_patch_scope": diagnosis.get("patch_scope") or [],
+        "reasoning_task_spec": reasoning.get("task_spec") or {},
+        "capability_development": capability_plan,
+        "proposal": [
+            "Keep the fix at the smallest violated layer: TaskSpec/canonical capability/registry/executor/test/docs.",
+            "Add regression before changing behavior.",
+            "Apply only an explicit unified diff that passes path guard and git apply --check.",
+            "Run verification before deploy/E2E.",
+        ],
+    }
+    if patch_text:
+        proposal["patch_sha256"] = hashlib.sha256(patch_text.encode("utf-8")).hexdigest()
+        proposal["patch_preview"] = patch_text[:8000]
+    else:
+        proposal["manual_next_step"] = (
+            "No patch file supplied. Use this proposal to ask codex-local for a unified diff, "
+            "review it, then rerun self-improve with --patch-file and --mode patch/full."
+        )
+    write_json(audit_dir / "patch-proposal.json", proposal)
+    markdown = [
+        "# Agent Self-Improve Patch Proposal",
+        "",
+        f"Diagnosis: `{diagnosis.get('category')}`",
+        "",
+        "## Scope",
+        "",
+    ]
+    for item in diagnosis.get("patch_scope") or []:
+        markdown.append(f"- `{item}`")
+    markdown.extend(["", "## Guard Rails", ""])
+    for item in proposal["proposal"]:
+        markdown.append(f"- {item}")
+    if capability_plan:
+        markdown.extend(["", "## Capability Development", ""])
+        markdown.append(f"Capability: `{capability_plan['capability_name']}`")
+        markdown.append("")
+        for item in capability_plan["implementation_checklist"]:
+            markdown.append(f"- {item}")
+    write_text(audit_dir / "patch-proposal.md", "\n".join(markdown) + "\n")
+    return proposal
+
+
 def changed_paths_from_patch(patch_text: str) -> list[str]:
     paths: list[str] = []
     for line in patch_text.splitlines():
@@ -493,6 +700,43 @@ def run_command(command: list[str], timeout: int) -> dict[str, Any]:
         }
 
 
+def runtime_gate(args: argparse.Namespace, audit_dir: Path, phase: str) -> dict[str, Any]:
+    if args.dry_run:
+        result = {
+            "ok": True,
+            "phase": phase,
+            "dry_run": True,
+            "skipped": True,
+            "message": "Runtime fingerprint gate prepared but not executed because dry_run=true.",
+        }
+        write_json(audit_dir / f"runtime-gate-{phase}.json", result)
+        return result
+    command = [
+        "python3",
+        "codex/bin/gateway_runtime_fingerprint_check.py",
+        "--base-url",
+        args.gateway_url,
+        "--timeout",
+        str(min(args.timeout, 15)),
+        "--json",
+    ]
+    result = run_command(command, args.command_timeout)
+    result["ok"] = result.get("exit_code") == 0
+    result["phase"] = phase
+    parsed = {}
+    try:
+        parsed = json.loads(str(result.get("output") or "{}"))
+    except json.JSONDecodeError:
+        parsed = {}
+    if parsed:
+        result["fingerprint_check"] = parsed
+    if not result["ok"]:
+        result["marker"] = parsed.get("marker") or "CODEX_LOCAL_RUNTIME_FINGERPRINT_GATE_FAILED"
+        result["recovery"] = parsed.get("recovery") or "Restartuj ai-stack gateway a ověř /health proti aktuálnímu checkoutu."
+    write_json(audit_dir / f"runtime-gate-{phase}.json", result)
+    return result
+
+
 def verify(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
     commands = VERIFY_COMMANDS
     results = [run_command(command, args.command_timeout) for command in commands]
@@ -511,6 +755,15 @@ def verify(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
 
 
 def deploy(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
+    gate = runtime_gate(args, audit_dir, "deploy")
+    if not gate.get("ok"):
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "runtime_fingerprint_gate_failed",
+            "gate": gate,
+            "message": "Deploy is blocked until runtime source epoch/fingerprint matches.",
+        }
     command = [
         "python3",
         "codex/bin/gateway_admin.py",
@@ -536,6 +789,15 @@ def deploy(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
 
 
 def e2e(args: argparse.Namespace, audit_dir: Path, regression: dict[str, Any]) -> dict[str, Any]:
+    gate = runtime_gate(args, audit_dir, "e2e")
+    if not gate.get("ok"):
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "runtime_fingerprint_gate_failed",
+            "gate": gate,
+            "message": "E2E is blocked until runtime source epoch/fingerprint matches.",
+        }
     cases = regression.get("cases") or []
     prompt = args.e2e_prompt or (cases[0].get("prompt") if cases and isinstance(cases[0], dict) else "")
     if not prompt:
@@ -604,10 +866,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", default="")
     parser.add_argument("--failure-marker", default="")
     parser.add_argument("--expected-behavior", default="")
-    parser.add_argument("--mode", choices=["diagnose", "reproduce", "patch", "verify", "deploy", "e2e", "full"], default="diagnose")
+    parser.add_argument(
+        "--mode",
+        choices=["diagnose", "reproduce", "propose_patch", "patch", "verify", "deploy", "e2e", "capability_develop", "full"],
+        default="diagnose",
+    )
     parser.add_argument("--dry-run", action="store_true", default=False)
     parser.add_argument("--max-cycles", type=int, default=1)
     parser.add_argument("--patch-file", default="")
+    parser.add_argument("--capability-name", default="")
+    parser.add_argument("--feature-request", default="")
     parser.add_argument("--audit-root", default=str(DEFAULT_AUDIT_ROOT))
     parser.add_argument("--openwebui-base-url", default=os.getenv("OWUI_BASE_URL", DEFAULT_OPENWEBUI_BASE_URL))
     parser.add_argument("--openwebui-api-key-env", default="OWUI_API_KEY")
@@ -629,9 +897,23 @@ def main() -> int:
     if args.max_cycles < 1 or args.max_cycles > 3:
         raise SystemExit("max_cycles must be between 1 and 3")
 
-    case_hint = args.failure_marker or args.expected_behavior or args.chat_id or args.chat_url or args.prompt or "case"
-    audit_dir = Path(args.audit_root) / f"{utc_stamp()}-{slugify(case_hint)}"
+    audit_dir = artifact_dir_for(args)
     audit_dir.mkdir(parents=True, exist_ok=True)
+
+    write_json(
+        audit_dir / "run-manifest.json",
+        {
+            "kind": "codex-local-agent-self-improve-run",
+            "created_at": utc_stamp(),
+            "pid": os.getpid(),
+            "workspace": args.workspace,
+            "mode": args.mode,
+            "max_cycles": args.max_cycles,
+            "dry_run": bool(args.dry_run),
+            "phases": SELF_IMPROVE_PHASES,
+            "runtime_gate_required_for": ["deploy", "e2e"],
+        },
+    )
 
     transcript = collect_transcript(args)
     write_json(audit_dir / "transcript.json", transcript)
@@ -659,37 +941,129 @@ def main() -> int:
     verify_result: dict[str, Any] = {"ok": True, "skipped": True}
     deploy_result: dict[str, Any] = {"ok": True, "skipped": True}
     e2e_result: dict[str, Any] = {"ok": True, "skipped": True}
+    reproduce_result: dict[str, Any] = {"ok": True, "skipped": True}
+    reasoning_result: dict[str, Any] = {"ok": True, "skipped": True}
+    proposal_result: dict[str, Any] = {"ok": True, "skipped": True}
+    cycle_results: list[dict[str, Any]] = []
 
-    if args.mode in {"patch", "full"}:
-        patch_result = validate_or_apply_patch(args, audit_dir)
-    if args.mode in {"verify", "full"}:
-        verify_result = verify(args, audit_dir)
-    if args.mode in {"deploy", "full"}:
-        if not verify_result.get("ok") and not verify_result.get("skipped"):
-            deploy_result = {
-                "ok": False,
-                "skipped": True,
-                "reason": "verify_failed",
-                "message": "Self-improve never deploys when verification failed.",
-            }
-        else:
-            deploy_result = deploy(args, audit_dir)
-    if args.mode in {"e2e", "full"}:
-        e2e_result = e2e(args, audit_dir, regression)
+    cycle_modes = {"propose_patch", "patch", "capability_develop", "full"}
+    cycles_to_run = args.max_cycles if args.mode in cycle_modes else 1
+
+    for cycle in range(1, cycles_to_run + 1):
+        cycle_dir = audit_dir / f"cycle-{cycle:02d}"
+        cycle_dir.mkdir(parents=True, exist_ok=True)
+        cycle_record: dict[str, Any] = {
+            "cycle": cycle,
+            "ok": True,
+            "phases": {},
+        }
+
+        if args.mode in {"reproduce", "propose_patch", "patch", "capability_develop", "full"}:
+            reproduce_result = reproduce(args, cycle_dir, regression)
+            cycle_record["phases"]["reproduce"] = reproduce_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(reproduce_result.get("ok"))
+
+        if args.mode in {"propose_patch", "patch", "capability_develop", "full"}:
+            reasoning_result = reason(args, cycle_dir, transcript, diagnosis, regression)
+            cycle_record["phases"]["reason"] = reasoning_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(reasoning_result.get("ok"))
+
+            proposal_result = propose_patch(args, cycle_dir, diagnosis, regression, reasoning_result)
+            cycle_record["phases"]["propose_patch"] = proposal_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(proposal_result.get("ok"))
+
+        if args.mode in {"patch", "full"}:
+            patch_result = validate_or_apply_patch(args, cycle_dir)
+            cycle_record["phases"]["apply_guarded_patch"] = patch_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(patch_result.get("ok"))
+
+        if args.mode in {"verify", "patch", "capability_develop", "full"}:
+            if not cycle_record["ok"]:
+                verify_result = {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "previous_phase_failed",
+                    "message": "Verify skipped because an earlier self-improve phase failed.",
+                }
+            else:
+                verify_result = verify(args, cycle_dir)
+            cycle_record["phases"]["verify"] = verify_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(verify_result.get("ok"))
+
+        if args.mode in {"deploy", "full"}:
+            if not verify_result.get("ok") and not verify_result.get("skipped"):
+                deploy_result = {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "verify_failed",
+                    "message": "Self-improve never deploys when verification failed.",
+                }
+            else:
+                deploy_result = deploy(args, cycle_dir)
+            cycle_record["phases"]["deploy"] = deploy_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(deploy_result.get("ok"))
+
+        if args.mode in {"e2e", "full"}:
+            if args.mode == "full" and (not deploy_result.get("ok") and not deploy_result.get("skipped")):
+                e2e_result = {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "deploy_failed",
+                    "message": "Self-improve never runs E2E after a failed deploy.",
+                }
+            else:
+                e2e_result = e2e(args, cycle_dir, regression)
+            cycle_record["phases"]["e2e"] = e2e_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(e2e_result.get("ok"))
+
+        cycle_results.append(cycle_record)
+        write_json(cycle_dir / "cycle-summary.json", cycle_record)
+        if cycle_record["ok"]:
+            break
+
+    learned_pattern = {
+        "kind": "codex-local-failure-pattern",
+        "created_at": utc_stamp(),
+        "workspace": args.workspace,
+        "diagnosis_category": diagnosis.get("category"),
+        "root_cause": diagnosis.get("root_cause"),
+        "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
+        "recommended_capability_scope": proposal_result.get("capability_development") or {},
+        "status": "verified" if verify_result.get("ok") and not verify_result.get("skipped") else "recorded",
+    }
+    write_json(audit_dir / "learned-pattern.json", learned_pattern)
 
     summary = {
         "ok": all(
             bool(item.get("ok"))
-            for item in (patch_result, verify_result, deploy_result, e2e_result)
+            for item in (reproduce_result, reasoning_result, proposal_result, patch_result, verify_result, deploy_result, e2e_result)
         ),
         "artifact_dir": str(audit_dir),
         "workspace": args.workspace,
         "mode": args.mode,
         "dry_run": bool(args.dry_run),
+        "cycles_requested": cycles_to_run,
+        "cycles_completed": len(cycle_results),
+        "cycles": cycle_results,
         "diagnosis_category": diagnosis.get("category"),
         "root_cause": diagnosis.get("root_cause"),
         "patch_scope": diagnosis.get("patch_scope"),
         "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
+        "reproduce": {
+            "ok": reproduce_result.get("ok"),
+            "skipped": reproduce_result.get("skipped", False),
+            "command_count": len(reproduce_result.get("commands") or []),
+        },
+        "reason": {
+            "ok": reasoning_result.get("ok"),
+            "skipped": reasoning_result.get("skipped", False),
+        },
+        "proposal": {
+            "ok": proposal_result.get("ok"),
+            "skipped": proposal_result.get("skipped", False),
+            "has_patch_file": proposal_result.get("has_patch_file", False),
+            "capability_development": bool(proposal_result.get("capability_development")),
+        },
         "patch": patch_result,
         "verify": {
             "ok": verify_result.get("ok"),
@@ -698,6 +1072,21 @@ def main() -> int:
         },
         "deploy": deploy_result,
         "e2e": e2e_result,
+        "report": {
+            "safe_to_offload_to_codex_local": [
+                "repository exploration",
+                "regression artifact proposal",
+                "capability implementation checklist",
+                "smoke command execution",
+                "recovery report drafting",
+            ],
+            "codex_senior_review_required_for": [
+                "applying runtime patches",
+                "deploying ai-stack",
+                "approving new host/runtime capability boundaries",
+                "reviewing security-sensitive recovery",
+            ],
+        },
     }
     write_json(audit_dir / "summary.json", summary)
     if args.json:

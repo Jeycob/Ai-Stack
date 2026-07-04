@@ -63,7 +63,11 @@
     },
     "agent_self_improve": {
       "scope": "stack_runtime",
-      "summary": "Auditovana rutina pro zpracovani OpenWebUI failure transcriptu, diagnosis/regression artefakty, smoke verify, deploy pripraveni a E2E overeni."
+      "summary": "Auditovana rutina pro zpracovani OpenWebUI failure transcriptu, reproduce/reason/patch-proposal/guarded-apply/verify/E2E/report artefakty."
+    },
+    "agent_capability_develop": {
+      "scope": "stack_runtime",
+      "summary": "Self-improve rezim pro navrh nove codex-local capability: registry, executor/workflow, roadmap, unit/smoke/E2E testy a guarded patch proposal."
     },
     "clarify_or_infer_capability": {
       "scope": "mentoring",

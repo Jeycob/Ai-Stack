@@ -837,6 +837,8 @@ AGENT_CAPABILITY_TO_WORKFLOW = {
     "web_answer": "web_answer",
     "web_fetch": "web_fetch",
     "agent_self_improve": "self_improve",
+    "agent_capability_develop": "self_improve",
+    "capability_implement": "self_improve",
     "self_improve": "self_improve",
     "stack_deploy": "deploy",
     "deploy": "deploy",
@@ -970,6 +972,12 @@ CORE_AGENT_CAPABILITIES = {
         "scope": "stack_runtime",
         "implemented": True,
     },
+    "agent_capability_develop": {
+        "workflow": "self_improve",
+        "summary": "Audited routine for designing a new codex-local capability with registry, executor, roadmap, tests, and guarded patch proposal.",
+        "scope": "stack_runtime",
+        "implemented": True,
+    },
     "self_improve": {
         "workflow": "self_improve",
         "summary": "Alias for agent_self_improve.",
@@ -1069,6 +1077,12 @@ CANONICAL_AGENT_CAPABILITY_ALIASES = {
     "fetch_web": "public_web_access",
     "download_web": "public_web_access",
     "agent_self_improve": "agent_self_improve",
+    "agent_capability_develop": "agent_capability_develop",
+    "capability_develop": "agent_capability_develop",
+    "capability_implement": "agent_capability_develop",
+    "implement_capability": "agent_capability_develop",
+    "develop_capability": "agent_capability_develop",
+    "new_capability": "agent_capability_develop",
     "self_improve": "agent_self_improve",
     "self_improvement": "agent_self_improve",
     "improve_agent": "agent_self_improve",
@@ -1412,6 +1426,7 @@ def agent_capability_registry_issues():
         "capability_catalog_show",
         "agent_runtime_status",
         "agent_self_improve",
+        "agent_capability_develop",
     }
     for capability in sorted(required):
         entry = registry.get(capability)
@@ -2705,7 +2720,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         workflow = "ssh_key_show_public"
     elif workspace_exists and "ssh_key_create" in capabilities:
         workflow = "ssh_key_create"
-    elif "agent_self_improve" in capabilities:
+    elif "agent_capability_develop" in capabilities or "agent_self_improve" in capabilities:
         workflow = "self_improve"
     elif "stack_deploy" in capabilities or agent_deploy_requested(task):
         workflow = "deploy"
@@ -3273,12 +3288,16 @@ def admin_agent_loop(payload):
         return result
 
     if workflow == "self_improve":
+        requested_capabilities = _string_list(taskspec.get("required_capabilities"))
+        self_improve_mode = "capability_develop" if "agent_capability_develop" in requested_capabilities else "diagnose"
         execution = admin_agent_self_improve({
             "workspace": "ai-stack",
-            "mode": "diagnose",
+            "mode": self_improve_mode,
             "dry_run": True,
             "prompt": task,
             "expected_behavior": str(taskspec.get("desired_end_state") or "").strip(),
+            "capability_name": str(taskspec.get("target_capability_name") or "").strip(),
+            "feature_request": task if self_improve_mode == "capability_develop" else "",
             "timeout": 900,
         })
         result["execution"] = execution
@@ -5283,8 +5302,8 @@ def admin_agent_self_improve(payload):
     max_cycles = int(payload.get("max_cycles") or 1)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
-    if mode not in {"diagnose", "reproduce", "patch", "verify", "deploy", "e2e", "full"}:
-        raise ValueError("mode must be diagnose|reproduce|patch|verify|deploy|e2e|full")
+    if mode not in {"diagnose", "reproduce", "propose_patch", "patch", "verify", "deploy", "e2e", "capability_develop", "full"}:
+        raise ValueError("mode must be diagnose|reproduce|propose_patch|patch|verify|deploy|e2e|capability_develop|full")
     max_cycles = max(1, min(max_cycles, 3))
 
     script = REPO_ROOT / "codex/bin/agent_self_improve.py"
@@ -5314,6 +5333,8 @@ def admin_agent_self_improve(payload):
         ("prompt", "--prompt"),
         ("patch_file", "--patch-file"),
         ("e2e_prompt", "--e2e-prompt"),
+        ("capability_name", "--capability-name"),
+        ("feature_request", "--feature-request"),
     ):
         value = str(payload.get(key) or "").strip()
         if value:

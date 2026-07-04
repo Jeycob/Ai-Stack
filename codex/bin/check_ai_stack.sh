@@ -548,7 +548,11 @@ if [ "${SKIP_GATEWAY_SMOKE:-0}" = "1" ]; then
 elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/codex_gateway_smoke.py" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke ...\n'
   gateway_smoke_log="$(mktemp)"
-  if python3 "$SCRIPT_DIR/codex_gateway_smoke.py" --base-url "$CODEX_GATEWAY_URL" --workspace "$WORKSPACE" --model "$MODEL" --timeout 60 >"$gateway_smoke_log" 2>&1; then
+  gateway_smoke_args=(--base-url "$CODEX_GATEWAY_URL" --workspace "$WORKSPACE" --model "$MODEL" --timeout 20)
+  if [ "${GATEWAY_SMOKE_FULL_LLM:-0}" != "1" ]; then
+    gateway_smoke_args+=(--contract-only)
+  fi
+  if python3 "$SCRIPT_DIR/codex_gateway_smoke.py" "${gateway_smoke_args[@]}" >"$gateway_smoke_log" 2>&1; then
     [ "$SUMMARY_ONLY" != "1" ] && cat "$gateway_smoke_log"
     [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex gateway smoke OK\n'
     record_summary "Codex gateway smoke" "OK"

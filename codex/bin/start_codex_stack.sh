@@ -153,9 +153,15 @@ def pids_for_inodes(inodes):
 
 
 pids = pids_for_inodes(socket_inodes_for_port())
+if pids:
+    print("gateway_port_owner_pids=" + ",".join(str(pid) for pid in sorted(pids)), flush=True)
+
 for sig in (signal.SIGTERM, signal.SIGKILL):
+    current = pids_for_inodes(socket_inodes_for_port())
+    if not current:
+        break
     signaled = False
-    for pid in sorted(pids):
+    for pid in sorted(current):
         try:
             os.kill(pid, sig)
             signaled = True
@@ -166,6 +172,12 @@ for sig in (signal.SIGTERM, signal.SIGKILL):
     if not signaled:
         break
     time.sleep(0.5)
+
+remaining = pids_for_inodes(socket_inodes_for_port())
+if remaining:
+    print("gateway_port_still_listening=true", flush=True)
+    print("gateway_port_remaining_pids=" + ",".join(str(pid) for pid in sorted(remaining)), flush=True)
+    raise SystemExit(1)
 PY
 }
 
@@ -280,7 +292,7 @@ if [ -f "$STATE_ROOT/codex-gateway.pid" ]; then
   kill "$(cat "$STATE_ROOT/codex-gateway.pid")" >/dev/null 2>&1 || true
 fi
 pkill -f "$GATEWAY" >/dev/null 2>&1 || true
-kill_gateway_port_owner || true
+kill_gateway_port_owner
 
 runuser -u "$AI_USER" -- bash -lc "PYTHONPATH='$CODEX_ROOT/bin' OPENCODE_PASS_FILE='$PASS_FILE' CODEX_WORKSPACES_FILE='$WORKSPACES_FILE' CODEX_GATEWAY_ADMIN_TOKEN_FILE='$ADMIN_TOKEN_FILE' nohup python3 '$GATEWAY' > '$AUDIT_ROOT/gateway.log' 2>&1 & echo \$! > '$STATE_ROOT/codex-gateway.pid'"
 

@@ -714,6 +714,9 @@ def assert_agent_self_improve_capability() -> None:
     entry = registry.get("agent_self_improve")
     if not entry or entry.get("workflow") != "self_improve" or not entry.get("implemented"):
         raise SystemExit(f"agent_self_improve must be implemented in registry, got {entry!r}")
+    develop_entry = registry.get("agent_capability_develop")
+    if not develop_entry or develop_entry.get("workflow") != "self_improve" or not develop_entry.get("implemented"):
+        raise SystemExit(f"agent_capability_develop must be implemented in registry, got {develop_entry!r}")
     taskspec, plan = _taskspec_plan(
         {
             "current_workspace": "ai-stack",
@@ -739,6 +742,32 @@ def assert_agent_self_improve_capability() -> None:
         raise SystemExit(f"self-improve capability must not be missing, got {taskspec!r}")
     if plan.get("workflow") != "self_improve":
         raise SystemExit(f"expected self_improve workflow, got {plan!r}")
+
+    taskspec, plan = _taskspec_plan(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "add a new codex-local capability for bounded workspace profiling",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "capability_design_artifact_created",
+            "required_capabilities": ["capability_implement"],
+            "missing_inputs": [],
+            "risk_level": "medium",
+            "recovery_plan": "propose registry, executor, tests and docs",
+            "read_only": False,
+        },
+        "navrhni novou capability pro codex-local",
+        workspace="ai-stack",
+        workspace_exists=True,
+    )
+    if taskspec.get("required_capabilities") != ["agent_capability_develop"]:
+        raise SystemExit(f"expected canonical agent_capability_develop, got {taskspec!r}")
+    if taskspec.get("missing_capabilities"):
+        raise SystemExit(f"capability develop must not be missing, got {taskspec!r}")
+    if plan.get("workflow") != "self_improve":
+        raise SystemExit(f"expected self_improve workflow for capability develop, got {plan!r}")
     print("AGENT_SELF_IMPROVE_CAPABILITY_OK")
 
 

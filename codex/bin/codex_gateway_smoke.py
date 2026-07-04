@@ -60,6 +60,7 @@ def test_health(base_url: str, timeout: float) -> None:
     check(data.get("ok") is True, f"health response is not ok: {data}")
     check(data.get("capability_mode") == "agent-first", f"unexpected capability mode: {data}")
     check(data.get("natural_codex_local_route") == "agent_loop", f"unexpected natural route: {data}")
+    check(bool(data.get("gateway_source_epoch")), f"missing gateway_source_epoch in health payload: {data}")
     check(bool(data.get("runtime_fingerprint")), f"missing runtime_fingerprint in health payload: {data}")
 
 
@@ -151,6 +152,18 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--workspace", default="ai-stack")
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument(
+        "--contract-only",
+        action="store_true",
+        help="Check the fast gateway contract only; skip LLM chat and streaming smoke.",
+    )
+    parser.add_argument("--skip-chat", action="store_true", help="Skip the simple non-stream chat smoke.")
+    parser.add_argument(
+        "--skip-natural-agent-loop",
+        action="store_true",
+        help="Skip the natural-language codex-local agent-loop smoke.",
+    )
+    parser.add_argument("--skip-stream", action="store_true", help="Skip streaming SSE smoke.")
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
@@ -158,9 +171,12 @@ def main() -> int:
         test_health(base_url, args.timeout)
         test_models(base_url, args.timeout, args.model)
         test_workspaces(base_url, args.timeout, args.workspace)
-        test_chat(base_url, args.timeout, args.model, args.workspace)
-        test_codex_local_natural_agent_loop(base_url, args.timeout, args.model, args.workspace)
-        test_stream(base_url, args.timeout, args.model, args.workspace)
+        if not (args.contract_only or args.skip_chat):
+            test_chat(base_url, args.timeout, args.model, args.workspace)
+        if not (args.contract_only or args.skip_natural_agent_loop):
+            test_codex_local_natural_agent_loop(base_url, args.timeout, args.model, args.workspace)
+        if not (args.contract_only or args.skip_stream):
+            test_stream(base_url, args.timeout, args.model, args.workspace)
     except SmokeError as exc:
         print(f"SMOKE FAILED: {exc}", file=sys.stderr)
         return 1
