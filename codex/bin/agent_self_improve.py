@@ -79,6 +79,7 @@ VERIFY_COMMANDS = [
         "codex/bin/gateway_runtime_fingerprint_check.py",
     ],
     ["python3", "codex/bin/owui_chat_turn_preflight_smoke.py"],
+    ["python3", "codex/bin/agent_self_improve_reasoning_smoke.py"],
     ["python3", "codex/bin/agent_self_improve_smoke.py"],
     ["python3", "codex/bin/workspace_context_regression_smoke.py"],
     ["python3", "codex/bin/gateway_recovery_smoke.py"],
@@ -105,6 +106,8 @@ SELF_IMPROVE_PHASES = [
     "report",
 ]
 
+_GATEWAY_REASONING_HELPERS: dict[str, Any] | None = None
+
 
 def utc_stamp() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -113,6 +116,10 @@ def utc_stamp() -> str:
 def slugify(value: str, fallback: str = "case") -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-")
     return (slug or fallback)[:80]
+
+
+def env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def artifact_dir_for(args: argparse.Namespace) -> Path:
@@ -297,6 +304,27 @@ def last_user_prompt(transcript: dict[str, Any]) -> str:
     return ""
 
 
+def gateway_reasoning_helpers() -> dict[str, Any]:
+    global _GATEWAY_REASONING_HELPERS
+    if _GATEWAY_REASONING_HELPERS is not None:
+        return _GATEWAY_REASONING_HELPERS
+    try:
+        from codex.gateway import gateway as gateway_module
+    except Exception as exc:  # pragma: no cover - defensive import fallback
+        _GATEWAY_REASONING_HELPERS = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return _GATEWAY_REASONING_HELPERS
+    _GATEWAY_REASONING_HELPERS = {
+        "ok": True,
+        "structured_json_chat": gateway_module.structured_json_chat,
+        "codex_local_runtime_model_name": gateway_module.codex_local_runtime_model_name,
+        "normalize_agent_taskspec": gateway_module.normalize_agent_taskspec,
+        "agent_taskspec_schema": gateway_module.agent_taskspec_schema,
+        "agent_capability_catalog": gateway_module.agent_capability_catalog,
+        "ROLE_PLANNER": gateway_module.ROLE_PLANNER,
+    }
+    return _GATEWAY_REASONING_HELPERS
+
+
 def extract_markers(text: str) -> dict[str, Any]:
     markers: dict[str, Any] = {}
     workflow = re.findall(r"(?im)\bworkflow=([A-Za-z0-9_.:-]+)", text)
@@ -460,7 +488,12 @@ def reproduce(args: argparse.Namespace, audit_dir: Path, regression: dict[str, A
     return payload
 
 
-def reasoning_task_spec(transcript: dict[str, Any], diagnosis: dict[str, Any], regression: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+def deterministic_reasoning_task_spec(
+    transcript: dict[str, Any],
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
     prompt = args.prompt or last_user_prompt(transcript) or args.feature_request
     target_capability_name = args.target_capability_name or args.capability_name or ""
     capability_hint = "agent_capability_develop" if target_capability_name or args.mode == "capability_develop" else ""
@@ -500,12 +533,193 @@ def reasoning_task_spec(transcript: dict[str, Any], diagnosis: dict[str, Any], r
     }
 
 
+def self_improve_taskspec_messages(
+    prompt: str,
+    fallback_spec: dict[str, Any],
+    transcript: dict[str, Any],
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    capability_catalog: str,
+) -> list[dict[str, str]]:
+    transcript_excerpt = transcript_text(transcript)
+    if len(transcript_excerpt) > 12000:
+        transcript_excerpt = transcript_excerpt[-12000:]
+    regression_cases = [
+        {
+            "name": case.get("name"),
+            "expected_workflow": case.get("expected_workflow"),
+            "expected_capability": case.get("expected_capability"),
+            "expected_marker": case.get("expected_marker"),
+        }
+        for case in (regression.get("cases") or [])
+        if isinstance(case, dict)
+    ]
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the planner mode for codex-local agent_self_improve. "
+                "Return JSON only. Do not explain. "
+                "Produce a TaskSpec that captures the user's actual goal, not a keyword workflow guess. "
+                "Use capability names from the provided catalog when possible. "
+                "If the task is to add or improve a codex-local capability, request agent_capability_develop and set target_capability_name. "
+                "Keep missing_inputs empty unless something is truly required before a safe bounded diff can be drafted."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Workspace: {fallback_spec.get('current_workspace', 'ai-stack')}\n"
+                f"Diagnosis category: {diagnosis.get('category')}\n"
+                f"Root cause: {diagnosis.get('root_cause')}\n"
+                f"Expected behavior: {diagnosis.get('expected_behavior') or fallback_spec.get('desired_end_state')}\n"
+                f"Regression cases: {json.dumps(regression_cases, ensure_ascii=False)}\n"
+                f"Capability catalog:\n{capability_catalog}\n\n"
+                f"Fallback TaskSpec:\n{json.dumps(fallback_spec, ensure_ascii=False)}\n\n"
+                f"Latest user goal:\n{prompt}\n\n"
+                f"Transcript excerpt:\n{transcript_excerpt}"
+            ),
+        },
+    ]
+
+
+def merge_reasoning_task_spec(
+    candidate: dict[str, Any],
+    fallback_spec: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    merged = dict(fallback_spec)
+    normalized = candidate if isinstance(candidate, dict) else {}
+    helpers = gateway_reasoning_helpers()
+    if helpers.get("ok"):
+        try:
+            normalized = helpers["normalize_agent_taskspec"](
+                normalized,
+                args.workspace,
+                args.workspace,
+                True,
+                fallback_spec.get("user_goal") or args.prompt or args.feature_request or "",
+            )
+        except Exception:
+            normalized = candidate if isinstance(candidate, dict) else {}
+
+    scalar_keys = (
+        "current_workspace",
+        "user_goal",
+        "target_repo_name",
+        "target_capability_name",
+        "remote_url",
+        "desired_end_state",
+        "risk_level",
+        "recovery_plan",
+        "action",
+        "run_after",
+        "url",
+        "question",
+        "search_query",
+        "ssh_comment",
+        "confidence",
+    )
+    bool_keys = ("is_new_workspace_request", "is_existing_workspace_task", "read_only")
+    list_keys = ("required_capabilities", "missing_inputs", "command", "followup_actions")
+
+    for key in scalar_keys:
+        value = str(normalized.get(key) or "").strip()
+        if value:
+            merged[key] = value
+    for key in bool_keys:
+        if key in normalized:
+            merged[key] = bool(normalized.get(key))
+    for key in list_keys:
+        if key in normalized and isinstance(normalized.get(key), list):
+            merged[key] = normalized.get(key)
+
+    if fallback_spec.get("target_capability_name"):
+        merged["target_capability_name"] = fallback_spec["target_capability_name"]
+    if fallback_spec.get("required_capabilities"):
+        existing = [str(item) for item in merged.get("required_capabilities") or [] if str(item)]
+        for item in fallback_spec["required_capabilities"]:
+            if item not in existing:
+                existing.append(item)
+        merged["required_capabilities"] = existing
+    if fallback_spec.get("missing_inputs"):
+        existing_missing = [str(item) for item in merged.get("missing_inputs") or [] if str(item)]
+        for item in fallback_spec["missing_inputs"]:
+            if item not in existing_missing:
+                existing_missing.append(item)
+        merged["missing_inputs"] = existing_missing
+
+    merged["repair_context"] = fallback_spec.get("repair_context") or {}
+    merged["acceptance_criteria"] = list(fallback_spec.get("acceptance_criteria") or [])
+    return merged
+
+
+def llm_reasoning_task_spec(
+    transcript: dict[str, Any],
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    args: argparse.Namespace,
+    fallback_spec: dict[str, Any],
+) -> dict[str, Any]:
+    helpers = gateway_reasoning_helpers()
+    if not helpers.get("ok"):
+        return {
+            "ok": False,
+            "planner": "llm_taskspec_runtime",
+            "error": helpers.get("error") or "gateway_reasoning_helpers_unavailable",
+        }
+    prompt = args.prompt or last_user_prompt(transcript) or args.feature_request or fallback_spec.get("user_goal") or ""
+    messages = self_improve_taskspec_messages(
+        prompt,
+        fallback_spec,
+        transcript,
+        diagnosis,
+        regression,
+        str(helpers["agent_capability_catalog"]()),
+    )
+    model_id = helpers["codex_local_runtime_model_name"](task=prompt, role=helpers["ROLE_PLANNER"])
+    try:
+        parsed, raw, _meta = helpers["structured_json_chat"](
+            model_id,
+            messages,
+            "agent_self_improve_taskspec",
+            helpers["agent_taskspec_schema"](),
+            timeout=min(args.command_timeout, 60),
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "planner": "llm_taskspec_runtime",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "ok": True,
+        "planner": "llm_taskspec_runtime",
+        "raw": raw,
+        "task_spec": merge_reasoning_task_spec(parsed, fallback_spec, args),
+    }
+
+
 def reason(args: argparse.Namespace, audit_dir: Path, transcript: dict[str, Any], diagnosis: dict[str, Any], regression: dict[str, Any]) -> dict[str, Any]:
-    task_spec = reasoning_task_spec(transcript, diagnosis, regression, args)
+    fallback_spec = deterministic_reasoning_task_spec(transcript, diagnosis, regression, args)
+    planner = "structured_taskspec_runtime"
+    planner_raw = ""
+    planner_error = ""
+    task_spec = fallback_spec
+    use_llm_planner = not env_truthy("AGENT_SELF_IMPROVE_SMOKE_RUNNING") and not env_truthy("AGENT_SELF_IMPROVE_DISABLE_LLM_PLANNER")
+    if use_llm_planner:
+        llm_result = llm_reasoning_task_spec(transcript, diagnosis, regression, args, fallback_spec)
+        if llm_result.get("ok"):
+            task_spec = llm_result.get("task_spec") or fallback_spec
+            planner = str(llm_result.get("planner") or "llm_taskspec_runtime")
+            planner_raw = str(llm_result.get("raw") or "")
+        else:
+            planner = "structured_taskspec_runtime_fallback"
+            planner_error = str(llm_result.get("error") or "")
     payload = {
         "ok": not task_spec.get("missing_inputs"),
         "phase": "reason",
-        "planner": "structured_taskspec_runtime",
+        "planner": planner,
         "llm_first_contract": {
             "intent_source": "TaskSpec fields and capability registry",
             "deterministic_code_role": "canonicalize, validate, execute, recover",
@@ -514,6 +728,10 @@ def reason(args: argparse.Namespace, audit_dir: Path, transcript: dict[str, Any]
         "task_spec": task_spec,
         "diagnosis_category": diagnosis.get("category"),
     }
+    if planner_raw:
+        payload["planner_raw"] = planner_raw
+    if planner_error:
+        payload["planner_error"] = planner_error
     write_json(audit_dir / "reasoning.json", payload)
     return payload
 
