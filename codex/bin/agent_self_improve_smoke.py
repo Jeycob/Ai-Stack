@@ -238,6 +238,8 @@ def run_capability_develop_mode() -> None:
             raise SystemExit(f"expected capability readiness to be review-ready, got {report!r}")
         if readiness.get("ready_for_apply") is not False:
             raise SystemExit(f"expected capability readiness to remain non-apply in dry-run capability mode, got {report!r}")
+        if readiness.get("missing_acceptance_evidence") not in ([], None):
+            raise SystemExit(f"expected no missing acceptance evidence in readiness, got {report!r}")
         phase_status = report.get("phase_status") or {}
         if phase_status.get("generate_unified_diff") != "ok":
             raise SystemExit(f"expected generate_unified_diff phase status ok, got {report!r}")

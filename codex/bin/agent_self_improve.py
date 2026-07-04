@@ -2518,6 +2518,7 @@ def capability_patch_readiness(
     summary: dict[str, Any],
     proposal_result: dict[str, Any],
     generated_diff_result: dict[str, Any],
+    evidence_status: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     capability_development = proposal_result.get("capability_development") or {}
     capability = capability_development.get("capability_name") or ""
@@ -2548,18 +2549,31 @@ def capability_patch_readiness(
     ]
     missing = [path for path in required if path not in generated_paths]
     verify_info = verify_summary(summary_phase_payload(summary, "verify"))
+    evidence_items = [item for item in (evidence_status or []) if isinstance(item, dict)]
+    evidence_missing = [
+        str(item.get("criterion") or "")
+        for item in evidence_items
+        if item.get("status") != "covered"
+    ]
     return {
         "target_capability_name": capability,
         "enabled": True,
-        "ready_for_review": generated_diff_result.get("ok") is True and not missing,
+        "ready_for_review": (
+            generated_diff_result.get("ok") is True
+            and not missing
+            and verify_info.get("all_green") is True
+            and not evidence_missing
+        ),
         "ready_for_apply": (
             generated_diff_result.get("ok") is True
             and not missing
             and not (generated_diff_result.get("blocked_paths") or [])
             and verify_info.get("all_green") is True
+            and not evidence_missing
             and summary.get("dry_run") is False
         ),
         "missing_artifacts": missing,
+        "missing_acceptance_evidence": evidence_missing,
         "verify_all_green": verify_info.get("all_green"),
         "git_apply_check_exit_code": generated_diff_result.get("git_apply_check_exit_code"),
     }
@@ -2655,8 +2669,8 @@ def build_report(summary: dict[str, Any], proposal_result: dict[str, Any], gener
     offload_ratio = round((len(codex_local_offload) / total_work_buckets) * 100, 1) if total_work_buckets else 0.0
     verify_info = verify_summary(summary_phase_payload(summary, "verify"))
     phase_status = phase_status_summary(summary)
-    readiness = capability_patch_readiness(summary, proposal_result, generated_diff_result)
     evidence_status = acceptance_evidence_status(summary, proposal_result, generated_diff_result)
+    readiness = capability_patch_readiness(summary, proposal_result, generated_diff_result, evidence_status)
     report = {
         "safe_to_offload_to_codex_local": codex_local_offload,
         "completed_by_codex_local_in_this_run": completed_offload,
@@ -2858,6 +2872,10 @@ def write_final_report(
         lines.append("- missing artifacts:")
         for item in readiness["missing_artifacts"]:
             lines.append(f"  - `{item}`")
+    if readiness.get("missing_acceptance_evidence"):
+        lines.append("- missing acceptance evidence:")
+        for item in readiness["missing_acceptance_evidence"]:
+            lines.append(f"  - {item}")
     lines.extend(["", "## Generated Patch Paths", ""])
     if report["generated_patch_paths"]:
         for item in report["generated_patch_paths"]:
