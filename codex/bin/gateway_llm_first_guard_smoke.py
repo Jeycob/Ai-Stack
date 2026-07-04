@@ -189,6 +189,26 @@ def assert_taskspec_core_does_not_call_prose_compat_hooks() -> None:
     print("TASKSPEC_CORE_PROSE_COMPAT_HOOKS_ABSENT_OK")
 
 
+def assert_legacy_plan_normalizer_is_explicit_only() -> None:
+    source = inspect.getsource(gateway.normalize_agent_plan)
+    forbidden = (
+        "agent_read_only_requested(task)",
+        "agent_extract_repo_name(task)",
+        "agent_infer_action_from_task(task)",
+        "agent_infer_followup_actions(task)",
+        "agent_edit_requested(task)",
+        "agent_bootstrap_requested(task)",
+        "agent_ssh_key_show_public_requested(task)",
+        "agent_ssh_key_create_requested(task)",
+        "agent_run_requested(task)",
+        "agent_web_question_requested(task)",
+    )
+    found = [fragment for fragment in forbidden if fragment in source]
+    if found:
+        fail(f"normalize_agent_plan must normalize explicit plans only; found prose hooks {found!r}")
+    print("LEGACY_PLAN_NORMALIZER_EXPLICIT_ONLY_OK")
+
+
 def assert_routing_provenance_terms() -> None:
     text = GATEWAY_PATH.read_text(encoding="utf-8")
     forbidden = ("heuristic_fallback", "llm_task_spec")
@@ -209,6 +229,7 @@ def main() -> int:
     assert_taskspec_requested_hooks_do_not_route_prose()
     assert_taskspec_normalizer_does_not_route_readonly_prose()
     assert_taskspec_core_does_not_call_prose_compat_hooks()
+    assert_legacy_plan_normalizer_is_explicit_only()
     assert_routing_provenance_terms()
     print("GATEWAY_LLM_FIRST_GUARD_OK")
     return 0

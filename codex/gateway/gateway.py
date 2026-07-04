@@ -16,9 +16,7 @@ if str(BIN_DIR) not in sys.path:
 
 from workspace_context import (
     WORKSPACE_LABEL_PATTERN,
-    bootstrap_repo_name_from_text,
     canonical_workspace_name,
-    infer_repo_name_from_text,
     load_workspace_registry,
     resolve_workspace_context,
     strip_workspace_routing,
@@ -1708,34 +1706,6 @@ def structured_json_chat(model_id, messages, schema_name, schema, timeout=240):
     return repaired, repaired_raw, {"strategy": "repair_retry", "attempts": attempts}
 
 
-def agent_read_only_requested(task):
-    lower = str(task or "").lower()
-    cues = (
-        "nic needituj",
-        "bez editace",
-        "jen analyzuj",
-        "jen analysis",
-        "jen popis",
-        "jen vysvetli",
-        "jen vysvětli",
-        "jen rekni",
-        "jen řekni",
-        "odpovez pouze",
-        "odpověz pouze",
-        "answer only",
-        "respond only",
-        "read only",
-        "readonly",
-        "do not edit",
-        "don't edit",
-    )
-    return any(cue in lower for cue in cues)
-
-
-def agent_extract_repo_name(task):
-    return bootstrap_repo_name_from_text(task) or infer_repo_name_from_text(task)
-
-
 def agent_controller_workspace(requested_workspace):
     default, workspaces = load_registry()
     if requested_workspace in workspaces:
@@ -3390,13 +3360,22 @@ def agent_plan_messages(requested_workspace, controller_workspace, workspace_exi
 
 
 def normalize_agent_plan(plan, requested_workspace, controller_workspace, workspace_exists, task):
+    """Normalize an explicit plan without inferring user intent from prose.
+
+    The primary runtime path is TaskSpec -> capability -> workflow. This legacy
+    normalizer is kept for old tests/admin callers and structural fallback
+    payloads, so it must not re-create the removed keyword router. It can only
+    sanitize explicit fields and extract bounded structural inputs such as a
+    literal URL or backticked command when the caller already selected that
+    workflow.
+    """
     if not isinstance(plan, dict):
         plan = {}
     workflow = str(plan.get("workflow") or "").strip().lower() or "clarify"
     if workflow not in AGENT_LOOP_WORKFLOWS:
         workflow = "clarify"
     capability_locked = bool(plan.get("capability_locked"))
-    read_only = bool(plan.get("read_only")) if capability_locked else agent_read_only_requested(task)
+    read_only = bool(plan.get("read_only"))
     if read_only and workflow != "review":
         workflow = "review"
     action = str(plan.get("action") or "").strip().lower()
@@ -3416,9 +3395,7 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         command = []
     repo_name = str(plan.get("repo_name") or "").strip()
     if not repo_name and workflow == "bootstrap":
-        repo_name = agent_extract_repo_name(task) or (
-            requested_workspace if not workspace_exists and requested_workspace != controller_workspace else ""
-        )
+        repo_name = requested_workspace if not workspace_exists and requested_workspace != controller_workspace else ""
     workspace = str(plan.get("workspace") or "").strip() or requested_workspace or controller_workspace
     if workflow in {"meta", "workspace_search", "review", "edit", "action", "run", "autopilot", "deploy"}:
         workspace = requested_workspace if workspace_exists else controller_workspace
@@ -3434,97 +3411,24 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         ),
         "",
     )
-    inferred_action = ""
-    inferred_followups = []
-    bootstrap_requested = False
-    git_publish_requested = False
-    ssh_key_create_requested = False
-    ssh_key_show_public_requested = False
-    run_requested = False
-    explicit_command_requested = False
     remote_url = str(plan.get("remote_url") or "").strip()
-    if not capability_locked:
-        inferred_action = agent_infer_action_from_task(task)
-        inferred_followups = agent_infer_followup_actions(task)
-        bootstrap_requested = agent_bootstrap_requested(task)
-        git_publish_requested = agent_git_publish_requested(task)
-        ssh_key_create_requested = agent_ssh_key_create_requested(task)
-        ssh_key_show_public_requested = agent_ssh_key_show_public_requested(task)
-        run_requested = agent_run_requested(task)
-        explicit_command_requested = agent_explicit_command_requested(task)
+    if workflow == "workspace_git_publish" and not remote_url:
         remote_url = remote_url or agent_remote_url_from_task(task)
     ssh_comment = str(plan.get("ssh_comment") or "").strip()
     if not ssh_comment:
-        ssh_comment = (
-            agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
-            if not capability_locked
-            else f"{requested_workspace if workspace_exists else controller_workspace}@local"
-        )
-    if not capability_locked:
-        if bootstrap_requested:
-            workflow = "bootstrap"
-        elif workspace_exists and git_publish_requested:
-            workflow = "workspace_git_publish"
-        elif workspace_exists and ssh_key_show_public_requested:
-            workflow = "ssh_key_show_public"
-        elif workspace_exists and ssh_key_create_requested:
-            workflow = "ssh_key_create"
-        if workflow == "bootstrap" and not bootstrap_requested:
-            if agent_edit_requested(task):
-                workflow = "edit"
-            elif inferred_action:
-                workflow = "action"
-                action = action or inferred_action
-            elif workspace_exists and git_publish_requested:
-                workflow = "workspace_git_publish"
-            elif workspace_exists and ssh_key_show_public_requested:
-                workflow = "ssh_key_show_public"
-            elif workspace_exists and ssh_key_create_requested:
-                workflow = "ssh_key_create"
-            elif run_requested:
-                workflow = "run"
-            else:
-                workflow = "clarify"
-        if workflow == "web_fetch" and agent_web_question_requested(task):
-            workflow = "web_answer"
+        ssh_comment = f"{requested_workspace if workspace_exists else controller_workspace}@local"
     if workflow in {"web_fetch", "web_answer"} and not str(plan.get("url") or "").strip():
         plan["url"] = agent_public_url_from_task(task)
     if workflow == "web_answer" and not str(plan.get("question") or "").strip():
         plan["question"] = str(task or "").strip()
-    if not capability_locked and not read_only and workflow == "review" and inferred_action:
-        workflow = "action"
-        action = action or inferred_action
-    if not capability_locked and not read_only and workflow == "review" and run_requested:
-        workflow = "run"
-    if not capability_locked and not read_only and workflow == "review" and agent_edit_requested(task):
-        workflow = "edit"
-    if workflow == "edit" and not run_after and inferred_action:
-        run_after = inferred_action
-    if workflow in {"bootstrap", "autopilot"} and not followup_actions and not capability_locked:
-        followup_actions = inferred_followups
     if workflow == "action" and not action and action_capability:
         action = action_capability
-    if workflow == "run" and inferred_action and not explicit_command_requested and not capability_locked:
-        workflow = "action"
-        action = action or inferred_action
-        command = []
-    if workflow == "run" and workspace_exists and ssh_key_create_requested and not bootstrap_requested and not capability_locked:
-        workflow = "ssh_key_create"
-        command = []
-    if workflow == "run" and workspace_exists and ssh_key_show_public_requested and not bootstrap_requested and not capability_locked:
-        workflow = "ssh_key_show_public"
-        command = []
-    if workflow == "run" and workspace_exists and git_publish_requested and not bootstrap_requested and not capability_locked:
-        workflow = "workspace_git_publish"
-        command = []
     if workflow == "run" and not command:
         command = agent_infer_command_from_task(task)
     if workflow == "run" and not command:
         workflow = "clarify"
     if workflow == "bootstrap" and not repo_name:
-        repo_name = agent_extract_repo_name(task) or (
-            requested_workspace if not workspace_exists and requested_workspace != controller_workspace else ""
-        )
+        repo_name = requested_workspace if not workspace_exists and requested_workspace != controller_workspace else ""
     if workflow != "bootstrap":
         repo_name = ""
     return {
@@ -3959,7 +3863,7 @@ def admin_agent_loop(payload):
             "user_goal": str(task or "").strip(),
             "is_new_workspace_request": bool(plan.get("workflow") == "bootstrap"),
             "is_existing_workspace_task": bool(workspace_exists and plan.get("workflow") != "bootstrap"),
-            "target_repo_name": agent_extract_repo_name(task),
+            "target_repo_name": str(plan.get("repo_name") or "").strip(),
             "remote_url": agent_remote_url_from_task(task),
             "desired_end_state": str(plan.get("desired_end_state") or plan.get("workflow") or "").strip(),
             "required_capabilities": _string_list(plan.get("required_capabilities")) or ["clarify_or_infer_capability"],
