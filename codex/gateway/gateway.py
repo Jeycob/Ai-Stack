@@ -5,7 +5,7 @@
 # gateway-scheduled-chat-patch: ok
 # gateway-chat-no-error-patch: ok
 # gateway-chat-fast-ack-patch: ok
-import hashlib, html, ipaddress, json, marshal, os, re, shlex, socket, subprocess, sys, threading, time, uuid, urllib.error, urllib.parse, urllib.request
+import hashlib, html, inspect, ipaddress, json, os, re, shlex, socket, subprocess, sys, threading, time, uuid, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 from pathlib import Path
@@ -6300,7 +6300,13 @@ def fallback_response_text(payload):
 
 
 def runtime_fingerprint():
-    """Hash loaded gateway code objects to detect runtime/repo split-brain."""
+    """Hash loaded gateway source text to detect runtime/repo split-brain.
+
+    Source text is intentionally used instead of marshal.dumps(code objects).
+    Marshal output can differ across Python versions even when the loaded source
+    is identical, which makes remote-vs-local checks noisy from a different
+    workstation.
+    """
     digest = hashlib.sha256()
     digest.update(GATEWAY_SOURCE_EPOCH.encode("utf-8"))
     targets = [
@@ -6324,7 +6330,11 @@ def runtime_fingerprint():
     ]
     for name, fn in targets:
         digest.update(name.encode("utf-8"))
-        digest.update(marshal.dumps(fn.__code__))
+        try:
+            source = inspect.getsource(fn)
+        except (OSError, TypeError):
+            source = repr(getattr(fn, "__code__", ""))
+        digest.update(source.replace("\r\n", "\n").strip().encode("utf-8"))
     return digest.hexdigest()[:24]
 
 
