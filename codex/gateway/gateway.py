@@ -672,6 +672,7 @@ def runtime_health():
                 if isinstance(spec, dict) and spec.get("implemented")
             ),
             "issues": capability_registry_issues,
+            "contract_issues": agent_capability_contract_issues(),
         },
         "readiness_issues": readiness_issues,
         "openwebui": {
@@ -1778,6 +1779,190 @@ def agent_capability_registry_issues():
             issues.append(f"missing_action:{capability}")
         elif not entry.get("implemented"):
             issues.append(f"not_implemented_action:{capability}")
+    issues.extend(agent_capability_contract_issues(registry))
+    return issues
+
+
+def agent_capability_input_schema(capability, entry):
+    workflow = str(entry.get("workflow") or AGENT_CAPABILITY_TO_WORKFLOW.get(capability, "clarify")).strip()
+    action = str(entry.get("action") or "").strip()
+    if capability.startswith("workspace_action:"):
+        action = capability.split(":", 1)[1]
+        workflow = "action"
+    common_workspace = {
+        "type": "object",
+        "additionalProperties": True,
+        "properties": {
+            "workspace": {"type": "string"},
+            "task": {"type": "string"},
+        },
+        "required": ["workspace"],
+    }
+    by_workflow = {
+        "meta": {"type": "object", "properties": {"workspace": {"type": "string"}}, "required": ["workspace"], "additionalProperties": True},
+        "review": common_workspace,
+        "workspace_search": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"workspace": {"type": "string"}, "query": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["workspace", "query"],
+        },
+        "edit": common_workspace,
+        "run": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"workspace": {"type": "string"}, "command": {"type": "array", "items": {"type": "string"}}},
+            "required": ["workspace", "command"],
+        },
+        "action": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"workspace": {"type": "string"}, "action": {"type": "string", "default": action}, "task": {"type": "string"}},
+            "required": ["workspace", "action"],
+        },
+        "autopilot": common_workspace,
+        "bootstrap": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"repo_name": {"type": "string"}, "target_repo_name": {"type": "string"}, "followup_actions": {"type": "array", "items": {"type": "string"}}},
+            "required": ["repo_name"],
+        },
+        "workspace_git_publish": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"workspace": {"type": "string"}, "remote_url": {"type": "string"}, "branch": {"type": "string"}},
+            "required": ["workspace", "remote_url"],
+        },
+        "ssh_key_create": common_workspace,
+        "ssh_key_show_public": common_workspace,
+        "web_search": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["query"],
+        },
+        "web_fetch": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"url": {"type": "string"}, "question": {"type": "string"}},
+            "required": ["url"],
+        },
+        "web_answer": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"url": {"type": "string"}, "question": {"type": "string"}},
+            "required": ["url", "question"],
+        },
+        "direct_answer": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"task": {"type": "string"}, "conversation_context": {"type": "string"}},
+            "required": ["task"],
+        },
+        "self_improve": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "workspace": {"type": "string"},
+                "chat_url": {"type": "string"},
+                "chat_id": {"type": "string"},
+                "mode": {"type": "string"},
+                "dry_run": {"type": "boolean"},
+            },
+            "required": ["workspace"],
+        },
+        "deploy": {"type": "object", "additionalProperties": True, "properties": {"workspace": {"type": "string"}}, "required": []},
+        "clarify": {"type": "object", "additionalProperties": True, "properties": {"missing_inputs": {"type": "array", "items": {"type": "string"}}}, "required": []},
+    }
+    return dict(entry.get("input_schema") or by_workflow.get(workflow) or {"type": "object", "additionalProperties": True, "required": []})
+
+
+def agent_capability_output_schema(capability, entry):
+    workflow = str(entry.get("workflow") or AGENT_CAPABILITY_TO_WORKFLOW.get(capability, "clarify")).strip()
+    base = {
+        "type": "object",
+        "additionalProperties": True,
+        "properties": {
+            "ok": {"type": "boolean"},
+            "workflow": {"type": "string", "default": workflow},
+            "summary": {"type": "string"},
+            "answer": {"type": "string"},
+            "recovery": {"type": ["object", "string"]},
+        },
+        "required": ["ok"],
+    }
+    return dict(entry.get("output_schema") or base)
+
+
+def agent_capability_safety_profile(capability, entry):
+    scope = str(entry.get("scope") or "mentoring").strip()
+    risk_by_scope = {
+        "conversation": "low",
+        "agent_metadata": "low",
+        "workspace_snapshot": "low",
+        "public_web": "low",
+        "mentoring": "low",
+        "workspace_repo": "medium",
+        "workspace_runtime": "medium",
+        "workspace_bootstrap": "medium",
+        "remote_repo": "high",
+        "host_runtime": "high",
+        "stack_runtime": "high",
+    }
+    profile = dict(entry.get("safety_profile") or {})
+    profile.setdefault("scope", scope)
+    profile.setdefault("risk_level", risk_by_scope.get(scope, "medium"))
+    profile.setdefault("secrets_policy", "never read or return private keys, tokens, .env, or codex/state secrets")
+    profile.setdefault("runner_boundary", "workspace/container first; host runtime only through explicit audited capability")
+    return profile
+
+
+def agent_capability_contract(capability, registry=None):
+    registry = registry or agent_capability_registry()
+    canonical = canonicalize_agent_capability(capability)
+    entry = dict(registry.get(canonical) or {})
+    workflow = str(entry.get("workflow") or AGENT_CAPABILITY_TO_WORKFLOW.get(canonical, "clarify")).strip() or "clarify"
+    executor = str(entry.get("executor") or "").strip()
+    if not executor:
+        executor = f"workspace_action:{entry.get('action')}" if canonical.startswith("workspace_action:") else f"workflow:{workflow}"
+    tests = [str(item).strip() for item in (entry.get("tests") or []) if str(item).strip()]
+    if not tests:
+        tests = ["python3 codex/bin/gateway_recovery_smoke.py"]
+        if workflow in {"self_improve"}:
+            tests.append("python3 codex/bin/agent_self_improve_smoke.py")
+        if workflow in {"action", "autopilot", "run", "workspace_git_publish"}:
+            tests.append("python3 codex/bin/workspace_context_regression_smoke.py")
+    return {
+        "capability_id": canonical,
+        "workflow": workflow,
+        "summary": str(entry.get("summary") or "").strip(),
+        "scope": str(entry.get("scope") or "").strip(),
+        "implemented": bool(entry.get("implemented")),
+        "input_schema": agent_capability_input_schema(canonical, entry),
+        "output_schema": agent_capability_output_schema(canonical, entry),
+        "safety_profile": agent_capability_safety_profile(canonical, entry),
+        "executor": executor,
+        "recovery": str(entry.get("recovery") or entry.get("recovery_hint") or "Return a precise blocker, evidence, and next safe recovery step.").strip(),
+        "tests": tests,
+    }
+
+
+def agent_capability_contract_issues(registry=None):
+    registry = registry or agent_capability_registry()
+    issues = []
+    required_keys = {"capability_id", "workflow", "input_schema", "output_schema", "safety_profile", "executor", "recovery", "tests"}
+    for capability, entry in sorted(registry.items()):
+        if not isinstance(entry, dict) or not entry.get("implemented"):
+            continue
+        contract = agent_capability_contract(capability, registry)
+        missing = sorted(key for key in required_keys if not contract.get(key))
+        for key in missing:
+            issues.append(f"contract_missing:{capability}:{key}")
+        for key in ("input_schema", "output_schema", "safety_profile"):
+            if not isinstance(contract.get(key), dict):
+                issues.append(f"contract_invalid:{capability}:{key}")
+        if not isinstance(contract.get("tests"), list) or not contract.get("tests"):
+            issues.append(f"contract_invalid:{capability}:tests")
     return issues
 
 
@@ -2022,19 +2207,17 @@ def agent_run_requested(task):
 
 def agent_explicit_command_requested(task):
     text = str(task or "").strip()
-    lower = text.lower()
     if re.search(r"(?is)```(?:bash|sh|shell)?\s*\n.+?\n```", text):
         return True
     if re.search(r"`([^`\n]{1,300})`", text):
         return True
-    if any(token in lower for token in ("git status", "pwd", "ls -", "python --version", "python3 --version", "node --version", "npm --version")):
+    if re.fullmatch(r"\s*(?:pwd|git\s+status(?:\s+--short)?(?:\s+--branch)?|ls(?:\s+-[A-Za-z]+)?|python3?\s+--version|node\s+--version|npm\s+--version)\s*", text):
         return True
     return False
 
 
 def agent_infer_command_from_task(task):
     text = str(task or "").strip()
-    lower = text.lower()
     fenced = re.search(r"(?is)```(?:bash|sh|shell)?\s*\n(.+?)\n```", text)
     if fenced:
         line = next((item.strip() for item in fenced.group(1).splitlines() if item.strip()), "")
@@ -2043,17 +2226,17 @@ def agent_infer_command_from_task(task):
     inline = re.search(r"`([^`\n]{1,300})`", text)
     if inline:
         return ["sh", "-lc", inline.group(1).strip()]
-    if "git status" in lower:
+    if re.fullmatch(r"\s*git\s+status(?:\s+--short)?(?:\s+--branch)?\s*", text):
         return ["git", "status", "--short", "--branch"]
-    if re.fullmatch(r"\s*pwd\s*", lower) or "working directory" in lower:
+    if re.fullmatch(r"\s*pwd\s*", text):
         return ["pwd"]
-    if re.fullmatch(r"\s*ls(?:\s+-[A-Za-z]+)?\s*", lower):
+    if re.fullmatch(r"\s*ls(?:\s+-[A-Za-z]+)?\s*", text):
         return ["ls", "-la"]
-    if "python" in lower and ("--version" in lower or "version" in lower):
+    if re.fullmatch(r"\s*python3?\s+--version\s*", text):
         return ["python3", "--version"]
-    if "node" in lower and ("--version" in lower or "version" in lower):
+    if re.fullmatch(r"\s*node\s+--version\s*", text):
         return ["node", "--version"]
-    if "npm" in lower and ("--version" in lower or "version" in lower):
+    if re.fullmatch(r"\s*npm\s+--version\s*", text):
         return ["npm", "--version"]
     return []
 
@@ -2124,41 +2307,21 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
     planner call fails or returns unusable output.
     """
     url = agent_public_url_from_task(task)
-    inferred_action = agent_infer_action_from_task(task)
-    inferred_followups = agent_infer_followup_actions(task)
     command = agent_infer_command_from_task(task)
     meta_capability = agent_meta_capability_from_task(task)
     search_query = agent_workspace_search_query_from_task(task)
 
-    bootstrap_requested = agent_bootstrap_requested(task)
     provenance = "fallback:structural"
     if meta_capability:
         workflow = "meta"
     elif search_query and workspace_exists:
         workflow = "workspace_search"
-    elif agent_read_only_requested(task):
-        workflow = "review"
-    elif agent_deploy_requested(task):
-        workflow = "deploy"
-    elif bootstrap_requested:
-        workflow = "bootstrap"
-        provenance = "fallback:taskspec_required"
     elif workspace_exists and agent_git_publish_requested(task):
         workflow = "workspace_git_publish"
-    elif workspace_exists and agent_ssh_key_show_public_requested(task):
-        workflow = "ssh_key_show_public"
-    elif workspace_exists and agent_ssh_key_create_requested(task):
-        workflow = "ssh_key_create"
-    elif url and agent_web_question_requested(task):
-        workflow = "web_answer"
     elif url:
         workflow = "web_fetch"
-    elif agent_run_requested(task) or command:
+    elif command:
         workflow = "run"
-    elif inferred_action:
-        workflow = "action"
-    elif agent_edit_requested(task):
-        workflow = "edit"
     else:
         return None
 
@@ -2167,11 +2330,11 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         "reason": "Deterministic bounded fallback matched after LLM planner failure.",
         "read_only": workflow == "review",
         "workspace": requested_workspace if workspace_exists else controller_workspace,
-        "action": inferred_action if workflow == "action" else "",
+        "action": "",
         "command": command if workflow == "run" else [],
-        "run_after": inferred_action if workflow == "edit" and inferred_action else "",
-        "followup_actions": inferred_followups if workflow in {"bootstrap", "autopilot"} else [],
-        "repo_name": agent_extract_repo_name(task) if workflow == "bootstrap" else "",
+        "run_after": "",
+        "followup_actions": [],
+        "repo_name": "",
         "github": "github" in str(task or "").lower(),
         "remote_url": agent_remote_url_from_task(task) if workflow == "workspace_git_publish" else "",
         "desired_end_state": "git_init_origin_commit_push_main" if workflow == "workspace_git_publish" else "",
@@ -2905,7 +3068,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     else:
         required_capabilities = planner_required_capabilities or agent_capability_hints_from_task(task, workspace_exists)
         if not planner_required_capabilities:
-            selector_source = "heuristic_fallback"
+            selector_source = "structural_fallback"
     required_capabilities = canonicalize_agent_capabilities(required_capabilities)
     if intent_capabilities:
         required_capabilities = canonicalize_agent_capabilities(intent_capabilities + required_capabilities)
@@ -3477,6 +3640,8 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
             "implemented": implemented,
             "aliases": aliases,
             "issues": agent_capability_registry_issues(),
+            "contract_issues": agent_capability_contract_issues(registry),
+            "contract_count": len([name for name in implemented if agent_capability_contract(name, registry).get("implemented")]),
             "catalog": agent_capability_catalog(),
             "answer": (
                 "Jsem codex-local, lokální Codex-like agent v OpenWebUI. "
@@ -3820,7 +3985,7 @@ def admin_agent_loop(payload):
         "planner_source": planner_source,
         "routing_provenance": (
             str(taskspec.get("routing_provenance") or "").strip()
-            or ("llm_task_spec" if planner_source == "llm" else "fallback:structural")
+            or ("llm_taskspec" if planner_source == "llm" else "fallback:structural")
         ),
         "workflow": plan["workflow"],
         "read_only": plan["read_only"],

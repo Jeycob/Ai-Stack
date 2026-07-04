@@ -114,10 +114,58 @@ def assert_agent_fallback_structural_only() -> None:
     print("AGENT_FALLBACK_STRUCTURAL_ONLY_OK")
 
 
+def assert_taskspec_requested_hooks_do_not_route_prose() -> None:
+    task_spec_only_hooks = (
+        "agent_infer_action_from_task",
+        "agent_infer_followup_actions",
+        "agent_edit_requested",
+        "agent_bootstrap_requested",
+        "agent_ssh_key_show_public_requested",
+        "agent_ssh_key_create_requested",
+        "agent_new_workspace_request",
+        "agent_executable_task_requested",
+        "agent_web_question_requested",
+        "agent_capability_help_requested",
+        "agent_preview_requested",
+        "agent_user_confirmation_requested",
+        "agent_deploy_requested",
+        "agent_run_requested",
+        "agent_meta_capability_from_task",
+        "agent_workspace_search_query_from_task",
+        "looks_like_followup_reference",
+    )
+    for name in task_spec_only_hooks:
+        fn = getattr(gateway, name)
+        source = inspect.getsource(fn)
+        forbidden_fragments = ("lower()", " cue", "cues", " in lower", "re.search")
+        found = [fragment for fragment in forbidden_fragments if fragment in source]
+        if found:
+            fail(f"{name} must remain TaskSpec-only and not route prose; found {found!r}")
+        falsey = fn("vytvor repo a vygeneruj ssh klic")
+        if falsey not in ("", [], False, {}):
+            fail(f"{name} returned prose-derived value {falsey!r}")
+    print("TASKSPEC_REQUESTED_HOOKS_DO_NOT_ROUTE_PROSE_OK")
+
+
+def assert_routing_provenance_terms() -> None:
+    text = GATEWAY_PATH.read_text(encoding="utf-8")
+    forbidden = ("heuristic_fallback", "llm_task_spec")
+    found = [term for term in forbidden if term in text]
+    if found:
+        fail(f"stale routing provenance terms found: {found!r}")
+    required = ("llm_taskspec", "fallback:structural", "fallback:planner_offline")
+    missing = [term for term in required if term not in text]
+    if missing:
+        fail(f"required routing provenance terms missing: {missing!r}")
+    print("ROUTING_PROVENANCE_TERMS_OK")
+
+
 def main() -> int:
     assert_no_keyword_router_artifacts()
     assert_normal_chat_structural_only()
     assert_agent_fallback_structural_only()
+    assert_taskspec_requested_hooks_do_not_route_prose()
+    assert_routing_provenance_terms()
     print("GATEWAY_LLM_FIRST_GUARD_OK")
     return 0
 

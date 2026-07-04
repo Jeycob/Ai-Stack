@@ -48,7 +48,6 @@ def assert_agent_loop_parse() -> None:
 
 def assert_fallback_plans() -> None:
     cases = [
-        ("Prohlédni architekturu. Nic needituj.", "review"),
         ("repo: TestCode\ninitni git repo a pushni sem git@github.com:owner/repo.git", "workspace_git_publish"),
         ("https://www.seznam.cz/", "web_fetch"),
         ("`pwd`", "run"),
@@ -66,6 +65,8 @@ def assert_fallback_plans() -> None:
         raise SystemExit("natural-language deploy request must require LLM planner, not fallback phrase routing")
     if gateway.agent_fallback_plan("vytvor repozitar: svatektest", "ai-stack", "ai-stack", True):
         raise SystemExit("natural-language bootstrap must require LLM TaskSpec, not fallback phrase routing")
+    if gateway.agent_fallback_plan("Prohlédni architekturu. Nic needituj.", "ai-stack", "ai-stack", True):
+        raise SystemExit("natural-language read-only review must require LLM TaskSpec, not fallback phrase routing")
     print("AGENT_FALLBACK_PLAN_OK")
 
 
@@ -386,9 +387,9 @@ def assert_taskspec_capability_selector_falls_back_to_heuristics() -> None:
         taskspec = gateway.normalize_agent_taskspec({}, "TestCode", "ai-stack", True, task)
     if taskspec.get("required_capabilities") != ["workspace_git_publish"]:
         raise SystemExit(f"expected heuristic fallback to keep git publish capability, got {taskspec!r}")
-    if taskspec.get("capability_selector_source") != "heuristic_fallback":
-        raise SystemExit(f"expected capability_selector_source=heuristic_fallback, got {taskspec!r}")
-    print("TASKSPEC_CAPABILITY_SELECTOR_FALLBACK_OK")
+    if taskspec.get("capability_selector_source") != "structural_fallback":
+        raise SystemExit(f"expected capability_selector_source=structural_fallback, got {taskspec!r}")
+    print("TASKSPEC_CAPABILITY_SELECTOR_STRUCTURAL_FALLBACK_OK")
 
 
 def assert_autopilot_llm_candidate_selection() -> None:
@@ -1374,6 +1375,33 @@ def assert_capability_draft_contracts() -> None:
     print("CAPABILITY_DRAFT_CONTRACTS_OK")
 
 
+def assert_runtime_capability_contracts() -> None:
+    registry = gateway.agent_capability_registry()
+    issues = gateway.agent_capability_contract_issues(registry)
+    if issues:
+        raise SystemExit(f"runtime capability contract issues: {issues!r}")
+    expectations = {
+        "workspace_git_publish": ("workspace_git_publish", {"workspace", "remote_url"}, "medium"),
+        "ssh_key_show_public": ("ssh_key_show_public", {"workspace"}, "medium"),
+        "public_web_search": ("web_search", {"query"}, "low"),
+        "agent_self_improve": ("self_improve", {"workspace"}, "high"),
+        "workspace_action:verify": ("action", {"workspace", "action"}, "medium"),
+    }
+    for capability, (workflow, required_inputs, risk_level) in expectations.items():
+        contract = gateway.agent_capability_contract(capability, registry)
+        if contract.get("workflow") != workflow:
+            raise SystemExit(f"{capability}: expected workflow={workflow!r}, got {contract!r}")
+        required = set((contract.get("input_schema") or {}).get("required") or [])
+        if not required_inputs.issubset(required):
+            raise SystemExit(f"{capability}: expected required inputs {required_inputs!r}, got {contract!r}")
+        safety = contract.get("safety_profile") or {}
+        if safety.get("risk_level") != risk_level:
+            raise SystemExit(f"{capability}: expected risk={risk_level!r}, got {contract!r}")
+        if not contract.get("executor") or not contract.get("recovery") or not contract.get("tests"):
+            raise SystemExit(f"{capability}: contract missing executor/recovery/tests, got {contract!r}")
+    print("RUNTIME_CAPABILITY_CONTRACTS_OK")
+
+
 def assert_agent_loop_meta_response() -> None:
     taskspec, plan = _taskspec_plan(
         {
@@ -1489,13 +1517,15 @@ def assert_agent_loop_uses_fallback_when_llm_breaks() -> None:
     ), patch.object(
         gateway,
         "agent_review_response",
-        return_value="Fallback review answer",
+        side_effect=RuntimeError("natural-language fallback must not run review"),
     ):
         result = gateway.admin_agent_loop({"workspace": "ai-stack", "task": "Prohlédni architekturu. Nic needituj."})
     if result.get("planner_source") != "fallback":
         raise SystemExit(f"expected planner_source='fallback', got {result.get('planner_source')!r}")
-    if result.get("workflow") != "review":
-        raise SystemExit(f"expected workflow='review', got {result.get('workflow')!r}")
+    if result.get("workflow") != "clarify":
+        raise SystemExit(f"expected workflow='clarify', got {result.get('workflow')!r}")
+    if result.get("routing_provenance") not in {"fallback:planner_offline", "fallback:structural"}:
+        raise SystemExit(f"expected explicit fallback provenance, got {result.get('routing_provenance')!r}")
     print("AGENT_LOOP_FALLBACK_OK")
 
 
@@ -2054,6 +2084,7 @@ def main() -> int:
     assert_agent_self_improve_capability()
     assert_admin_agent_self_improve_forwarding()
     assert_capability_draft_contracts()
+    assert_runtime_capability_contracts()
     assert_agent_loop_meta_response()
     assert_agent_loop_prefers_llm_plan()
     assert_agent_loop_uses_fallback_when_llm_breaks()
