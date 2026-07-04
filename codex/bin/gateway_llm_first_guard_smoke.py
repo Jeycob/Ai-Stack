@@ -61,6 +61,7 @@ def assert_no_keyword_router_artifacts() -> None:
         "run tests",
         "search it",
         "show results",
+        "temporal_cues",
     )
     lowered = text.lower()
     found = [fragment for fragment in forbidden_fragments if fragment.lower() in lowered]
@@ -147,6 +148,15 @@ def assert_taskspec_requested_hooks_do_not_route_prose() -> None:
     print("TASKSPEC_REQUESTED_HOOKS_DO_NOT_ROUTE_PROSE_OK")
 
 
+def assert_taskspec_normalizer_does_not_route_readonly_prose() -> None:
+    source = inspect.getsource(gateway.normalize_agent_taskspec)
+    forbidden = ("agent_read_only_requested(task)",)
+    found = [fragment for fragment in forbidden if fragment in source]
+    if found:
+        fail(f"normalize_agent_taskspec must trust TaskSpec read_only instead of prose keyword routing; found {found!r}")
+    print("TASKSPEC_NORMALIZER_READONLY_PROSE_ROUTING_ABSENT_OK")
+
+
 def assert_routing_provenance_terms() -> None:
     text = GATEWAY_PATH.read_text(encoding="utf-8")
     forbidden = ("heuristic_fallback", "llm_task_spec")
@@ -165,6 +175,7 @@ def main() -> int:
     assert_normal_chat_structural_only()
     assert_agent_fallback_structural_only()
     assert_taskspec_requested_hooks_do_not_route_prose()
+    assert_taskspec_normalizer_does_not_route_readonly_prose()
     assert_routing_provenance_terms()
     print("GATEWAY_LLM_FIRST_GUARD_OK")
     return 0

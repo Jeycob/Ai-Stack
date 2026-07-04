@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "updated": "2026-07-05",
+  "principle": "Natural-language intent belongs to the LLM TaskSpec planner. Deterministic code validates schemas, canonicalizes capabilities, applies policy/runtime guards, executes bounded tools, recovers, retries, and renders.",
+  "routing_provenance": [
+    "llm_taskspec",
+    "capability_canonicalizer",
+    "policy_guard",
+    "runtime_guard",
+    "fallback:structural",
+    "fallback:planner_offline",
+    "manual_admin_command"
+  ],
+  "surfaces": [
+    {
+      "path": "codex/gateway/gateway.py",
+      "classification": "core_llm_first",
+      "status": "guarded",
+      "allowed_deterministic_roles": [
+        "TaskSpec schema validation",
+        "capability alias canonicalization",
+        "capability contract validation",
+        "policy and runtime guards",
+        "structured admin command parsing",
+        "literal URL, git remote, and explicit shell-command structural fallback",
+        "tool execution and recovery classification"
+      ],
+      "forbidden": "natural-language business keyword routing",
+      "guard": "python3 codex/bin/gateway_llm_first_guard_smoke.py"
+    },
+    {
+      "path": "codex/bin/openwebui_codex_auto_tools_filter.py",
+      "classification": "thin_filter_with_legacy_helpers",
+      "status": "guarded_live_path_legacy_helpers_remain",
+      "guard": "python3 codex/bin/openwebui_filter_llm_first_smoke.py",
+      "legacy_note": "The live codex-local path must delegate natural language to GATEWAY_ADMIN_AGENT_LOOP. Older helper functions remain for compatibility and explicit admin paths, not as the reasoning layer."
+    },
+    {
+      "path": "codex/bin/mentor_codex_local.py",
+      "classification": "legacy_helper_not_core",
+      "status": "legacy_keyword_routing_present",
+      "planned_replacement": "TaskSpec planner, capability registry, workspace runner, and self-improve offload routines.",
+      "guard": "python3 codex/bin/keyword_routing_inventory_smoke.py"
+    },
+    {
+      "path": "codex/bin/agent_self_improve.py",
+      "classification": "self_improve_recovery_fallback",
+      "status": "bounded_deterministic_recovery_fallback",
+      "guard": "python3 codex/bin/agent_self_improve_reasoning_smoke.py",
+      "legacy_note": "Failure classification may use deterministic markers for recovery artifacts, but OpenWebUI chat intent routing must stay in the LLM TaskSpec path."
+    }
+  ]
+}

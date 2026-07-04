@@ -935,21 +935,9 @@ def public_web_search_queries(query):
     if not base:
         return []
     queries = [base]
-    lower = base.lower()
-    temporal_cues = (
-        "dnes",
-        "dneska",
-        "dnešní",
-        "dnesni",
-        "today",
-        "current",
-        "aktuální",
-        "aktualni",
-    )
-    if any(cue in lower for cue in temporal_cues):
-        now = time.localtime()
-        queries.append(f"{base} {time.strftime('%Y-%m-%d', now)}")
-        queries.append(f"{base} {time.strftime('%B %d %Y', now)}")
+    now = time.localtime()
+    queries.append(f"{base} {time.strftime('%Y-%m-%d', now)}")
+    queries.append(f"{base} {time.strftime('%B %d %Y', now)}")
     deduped = []
     seen = set()
     for item in queries:
@@ -2325,6 +2313,7 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
     else:
         return None
 
+    remote_url = agent_remote_url_from_task(task) if workflow == "workspace_git_publish" else ""
     raw = {
         "workflow": workflow,
         "reason": "Deterministic bounded fallback matched after LLM planner failure.",
@@ -2335,8 +2324,8 @@ def agent_fallback_plan(task, requested_workspace, controller_workspace, workspa
         "run_after": "",
         "followup_actions": [],
         "repo_name": "",
-        "github": "github" in str(task or "").lower(),
-        "remote_url": agent_remote_url_from_task(task) if workflow == "workspace_git_publish" else "",
+        "github": "github.com" in remote_url.lower(),
+        "remote_url": remote_url,
         "desired_end_state": "git_init_origin_commit_push_main" if workflow == "workspace_git_publish" else "",
         "url": url,
         "question": str(task or "").strip() if workflow == "web_answer" else "",
@@ -2963,8 +2952,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     requested_new_workspace = _boolish(spec.get("is_new_workspace_request"), default=False) or intent_class == "workspace_bootstrap"
     bootstrap_repo = bootstrap_repo_name_from_text(task) if requested_new_workspace else ""
     remote_url = str(spec.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
-    requested_read_only = agent_read_only_requested(task)
-    read_only = True if requested_read_only or intent_class in {"direct_answer", "creative_answer", "capability_help"} else _boolish(spec.get("read_only"), default=False)
+    read_only = True if intent_class in {"direct_answer", "creative_answer", "capability_help"} else _boolish(spec.get("read_only"), default=False)
     current_workspace = str(spec.get("current_workspace") or "").strip() or target_workspace or fallback_workspace
     user_goal = str(spec.get("user_goal") or "").strip() or str(task or "").strip()
     target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo
@@ -3369,7 +3357,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         "followup_actions": followup_actions,
         "repo_name": repo_name,
         "target_capability_name": str(spec.get("target_capability_name") or "").strip(),
-        "github": "github" in remote_url.lower() or "github" in str(task or "").lower(),
+        "github": "github.com" in remote_url.lower(),
         "remote_url": remote_url,
         "desired_end_state": str(spec.get("desired_end_state") or "").strip(),
         "required_capabilities": required_capabilities,
@@ -3400,8 +3388,8 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     workflow = str(plan.get("workflow") or "").strip().lower() or "clarify"
     if workflow not in AGENT_LOOP_WORKFLOWS:
         workflow = "clarify"
-    requested_read_only = agent_read_only_requested(task)
-    read_only = requested_read_only
+    capability_locked = bool(plan.get("capability_locked"))
+    read_only = bool(plan.get("read_only")) if capability_locked else agent_read_only_requested(task)
     if read_only and workflow != "review":
         workflow = "review"
     action = str(plan.get("action") or "").strip().lower()
@@ -3430,7 +3418,6 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
     confidence = str(plan.get("confidence") or "medium").strip().lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"
-    capability_locked = bool(plan.get("capability_locked"))
     required_capabilities = canonicalize_agent_capabilities(_string_list(plan.get("required_capabilities")))
     action_capability = next(
         (
@@ -3440,18 +3427,32 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         ),
         "",
     )
-    inferred_action = agent_infer_action_from_task(task)
-    inferred_followups = agent_infer_followup_actions(task)
-    bootstrap_requested = agent_bootstrap_requested(task)
-    git_publish_requested = agent_git_publish_requested(task)
-    ssh_key_create_requested = agent_ssh_key_create_requested(task)
-    ssh_key_show_public_requested = agent_ssh_key_show_public_requested(task)
-    run_requested = agent_run_requested(task)
-    explicit_command_requested = agent_explicit_command_requested(task)
-    remote_url = str(plan.get("remote_url") or "").strip() or agent_remote_url_from_task(task)
+    inferred_action = ""
+    inferred_followups = []
+    bootstrap_requested = False
+    git_publish_requested = False
+    ssh_key_create_requested = False
+    ssh_key_show_public_requested = False
+    run_requested = False
+    explicit_command_requested = False
+    remote_url = str(plan.get("remote_url") or "").strip()
+    if not capability_locked:
+        inferred_action = agent_infer_action_from_task(task)
+        inferred_followups = agent_infer_followup_actions(task)
+        bootstrap_requested = agent_bootstrap_requested(task)
+        git_publish_requested = agent_git_publish_requested(task)
+        ssh_key_create_requested = agent_ssh_key_create_requested(task)
+        ssh_key_show_public_requested = agent_ssh_key_show_public_requested(task)
+        run_requested = agent_run_requested(task)
+        explicit_command_requested = agent_explicit_command_requested(task)
+        remote_url = remote_url or agent_remote_url_from_task(task)
     ssh_comment = str(plan.get("ssh_comment") or "").strip()
     if not ssh_comment:
-        ssh_comment = agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
+        ssh_comment = (
+            agent_workspace_ssh_comment(task, requested_workspace if workspace_exists else controller_workspace)
+            if not capability_locked
+            else f"{requested_workspace if workspace_exists else controller_workspace}@local"
+        )
     if not capability_locked:
         if bootstrap_requested:
             workflow = "bootstrap"
@@ -3529,7 +3530,7 @@ def normalize_agent_plan(plan, requested_workspace, controller_workspace, worksp
         "run_after": run_after,
         "followup_actions": followup_actions,
         "repo_name": repo_name,
-        "github": bool(plan.get("github")),
+        "github": "github.com" in remote_url.lower(),
         "remote_url": remote_url if workflow == "workspace_git_publish" else "",
         "desired_end_state": str(plan.get("desired_end_state") or "").strip(),
         "url": str(plan.get("url") or "").strip(),

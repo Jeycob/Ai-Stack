@@ -323,9 +323,9 @@ def assert_workspace_action_capability_registry_mapping() -> None:
     print("WORKSPACE_ACTION_CAPABILITY_REGISTRY_OK")
 
 
-def assert_read_only_instruction_overrides_action_words() -> None:
+def assert_taskspec_read_only_is_structured_not_keyword_routed() -> None:
     task = "repo: ai-stack\nNic needituj. Odpovez jednou vetou: live smoke ok."
-    taskspec = gateway.normalize_agent_taskspec(
+    action_taskspec = gateway.normalize_agent_taskspec(
         {
             "current_workspace": "ai-stack",
             "user_goal": "Perform a live smoke test.",
@@ -347,18 +347,37 @@ def assert_read_only_instruction_overrides_action_words() -> None:
         True,
         task,
     )
-    plan = gateway.agent_taskspec_to_plan(taskspec, "ai-stack", "ai-stack", True, task)
-    if taskspec.get("read_only") is not True:
-        raise SystemExit(f"read-only instruction should override planner read_only=false, got {taskspec!r}")
-    if taskspec.get("required_capabilities") != ["review"]:
-        raise SystemExit(f"read-only answer should not keep action capability, got {taskspec!r}")
-    if taskspec.get("missing_capabilities"):
-        raise SystemExit(f"read-only answer should not report missing action capability, got {taskspec!r}")
-    if taskspec.get("action") or taskspec.get("command"):
-        raise SystemExit(f"read-only answer should clear action/command, got {taskspec!r}")
+    if action_taskspec.get("read_only") is True:
+        raise SystemExit(f"raw read-only prose must not override TaskSpec read_only=false, got {action_taskspec!r}")
+
+    review_taskspec = gateway.normalize_agent_taskspec(
+        {
+            "current_workspace": "ai-stack",
+            "user_goal": "Explain the project without edits.",
+            "is_new_workspace_request": False,
+            "is_existing_workspace_task": True,
+            "target_repo_name": "",
+            "remote_url": "",
+            "desired_end_state": "architecture_explained_without_edits",
+            "required_capabilities": ["review"],
+            "missing_inputs": [],
+            "risk_level": "low",
+            "recovery_plan": "Return a read-only architecture summary.",
+            "read_only": True,
+        },
+        "ai-stack",
+        "ai-stack",
+        True,
+        task,
+    )
+    plan = gateway.agent_taskspec_to_plan(review_taskspec, "ai-stack", "ai-stack", True, task)
+    if review_taskspec.get("read_only") is not True:
+        raise SystemExit(f"TaskSpec read_only=true should be preserved, got {review_taskspec!r}")
+    if review_taskspec.get("required_capabilities") != ["review"]:
+        raise SystemExit(f"TaskSpec review capability should stay canonical, got {review_taskspec!r}")
     if plan.get("workflow") != "review" or plan.get("read_only") is not True:
         raise SystemExit(f"read-only answer should resolve to review workflow, got {plan!r}")
-    print("READ_ONLY_ACTION_WORD_OVERRIDE_OK")
+    print("TASKSPEC_READ_ONLY_STRUCTURED_OK")
 
 
 def assert_taskspec_capability_selector_repairs_existing_workspace_publish() -> None:
@@ -2069,7 +2088,7 @@ def main() -> int:
     assert_workspace_git_publish_manual_recovery()
     assert_capability_locked_plan_stays_on_taskspec_workflow()
     assert_workspace_action_capability_registry_mapping()
-    assert_read_only_instruction_overrides_action_words()
+    assert_taskspec_read_only_is_structured_not_keyword_routed()
     assert_taskspec_capability_selector_repairs_existing_workspace_publish()
     assert_taskspec_capability_selector_falls_back_to_heuristics()
     assert_autopilot_llm_candidate_selection()

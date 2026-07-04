@@ -317,6 +317,28 @@ else
   record_summary "OpenWebUI filter LLM-first smoke" "SKIP"
 fi
 
+if [ "${SKIP_KEYWORD_ROUTING_INVENTORY_SMOKE:-0}" = "1" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex keyword routing inventory smoke ... SKIP (disabled)\n'
+  record_summary "Codex keyword routing inventory smoke" "SKIP"
+elif command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/keyword_routing_inventory_smoke.py" ]; then
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex keyword routing inventory smoke ...\n'
+  keyword_inventory_log="$(mktemp)"
+  if python3 "$SCRIPT_DIR/keyword_routing_inventory_smoke.py" >"$keyword_inventory_log" 2>&1; then
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$keyword_inventory_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex keyword routing inventory smoke OK\n'
+    record_summary "Codex keyword routing inventory smoke" "OK"
+  else
+    [ "$SUMMARY_ONLY" != "1" ] && cat "$keyword_inventory_log"
+    [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex keyword routing inventory smoke FAIL\n'
+    failures=$((failures + 1))
+    record_summary "Codex keyword routing inventory smoke" "FAIL"
+  fi
+  rm -f "$keyword_inventory_log"
+else
+  [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex keyword routing inventory smoke ... SKIP (python3 or keyword_routing_inventory_smoke.py missing)\n'
+  record_summary "Codex keyword routing inventory smoke" "SKIP"
+fi
+
 if [ "${SKIP_WORKSPACE_CONTEXT_REGRESSION_SMOKE:-0}" = "1" ]; then
   [ "$SUMMARY_ONLY" != "1" ] && printf '[check] Codex workspace context regression smoke ... SKIP (disabled)\n'
   record_summary "Codex workspace context regression smoke" "SKIP"
