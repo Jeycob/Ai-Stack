@@ -503,6 +503,8 @@ Pro rychlou kombinovanou kontrolu celé mentoring vrstvy je tam nově i:
 
 Stejný princip teď hlídá i samotný helper `codex/bin/owui_chat_turn.py`. Pro modely `codex-local-*` před každým visible i stateless completion requestem udělá preflight přes gateway `/health` a přes `reconcile_openwebui_functions.py --check-only`. Když gateway není `codex_local_ready`, chybí admin token, jsou OpenWebUI filtry inactive/stale nebo běžící runtime neodpovídá lokálnímu repu (`runtime_fingerprint` mismatch), helper prompt do `/api/chat/completions` vůbec nepošle. Místo tichého pádu do plain LLM odpovědi vrátí rovnou marker jako `GATEWAY_ADMIN_TOKEN_MISSING`, `CODEX_LOCAL_FILTER_INACTIVE`, `CODEX_LOCAL_FILTER_STALE`, `CODEX_LOCAL_RUNTIME_SPLIT_BRAIN` nebo `CODEX_LOCAL_GATEWAY_UNAVAILABLE` s konkrétním recovery krokem.
 
+Výjimka je jen explicitní deploy recovery. Když helper běží z čistého cizího klonu, jeho `HEAD` odpovídá `origin/main`, gateway `/health` potvrzuje dostupný LAN admin token a prompt je přesně admin flow `GATEWAY_ADMIN_DEPLOY_STACK`, preflight dovolí request projít i při `CODEX_LOCAL_RUNTIME_CLONE_DRIFT`, protože právě ten deploy má runtime checkout dotáhnout na nový commit. Běžné chaty, E2E a workspace úlohy zůstávají při driftu zablokované. Read-only `GATEWAY_ADMIN_DEPLOY_STATUS` je povolený také, aby šel bezpečně přečíst log a recovery typu `DEPLOY_BLOCKED_ROOT_RESTART_REQUIRED`.
+
 Když naopak chceš opravdu plný živý důkaz přes OpenWebUI chat, použij:
 
     python3 codex/bin/mentor_codex_local.py self-check ai-stack "Navrhni dalsi krok a dotahni co pujde." --strict-live
