@@ -41,6 +41,15 @@ def main() -> int:
     if "workspace_port_conflict_container=" not in script_text:
         raise SystemExit("expected start script to report stale codex workspace port conflicts")
 
+    gateway_text = (ROOT / "codex/gateway/gateway.py").read_text(encoding="utf-8")
+    for marker in (
+        '("agent_loop_response_text", agent_loop_response_text)',
+        '("agent_loop_human_answer", agent_loop_human_answer)',
+        '("fallback_response_text", fallback_response_text)',
+    ):
+        if marker not in gateway_text:
+            raise SystemExit(f"expected runtime_fingerprint to cover renderer marker: {marker}")
+
     payload = run_print_config()
     if payload.get("repo_root") != str(ROOT):
         raise SystemExit(f"expected repo_root={ROOT}, got {payload!r}")

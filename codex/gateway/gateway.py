@@ -6173,6 +6173,14 @@ def runtime_fingerprint():
         ("admin_agent_self_improve", admin_agent_self_improve),
         ("admin_run_workspace", admin_run_workspace),
         ("admin_workspace_git_publish", admin_workspace_git_publish),
+        ("gateway_admin_text", gateway_admin_text),
+        ("fallback_response_text", fallback_response_text),
+        ("agent_loop_human_answer", agent_loop_human_answer),
+        ("agent_loop_changed_files", agent_loop_changed_files),
+        ("agent_loop_verify_status", agent_loop_verify_status),
+        ("agent_loop_response_text", agent_loop_response_text),
+        ("trim_response_text", trim_response_text),
+        ("preview_text", preview_text),
     ]
     for name, fn in targets:
         digest.update(name.encode("utf-8"))
