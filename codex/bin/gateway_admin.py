@@ -168,6 +168,7 @@ def parse_args() -> argparse.Namespace:
     self_improve.add_argument("--expected-behavior", default="")
     self_improve.add_argument("--mode", default="diagnose")
     self_improve.add_argument("--capability-name", default="")
+    self_improve.add_argument("--target-capability-name", default="")
     self_improve.add_argument("--feature-request", default="")
     self_improve.add_argument("--apply", action="store_true", help="Run with dry_run=false.")
     self_improve.add_argument("--max-cycles", type=int, default=1)
@@ -242,6 +243,7 @@ def main() -> int:
                 "expected_behavior": args.expected_behavior,
                 "mode": args.mode,
                 "capability_name": args.capability_name,
+                "target_capability_name": args.target_capability_name,
                 "feature_request": args.feature_request,
                 "dry_run": not args.apply,
                 "max_cycles": args.max_cycles,

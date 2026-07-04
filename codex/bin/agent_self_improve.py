@@ -6,9 +6,10 @@ The helper turns a real OpenWebUI failure into durable evidence:
 1. collect a transcript or use a provided transcript file
 2. diagnose the failure class and minimal patch scope
 3. write a regression scenario artifact
-4. optionally validate/apply a small guarded patch
-5. run the local smoke suite
-6. optionally schedule deploy and E2E verification
+4. generate a bounded unified diff draft
+5. optionally validate/apply a small guarded patch
+6. run the local smoke suite
+7. optionally schedule deploy and E2E verification
 
 It is intentionally conservative. The script never prints secrets, never reads
 private key material, and never applies a patch unless the caller provides a
@@ -95,6 +96,7 @@ SELF_IMPROVE_PHASES = [
     "reproduce",
     "reason",
     "propose_patch",
+    "generate_unified_diff",
     "apply_guarded_patch",
     "verify",
     "e2e",
@@ -451,7 +453,8 @@ def reproduce(args: argparse.Namespace, audit_dir: Path, regression: dict[str, A
 
 def reasoning_task_spec(transcript: dict[str, Any], diagnosis: dict[str, Any], regression: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     prompt = args.prompt or last_user_prompt(transcript) or args.feature_request
-    capability_hint = args.capability_name or ""
+    target_capability_name = args.target_capability_name or args.capability_name or ""
+    capability_hint = "agent_capability_develop" if target_capability_name or args.mode == "capability_develop" else ""
     required_capabilities = []
     for case in regression.get("cases") or []:
         if isinstance(case, dict) and case.get("expected_capability"):
@@ -469,6 +472,7 @@ def reasoning_task_spec(transcript: dict[str, Any], diagnosis: dict[str, Any], r
         "is_new_workspace_request": False,
         "is_existing_workspace_task": True,
         "target_repo_name": "",
+        "target_capability_name": target_capability_name,
         "remote_url": "",
         "desired_end_state": args.expected_behavior
         or diagnosis.get("expected_behavior")
@@ -505,7 +509,7 @@ def reason(args: argparse.Namespace, audit_dir: Path, transcript: dict[str, Any]
 
 
 def capability_development_plan(args: argparse.Namespace, diagnosis: dict[str, Any], regression: dict[str, Any]) -> dict[str, Any]:
-    capability = slugify(args.capability_name or "new_capability", "new_capability")
+    capability = slugify(args.target_capability_name or args.capability_name or "new_capability", "new_capability")
     feature = args.feature_request or args.prompt or diagnosis.get("expected_behavior") or "Extend codex-local with an audited capability."
     return {
         "ok": True,
@@ -528,6 +532,12 @@ def capability_development_plan(args: argparse.Namespace, diagnosis: dict[str, A
             "README.md",
         ],
         "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
+        "acceptance_criteria": [
+            "TaskSpec includes target_capability_name when a capability is being developed.",
+            "Capability appears in roadmap or draft artifact with scope, preconditions, executor plan, recovery and tests.",
+            "Generated patch is a unified diff, touches only allowed paths, and passes git apply --check before any apply.",
+            "Runtime deploy/E2E remains blocked by fingerprint/source epoch drift.",
+        ],
         "safety_boundaries": [
             "No secrets, .env, tokens, or private SSH keys in artifacts.",
             "No destructive host operation outside explicit audited capability.",
@@ -595,6 +605,187 @@ def propose_patch(
     return proposal
 
 
+def unified_diff_for_file(rel: str, before: str, after: str) -> str:
+    before_lines = before.splitlines(keepends=True)
+    after_lines = after.splitlines(keepends=True)
+    fromfile = "/dev/null" if before == "" and not (ROOT / rel).exists() else f"a/{rel}"
+    return "".join(
+        difflib.unified_diff(
+            before_lines,
+            after_lines,
+            fromfile=fromfile,
+            tofile=f"b/{rel}",
+        )
+    )
+
+
+def roadmap_with_capability(capability: str, feature_request: str, reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = "docs/codex-local-capability-roadmap.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else '{\n  "version": 1,\n  "capabilities": {}\n}\n'
+    try:
+        payload = json.loads(before)
+    except json.JSONDecodeError:
+        payload = {"version": 1, "capabilities": {}}
+    capabilities = payload.setdefault("capabilities", {})
+    capabilities.setdefault(
+        capability,
+        {
+            "scope": "workspace_capability",
+            "status": "draft",
+            "summary": feature_request or f"Draft capability proposed by agent_self_improve for {capability}.",
+            "executor": "pending_guarded_executor_or_existing_pattern_reuse",
+            "acceptance_criteria": (reasoning.get("task_spec") or {}).get("acceptance_criteria") or [],
+        },
+    )
+    after = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def capability_draft_file(capability: str, feature_request: str, diagnosis: dict[str, Any], regression: dict[str, Any], reasoning: dict[str, Any]) -> tuple[str, str]:
+    rel = f"docs/capability-drafts/{capability}.json"
+    path = ROOT / rel
+    before = read_text(path) if path.is_file() else ""
+    task_spec = reasoning.get("task_spec") or {}
+    draft = {
+        "kind": "codex-local-capability-draft",
+        "capability_name": capability,
+        "feature_request": feature_request,
+        "created_by": "agent_self_improve.generate_unified_diff",
+        "architecture_contract": "OpenWebUI filter -> gateway agent loop -> TaskSpec -> capability registry -> workflow executor -> smoke/E2E tests -> report",
+        "desired_end_state": task_spec.get("desired_end_state") or "",
+        "acceptance_criteria": task_spec.get("acceptance_criteria") or [],
+        "registry_entry": {
+            "workflow": "pending",
+            "scope": "workspace_capability",
+            "implemented": False,
+            "summary": feature_request or f"Draft implementation plan for {capability}.",
+        },
+        "aliases": [capability],
+        "workflow_mapping": {
+            "status": "draft",
+            "note": "Senior review should choose an existing executor pattern or add one bounded workflow executor before marking implemented=true.",
+        },
+        "executor_plan": [
+            "Define explicit inputs and preconditions.",
+            "Reuse an existing bounded workspace executor when possible.",
+            "Return NEEDS_ATTENTION or MANUAL_STEP_REQUIRED with concrete recovery on blocker.",
+        ],
+        "tests": [
+            "TaskSpec normalization maps the capability to the expected canonical name.",
+            "Gateway recovery smoke covers success and blocker behavior.",
+            "E2E smoke records expected workflow/output marker before deploy is considered complete.",
+        ],
+        "diagnosis_category": diagnosis.get("category"),
+        "regression_cases": [case.get("name") for case in regression.get("cases") or [] if isinstance(case, dict)],
+        "senior_review_required": [
+            "Approve runtime executor scope.",
+            "Review generated diff before apply.",
+            "Approve deploy when fingerprint gate passes.",
+        ],
+    }
+    after = json.dumps(draft, ensure_ascii=False, indent=2) + "\n"
+    return rel, unified_diff_for_file(rel, before, after)
+
+
+def check_patch_text(patch_text: str, timeout: int) -> dict[str, Any]:
+    paths = changed_paths_from_patch(patch_text)
+    blocked = [path for path in paths if not patch_path_allowed(path)]
+    result: dict[str, Any] = {
+        "paths": paths,
+        "blocked_paths": blocked,
+        "git_apply_check_exit_code": None,
+        "git_apply_check_output": "",
+    }
+    if blocked:
+        result["ok"] = False
+        result["message"] = "Generated diff touches paths outside audited ai-stack self-improve scope."
+        return result
+    proc = subprocess.run(
+        ["git", "apply", "--check", "-"],
+        cwd=ROOT,
+        input=patch_text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
+    result["git_apply_check_exit_code"] = proc.returncode
+    result["git_apply_check_output"] = proc.stdout[-4000:]
+    result["ok"] = proc.returncode == 0
+    if proc.returncode != 0:
+        result["message"] = "Generated diff did not pass git apply --check."
+    return result
+
+
+def generate_unified_diff(
+    args: argparse.Namespace,
+    audit_dir: Path,
+    diagnosis: dict[str, Any],
+    regression: dict[str, Any],
+    reasoning: dict[str, Any],
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    if args.patch_file:
+        patch_text = read_text(Path(args.patch_file))
+        source = "provided_patch_file"
+    else:
+        task_spec = reasoning.get("task_spec") or {}
+        capability = slugify(
+            args.target_capability_name
+            or args.capability_name
+            or str(task_spec.get("target_capability_name") or "")
+            or "new_capability",
+            "new_capability",
+        )
+        feature_request = args.feature_request or args.prompt or str(task_spec.get("user_goal") or "")
+        patch_parts: list[str] = []
+        if proposal.get("capability_development") or args.mode == "capability_develop" or args.capability_name or args.target_capability_name:
+            for rel, diff in (
+                roadmap_with_capability(capability, feature_request, reasoning),
+                capability_draft_file(capability, feature_request, diagnosis, regression, reasoning),
+            ):
+                if diff:
+                    patch_parts.append(diff)
+            source = "capability_development_template"
+        else:
+            patch_parts = []
+            source = "no_safe_generator"
+        patch_text = "".join(patch_parts)
+
+    patch_file = audit_dir / "generated-unified.diff"
+    if patch_text:
+        write_text(patch_file, patch_text)
+        check = check_patch_text(patch_text, args.command_timeout)
+        result = {
+            "ok": bool(check.get("ok")),
+            "phase": "generate_unified_diff",
+            "source": source,
+            "patch_file": str(patch_file),
+            "patch_sha256": hashlib.sha256(patch_text.encode("utf-8")).hexdigest(),
+            "paths": check.get("paths") or [],
+            "blocked_paths": check.get("blocked_paths") or [],
+            "git_apply_check_exit_code": check.get("git_apply_check_exit_code"),
+            "git_apply_check_output": check.get("git_apply_check_output"),
+            "message": check.get("message") or "Generated unified diff passed git apply --check.",
+        }
+    else:
+        result = {
+            "ok": False,
+            "phase": "generate_unified_diff",
+            "source": source,
+            "patch_file": "",
+            "paths": [],
+            "blocked_paths": [],
+            "recovery": (
+                "No safe deterministic diff generator matched this TaskSpec. "
+                "Ask codex-local for an explicit unified diff or provide --patch-file for guarded apply."
+            ),
+        }
+    write_json(audit_dir / "generated-diff-result.json", result)
+    return result
+
+
 def changed_paths_from_patch(patch_text: str) -> list[str]:
     paths: list[str] = []
     for line in patch_text.splitlines():
@@ -616,15 +807,16 @@ def patch_path_allowed(rel: str) -> bool:
     return normalized in ALLOWED_PATCH_FILES or any(normalized.startswith(prefix) for prefix in ALLOWED_PATCH_PREFIXES)
 
 
-def validate_or_apply_patch(args: argparse.Namespace, audit_dir: Path) -> dict[str, Any]:
-    if not args.patch_file:
+def validate_or_apply_patch(args: argparse.Namespace, audit_dir: Path, generated_patch_file: str = "") -> dict[str, Any]:
+    patch_file = args.patch_file or generated_patch_file
+    if not patch_file:
         return {
             "ok": True,
             "mode": "no_patch_file",
             "applied": False,
             "message": "No patch file supplied; self-improve recorded diagnosis/regression and ran verification only.",
         }
-    patch_path = Path(args.patch_file)
+    patch_path = Path(patch_file)
     patch_text = read_text(patch_path)
     paths = changed_paths_from_patch(patch_text)
     blocked = [path for path in paths if not patch_path_allowed(path)]
@@ -868,13 +1060,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-behavior", default="")
     parser.add_argument(
         "--mode",
-        choices=["diagnose", "reproduce", "propose_patch", "patch", "verify", "deploy", "e2e", "capability_develop", "full"],
+        choices=[
+            "diagnose",
+            "reproduce",
+            "propose_patch",
+            "generate_unified_diff",
+            "patch",
+            "verify",
+            "deploy",
+            "e2e",
+            "capability_develop",
+            "full",
+        ],
         default="diagnose",
     )
     parser.add_argument("--dry-run", action="store_true", default=False)
     parser.add_argument("--max-cycles", type=int, default=1)
     parser.add_argument("--patch-file", default="")
     parser.add_argument("--capability-name", default="")
+    parser.add_argument("--target-capability-name", default="")
     parser.add_argument("--feature-request", default="")
     parser.add_argument("--audit-root", default=str(DEFAULT_AUDIT_ROOT))
     parser.add_argument("--openwebui-base-url", default=os.getenv("OWUI_BASE_URL", DEFAULT_OPENWEBUI_BASE_URL))
@@ -896,6 +1100,8 @@ def main() -> int:
         raise SystemExit("workspace must match [A-Za-z0-9_.-]{1,80}")
     if args.max_cycles < 1 or args.max_cycles > 3:
         raise SystemExit("max_cycles must be between 1 and 3")
+    if args.target_capability_name and not args.capability_name:
+        args.capability_name = args.target_capability_name
 
     audit_dir = artifact_dir_for(args)
     audit_dir.mkdir(parents=True, exist_ok=True)
@@ -944,9 +1150,11 @@ def main() -> int:
     reproduce_result: dict[str, Any] = {"ok": True, "skipped": True}
     reasoning_result: dict[str, Any] = {"ok": True, "skipped": True}
     proposal_result: dict[str, Any] = {"ok": True, "skipped": True}
+    generated_diff_result: dict[str, Any] = {"ok": True, "skipped": True}
     cycle_results: list[dict[str, Any]] = []
+    previous_cycle_context: dict[str, Any] = {}
 
-    cycle_modes = {"propose_patch", "patch", "capability_develop", "full"}
+    cycle_modes = {"propose_patch", "generate_unified_diff", "patch", "capability_develop", "full"}
     cycles_to_run = args.max_cycles if args.mode in cycle_modes else 1
 
     for cycle in range(1, cycles_to_run + 1):
@@ -956,14 +1164,17 @@ def main() -> int:
             "cycle": cycle,
             "ok": True,
             "phases": {},
+            "previous_cycle_context": previous_cycle_context,
         }
 
-        if args.mode in {"reproduce", "propose_patch", "patch", "capability_develop", "full"}:
+        if args.mode in {"reproduce", "propose_patch", "generate_unified_diff", "patch", "capability_develop", "full"}:
             reproduce_result = reproduce(args, cycle_dir, regression)
             cycle_record["phases"]["reproduce"] = reproduce_result
             cycle_record["ok"] = cycle_record["ok"] and bool(reproduce_result.get("ok"))
 
-        if args.mode in {"propose_patch", "patch", "capability_develop", "full"}:
+        if args.mode in {"propose_patch", "generate_unified_diff", "patch", "capability_develop", "full"}:
+            if previous_cycle_context:
+                diagnosis["previous_cycle_failure"] = previous_cycle_context
             reasoning_result = reason(args, cycle_dir, transcript, diagnosis, regression)
             cycle_record["phases"]["reason"] = reasoning_result
             cycle_record["ok"] = cycle_record["ok"] and bool(reasoning_result.get("ok"))
@@ -972,8 +1183,19 @@ def main() -> int:
             cycle_record["phases"]["propose_patch"] = proposal_result
             cycle_record["ok"] = cycle_record["ok"] and bool(proposal_result.get("ok"))
 
+            generated_diff_result = generate_unified_diff(
+                args,
+                cycle_dir,
+                diagnosis,
+                regression,
+                reasoning_result,
+                proposal_result,
+            )
+            cycle_record["phases"]["generate_unified_diff"] = generated_diff_result
+            cycle_record["ok"] = cycle_record["ok"] and bool(generated_diff_result.get("ok"))
+
         if args.mode in {"patch", "full"}:
-            patch_result = validate_or_apply_patch(args, cycle_dir)
+            patch_result = validate_or_apply_patch(args, cycle_dir, str(generated_diff_result.get("patch_file") or ""))
             cycle_record["phases"]["apply_guarded_patch"] = patch_result
             cycle_record["ok"] = cycle_record["ok"] and bool(patch_result.get("ok"))
 
@@ -1020,6 +1242,20 @@ def main() -> int:
         write_json(cycle_dir / "cycle-summary.json", cycle_record)
         if cycle_record["ok"]:
             break
+        previous_cycle_context = {
+            "failed_cycle": cycle,
+            "failed_phases": [
+                name
+                for name, payload in cycle_record.get("phases", {}).items()
+                if isinstance(payload, dict) and not payload.get("ok")
+            ],
+            "verify_output_tail": (
+                str((verify_result.get("commands") or [{}])[-1].get("output") or "")[-2000:]
+                if isinstance(verify_result, dict) and verify_result.get("commands")
+                else ""
+            ),
+            "recovery": "Use the failed phase output as additional context for the next generate_unified_diff cycle.",
+        }
 
     learned_pattern = {
         "kind": "codex-local-failure-pattern",
@@ -1036,7 +1272,16 @@ def main() -> int:
     summary = {
         "ok": all(
             bool(item.get("ok"))
-            for item in (reproduce_result, reasoning_result, proposal_result, patch_result, verify_result, deploy_result, e2e_result)
+            for item in (
+                reproduce_result,
+                reasoning_result,
+                proposal_result,
+                generated_diff_result,
+                patch_result,
+                verify_result,
+                deploy_result,
+                e2e_result,
+            )
         ),
         "artifact_dir": str(audit_dir),
         "workspace": args.workspace,
@@ -1064,6 +1309,14 @@ def main() -> int:
             "has_patch_file": proposal_result.get("has_patch_file", False),
             "capability_development": bool(proposal_result.get("capability_development")),
         },
+        "generated_diff": {
+            "ok": generated_diff_result.get("ok"),
+            "skipped": generated_diff_result.get("skipped", False),
+            "patch_file": generated_diff_result.get("patch_file"),
+            "paths": generated_diff_result.get("paths") or [],
+            "blocked_paths": generated_diff_result.get("blocked_paths") or [],
+            "source": generated_diff_result.get("source"),
+        },
         "patch": patch_result,
         "verify": {
             "ok": verify_result.get("ok"),
@@ -1076,7 +1329,9 @@ def main() -> int:
             "safe_to_offload_to_codex_local": [
                 "repository exploration",
                 "regression artifact proposal",
+                "acceptance criteria drafting",
                 "capability implementation checklist",
+                "unified diff draft generation for allowed paths",
                 "smoke command execution",
                 "recovery report drafting",
             ],
@@ -1086,6 +1341,11 @@ def main() -> int:
                 "approving new host/runtime capability boundaries",
                 "reviewing security-sensitive recovery",
             ],
+            "patch_application_decision": (
+                "applied"
+                if patch_result.get("applied")
+                else ("validated_only" if generated_diff_result.get("ok") and args.dry_run else "not_applied")
+            ),
         },
     }
     write_json(audit_dir / "summary.json", summary)

@@ -119,6 +119,7 @@ def run_proposal_mode() -> None:
                 str(Path(tmp) / "audit"),
             ],
             timeout=240,
+            expect_ok=False,
         )
         proposal_file = Path(payload["artifact_dir"]) / "cycle-01/patch-proposal.json"
         if not proposal_file.is_file():
@@ -126,6 +127,9 @@ def run_proposal_mode() -> None:
         proposal = json.loads(proposal_file.read_text(encoding="utf-8"))
         if not proposal.get("proposal"):
             raise SystemExit(f"expected proposal content, got {proposal!r}")
+        generated = payload.get("generated_diff") or {}
+        if generated.get("source") != "no_safe_generator" or not generated.get("patch_file") in {"", None}:
+            raise SystemExit(f"expected explicit no-generator recovery for non-capability proposal, got {payload!r}")
         print("AGENT_SELF_IMPROVE_PATCH_PROPOSAL_OK")
 
 
@@ -138,6 +142,8 @@ def run_capability_develop_mode() -> None:
                 "--mode",
                 "capability_develop",
                 "--capability-name",
+                "workspace_profile",
+                "--target-capability-name",
                 "workspace_profile",
                 "--feature-request",
                 "Add bounded workspace profiling capability.",
@@ -152,7 +158,43 @@ def run_capability_develop_mode() -> None:
         dev = proposal.get("capability_development") or {}
         if dev.get("capability_name") != "workspace_profile":
             raise SystemExit(f"expected capability development plan, got {proposal!r}")
+        generated_file = Path(payload["artifact_dir"]) / "cycle-01/generated-unified.diff"
+        generated_result_file = Path(payload["artifact_dir"]) / "cycle-01/generated-diff-result.json"
+        if not generated_file.is_file() or not generated_result_file.is_file():
+            raise SystemExit(f"expected generated unified diff artifacts under {payload['artifact_dir']}")
+        generated = json.loads(generated_result_file.read_text(encoding="utf-8"))
+        if not generated.get("ok") or generated.get("git_apply_check_exit_code") != 0:
+            raise SystemExit(f"expected applicable generated diff, got {generated!r}")
+        patch_text = generated_file.read_text(encoding="utf-8")
+        if "docs/capability-drafts/workspace_profile.json" not in patch_text:
+            raise SystemExit(f"expected capability draft file in generated diff:\n{patch_text}")
         print("AGENT_SELF_IMPROVE_CAPABILITY_DEVELOP_OK")
+
+
+def run_generate_unified_diff_mode() -> None:
+    with tempfile.TemporaryDirectory(prefix="asi-gendiff-") as tmp:
+        payload = run_self_improve(
+            [
+                "--workspace",
+                "ai-stack",
+                "--mode",
+                "generate_unified_diff",
+                "--target-capability-name",
+                "workspace_profile",
+                "--feature-request",
+                "Add bounded workspace profiling capability.",
+                "--dry-run",
+                "--audit-root",
+                str(Path(tmp) / "audit"),
+            ],
+            timeout=240,
+        )
+        generated = payload.get("generated_diff") or {}
+        if not generated.get("ok") or generated.get("source") != "capability_development_template":
+            raise SystemExit(f"expected generated diff mode to produce a valid draft diff, got {payload!r}")
+        if "docs/capability-drafts/workspace_profile.json" not in (generated.get("paths") or []):
+            raise SystemExit(f"expected capability draft path in generated diff, got {generated!r}")
+        print("AGENT_SELF_IMPROVE_GENERATE_UNIFIED_DIFF_OK")
 
 
 def run_max_cycles_mode() -> None:
@@ -268,6 +310,7 @@ def main() -> int:
     run_reproduce_mode()
     run_proposal_mode()
     run_capability_develop_mode()
+    run_generate_unified_diff_mode()
     run_max_cycles_mode()
     run_parallel_artifact_uniqueness()
     run_runtime_drift_blocks_e2e()

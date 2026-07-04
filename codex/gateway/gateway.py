@@ -878,7 +878,7 @@ CORE_AGENT_CAPABILITIES = {
     },
     "workspace_search": {
         "workflow": "workspace_search",
-        "summary": "Bounded ripgrep search over a registered workspace; returns matching files and lines.",
+        "summary": "Bounded search over a registered workspace, using rg when available and Python fallback otherwise; returns matching files and lines.",
         "scope": "workspace_snapshot",
         "implemented": True,
     },
@@ -2216,6 +2216,7 @@ def agent_taskspec_schema():
             "is_new_workspace_request": {"type": "boolean"},
             "is_existing_workspace_task": {"type": "boolean"},
             "target_repo_name": {"type": "string"},
+            "target_capability_name": {"type": "string"},
             "remote_url": {"type": "string"},
             "desired_end_state": {"type": "string"},
             "required_capabilities": {"type": "array", "items": {"type": "string"}},
@@ -2239,6 +2240,7 @@ def agent_taskspec_schema():
             "is_new_workspace_request",
             "is_existing_workspace_task",
             "target_repo_name",
+            "target_capability_name",
             "remote_url",
             "desired_end_state",
             "required_capabilities",
@@ -2410,6 +2412,7 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 '  "is_new_workspace_request": false,\n'
                 '  "is_existing_workspace_task": true,\n'
                 '  "target_repo_name": "repo or workspace name or empty",\n'
+                '  "target_capability_name": "new or existing capability name or empty",\n'
                 '  "remote_url": "git@github.com:owner/repo.git or empty",\n'
                 '  "desired_end_state": "concrete end state",\n'
                 '  "required_capabilities": ["workspace_git_publish"],\n'
@@ -2439,6 +2442,7 @@ def agent_taskspec_messages(requested_workspace, controller_workspace, workspace
                 "- If the user includes an explicit shell command, preserve it in command, but only if it is truly the user's intended action.\n"
                 "- If the intent is unclear or an input is missing, put it in missing_inputs instead of inventing a different task.\n"
                 "- If the task could be done safely by an existing capability, name that capability in required_capabilities.\n"
+                "- If the task is to add, implement, design, or improve a codex-local capability, request agent_capability_develop and put the desired capability identifier into target_capability_name.\n"
             ),
         },
         {
@@ -2468,6 +2472,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
     current_workspace = str(spec.get("current_workspace") or "").strip() or fallback_workspace
     user_goal = str(spec.get("user_goal") or "").strip() or str(task or "").strip()
     target_repo_name = str(spec.get("target_repo_name") or "").strip() or bootstrap_repo or inferred_repo
+    target_capability_name = str(spec.get("target_capability_name") or "").strip()
     if target_repo_name and current_workspace == requested_workspace and not workspace_exists and requested_workspace != controller_workspace:
         current_workspace = controller_workspace
     is_new_workspace_request = _boolish(spec.get("is_new_workspace_request"), default=bool(bootstrap_repo))
@@ -2538,6 +2543,12 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         required_capabilities.insert(0, meta_capability)
     if is_new_workspace_request and "workspace_repo_bootstrap" not in required_capabilities:
         required_capabilities.insert(0, "workspace_repo_bootstrap")
+    if target_capability_name and "agent_capability_develop" not in required_capabilities:
+        required_capabilities.insert(0, "agent_capability_develop")
+    if "agent_capability_develop" in required_capabilities:
+        required_capabilities = [
+            cap for cap in required_capabilities if cap not in {"workspace_edit", "edit", "workspace_autopilot", "autopilot"}
+        ]
     if remote_url and workspace_exists and not is_new_workspace_request and "workspace_git_publish" not in required_capabilities:
         required_capabilities.insert(0, "workspace_git_publish")
     # Capability precedence is semantic rather than prompt-specific: returning the
@@ -2649,6 +2660,7 @@ def normalize_agent_taskspec(spec, requested_workspace, controller_workspace, wo
         "is_new_workspace_request": bool(is_new_workspace_request),
         "is_existing_workspace_task": bool(is_existing_workspace_task),
         "target_repo_name": target_repo_name,
+        "target_capability_name": target_capability_name,
         "remote_url": remote_url,
         "desired_end_state": desired_end_state,
         "required_capabilities": required_capabilities,
@@ -2758,6 +2770,7 @@ def agent_taskspec_to_plan(spec, requested_workspace, controller_workspace, work
         "run_after": run_after,
         "followup_actions": followup_actions,
         "repo_name": repo_name,
+        "target_capability_name": str(spec.get("target_capability_name") or "").strip(),
         "github": "github" in remote_url.lower() or "github" in str(task or "").lower(),
         "remote_url": remote_url,
         "desired_end_state": str(spec.get("desired_end_state") or "").strip(),
@@ -3049,6 +3062,120 @@ def admin_agent_meta(plan, requested_workspace, controller_workspace, workspace_
     }
 
 
+WORKSPACE_SEARCH_SKIP_PREFIXES = (
+    ".git/",
+    "codex/state/",
+    "codex/audit/",
+    "logs/",
+    "node_modules/",
+    "__pycache__/",
+    ".venv/",
+    "venv/",
+    "dist/",
+    "build/",
+    ".next/",
+)
+
+
+def _workspace_search_skipped(rel: str) -> bool:
+    rel = rel.replace("\\", "/").lstrip("./")
+    if not rel:
+        return False
+    if rel.endswith("/"):
+        rel_dir = rel
+    else:
+        rel_dir = rel + "/" if "." not in Path(rel).name else rel
+    return any(rel.startswith(prefix) or rel_dir.startswith(prefix) for prefix in WORKSPACE_SEARCH_SKIP_PREFIXES)
+
+
+def _workspace_search_python_fallback(root: Path, query: str, max_matches: int, timeout: int, started: float):
+    matches = []
+    case_sensitive = any(ch.isupper() for ch in query)
+    needle = query if case_sensitive else query.lower()
+    root_resolved = root.resolve(strict=False)
+    scanned_files = 0
+
+    for current, dirs, names in os.walk(root_resolved):
+        if time.time() - started > timeout:
+            return {
+                "ok": False,
+                "action": "workspace_search",
+                "root": str(root),
+                "query": query,
+                "command": ["python_fallback_workspace_search", query],
+                "exit_code": 124,
+                "match_count": len(matches),
+                "matches": matches,
+                "output": "\n".join(matches) or "workspace search timed out",
+                "duration_ms": int((time.time() - started) * 1000),
+                "search_backend": "python_fallback",
+                "scanned_files": scanned_files,
+            }
+
+        current_path = Path(current)
+        rel_current = current_path.relative_to(root_resolved).as_posix()
+        if rel_current == ".":
+            rel_current = ""
+
+        kept_dirs = []
+        for dirname in dirs:
+            rel_dir = (Path(rel_current) / dirname).as_posix() if rel_current else dirname
+            if not _workspace_search_skipped(rel_dir + "/"):
+                kept_dirs.append(dirname)
+        dirs[:] = kept_dirs
+
+        for name in names:
+            rel_path = (Path(rel_current) / name).as_posix() if rel_current else name
+            if _workspace_search_skipped(rel_path):
+                continue
+            path = current_path / name
+            try:
+                if not path.is_file() or path.stat().st_size > 512_000:
+                    continue
+                scanned_files += 1
+                with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                    for line_no, line in enumerate(handle, 1):
+                        haystack = line if case_sensitive else line.lower()
+                        if needle not in haystack:
+                            continue
+                        preview = line.rstrip("\n\r")
+                        matches.append(f"{rel_path}:{line_no}:{preview}")
+                        if len(matches) >= max_matches:
+                            return {
+                                "ok": True,
+                                "action": "workspace_search",
+                                "root": str(root),
+                                "query": query,
+                                "command": ["python_fallback_workspace_search", query],
+                                "exit_code": 0,
+                                "match_count": len(matches),
+                                "truncated": True,
+                                "matches": matches,
+                                "output": "\n".join(matches),
+                                "duration_ms": int((time.time() - started) * 1000),
+                                "search_backend": "python_fallback",
+                                "scanned_files": scanned_files,
+                            }
+            except OSError:
+                continue
+
+    return {
+        "ok": True,
+        "action": "workspace_search",
+        "root": str(root),
+        "query": query,
+        "command": ["python_fallback_workspace_search", query],
+        "exit_code": 0,
+        "match_count": len(matches),
+        "truncated": False,
+        "matches": matches,
+        "output": "\n".join(matches),
+        "duration_ms": int((time.time() - started) * 1000),
+        "search_backend": "python_fallback",
+        "scanned_files": scanned_files,
+    }
+
+
 def admin_workspace_search(payload):
     workspace = str(payload.get("workspace") or "").strip()
     query = str(payload.get("query") or "").strip()
@@ -3109,19 +3236,10 @@ def admin_workspace_search(payload):
             timeout=timeout,
         )
     except FileNotFoundError:
-        return {
-            "ok": False,
-            "action": "workspace_search",
-            "workspace": workspace,
-            "root": str(root),
-            "query": query,
-            "command": cmd,
-            "exit_code": 127,
-            "match_count": 0,
-            "matches": [],
-            "output": "rg is not installed in the workspace runtime.",
-            "duration_ms": int((time.time() - started) * 1000),
-        }
+        result = _workspace_search_python_fallback(root, query, max_matches, timeout, started)
+        result["workspace"] = workspace
+        result["rg_error"] = "rg is not installed in the workspace runtime; used bounded Python fallback."
+        return result
     except subprocess.TimeoutExpired as exc:
         return {
             "ok": False,
@@ -3297,6 +3415,7 @@ def admin_agent_loop(payload):
             "prompt": task,
             "expected_behavior": str(taskspec.get("desired_end_state") or "").strip(),
             "capability_name": str(taskspec.get("target_capability_name") or "").strip(),
+            "target_capability_name": str(taskspec.get("target_capability_name") or "").strip(),
             "feature_request": task if self_improve_mode == "capability_develop" else "",
             "timeout": 900,
         })
@@ -5302,8 +5421,8 @@ def admin_agent_self_improve(payload):
     max_cycles = int(payload.get("max_cycles") or 1)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", workspace):
         raise ValueError("workspace must match [A-Za-z0-9_.-]{1,80}")
-    if mode not in {"diagnose", "reproduce", "propose_patch", "patch", "verify", "deploy", "e2e", "capability_develop", "full"}:
-        raise ValueError("mode must be diagnose|reproduce|propose_patch|patch|verify|deploy|e2e|capability_develop|full")
+    if mode not in {"diagnose", "reproduce", "propose_patch", "generate_unified_diff", "patch", "verify", "deploy", "e2e", "capability_develop", "full"}:
+        raise ValueError("mode must be diagnose|reproduce|propose_patch|generate_unified_diff|patch|verify|deploy|e2e|capability_develop|full")
     max_cycles = max(1, min(max_cycles, 3))
 
     script = REPO_ROOT / "codex/bin/agent_self_improve.py"
@@ -5334,6 +5453,7 @@ def admin_agent_self_improve(payload):
         ("patch_file", "--patch-file"),
         ("e2e_prompt", "--e2e-prompt"),
         ("capability_name", "--capability-name"),
+        ("target_capability_name", "--target-capability-name"),
         ("feature_request", "--feature-request"),
     ):
         value = str(payload.get(key) or "").strip()

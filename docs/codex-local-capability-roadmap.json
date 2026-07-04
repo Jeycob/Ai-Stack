@@ -43,7 +43,7 @@
     },
     "workspace_search": {
       "scope": "workspace_snapshot",
-      "summary": "Bounded rg search pres registrovany workspace s ignorovanim runtime, secrets a build adresaru; vraci konkretni soubory a radky."
+      "summary": "Bounded search pres registrovany workspace s preferovanym rg a Python fallbackem, ignoruje runtime, secrets a build adresare; vraci konkretni soubory a radky."
     },
     "workspace_context_set": {
       "scope": "agent_metadata",
@@ -63,11 +63,11 @@
     },
     "agent_self_improve": {
       "scope": "stack_runtime",
-      "summary": "Auditovana rutina pro zpracovani OpenWebUI failure transcriptu, reproduce/reason/patch-proposal/guarded-apply/verify/E2E/report artefakty."
+      "summary": "Auditovana rutina pro zpracovani OpenWebUI failure transcriptu, reproduce/reason/patch-proposal/generate-unified-diff/guarded-apply/verify/E2E/report artefakty."
     },
     "agent_capability_develop": {
       "scope": "stack_runtime",
-      "summary": "Self-improve rezim pro navrh nove codex-local capability: registry, executor/workflow, roadmap, unit/smoke/E2E testy a guarded patch proposal."
+      "summary": "Self-improve rezim pro navrh nove codex-local capability: target_capability_name, registry, executor/workflow, roadmap, unit/smoke/E2E testy a guarded unified diff draft."
     },
     "clarify_or_infer_capability": {
       "scope": "mentoring",

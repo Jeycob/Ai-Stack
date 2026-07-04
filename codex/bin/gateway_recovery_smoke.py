@@ -704,8 +704,12 @@ def assert_workspace_search_capability() -> None:
         )
         with patch.object(gateway, "WORKSPACES_FILE", str(workspaces_file)):
             result = gateway.admin_workspace_search({"workspace": "Test2", "query": "capability", "max_matches": 10})
+            with patch.dict(gateway.os.environ, {"PATH": ""}):
+                fallback_result = gateway.admin_workspace_search({"workspace": "Test2", "query": "capability", "max_matches": 10})
     if not result.get("ok") or result.get("match_count", 0) < 1:
         raise SystemExit(f"expected bounded workspace search result, got {result!r}")
+    if not fallback_result.get("ok") or fallback_result.get("search_backend") != "python_fallback" or fallback_result.get("match_count", 0) < 1:
+        raise SystemExit(f"expected bounded Python fallback search result without rg, got {fallback_result!r}")
     print("WORKSPACE_SEARCH_CAPABILITY_OK")
 
 
@@ -768,6 +772,34 @@ def assert_agent_self_improve_capability() -> None:
         raise SystemExit(f"capability develop must not be missing, got {taskspec!r}")
     if plan.get("workflow") != "self_improve":
         raise SystemExit(f"expected self_improve workflow for capability develop, got {plan!r}")
+
+    with patch.object(gateway, "agent_select_capabilities_with_llm", side_effect=RuntimeError("offline smoke")):
+        taskspec, plan = _taskspec_plan(
+            {
+                "current_workspace": "ai-stack",
+                "user_goal": "add a workspace profiling capability for repository summaries",
+                "is_new_workspace_request": False,
+                "is_existing_workspace_task": True,
+                "target_repo_name": "",
+                "target_capability_name": "workspace_profile",
+                "remote_url": "",
+                "desired_end_state": "workspace_profile capability patch draft created",
+                "required_capabilities": [],
+                "missing_inputs": [],
+                "risk_level": "medium",
+                "recovery_plan": "generate guarded capability patch draft",
+                "read_only": False,
+            },
+            "přidej capability workspace_profile pro shrnutí workspace",
+            workspace="ai-stack",
+            workspace_exists=True,
+        )
+    if taskspec.get("target_capability_name") != "workspace_profile":
+        raise SystemExit(f"expected target_capability_name to survive normalization, got {taskspec!r}")
+    if taskspec.get("required_capabilities") != ["agent_capability_develop"]:
+        raise SystemExit(f"expected target capability to imply agent_capability_develop, got {taskspec!r}")
+    if plan.get("workflow") != "self_improve" or plan.get("target_capability_name") != "workspace_profile":
+        raise SystemExit(f"expected self_improve plan with target capability, got {plan!r}")
     print("AGENT_SELF_IMPROVE_CAPABILITY_OK")
 
 

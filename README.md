@@ -408,7 +408,7 @@ Podobně je tu i `codex/bin/gateway_recovery_smoke.py`. Ten bez živého Dockeru
 
 Vedle toho je tu i `codex/bin/gateway_runtime_health_smoke.py`. Ten čistě offline hlídá kontrakt nového `/health` payloadu: že ready stav vrací `codex_local_ready=true`, `capability_mode=agent-first`, `natural_codex_local_route=agent_loop`, `runtime_commit` a admin token readiness, a že ne-ready stav vrací konkrétní `readiness_issues` místo neurčitého “něco je špatně”. Je to pojistka proti tomu, aby se runtime observability časem nerozpadla a stack znovu nezačal působit zdravě i ve chvíli, kdy capability-first cesta ve skutečnosti není připravená.
 
-Nová vrstva nad tím je `agent_self_improve`. Je to auditovaná rutina pro případy, kdy se codex-local v OpenWebUI zachová špatně nebo kdy má vzniknout nová menší capability. Běží jako bezpečný self-improving junior programátor nad existující architekturou: `collect_context -> reproduce -> reason -> propose_patch -> apply_guarded_patch -> verify -> e2e -> report`. Vezme chat transcript nebo chat URL, uloží redigovaný artifact do unikátního adresáře `codex/audit/self-improve/<timestamp>-<hash>-pid.../`, určí typ failu, vytvoří regression scenario, spustí route/capability reprodukci, připraví patch proposal, a podle režimu ověří, připraví deploy nebo E2E. Spuštění bez živého OpenWebUI:
+Nová vrstva nad tím je `agent_self_improve`. Je to auditovaná rutina pro případy, kdy se codex-local v OpenWebUI zachová špatně nebo kdy má vzniknout nová menší capability. Běží jako bezpečný self-improving junior programátor nad existující architekturou: `collect_context -> reproduce -> reason -> propose_patch -> generate_unified_diff -> apply_guarded_patch -> verify -> e2e -> report`. Vezme chat transcript nebo chat URL, uloží redigovaný artifact do unikátního adresáře `codex/audit/self-improve/<timestamp>-<hash>-pid.../`, určí typ failu, vytvoří regression scenario, spustí route/capability reprodukci, připraví patch proposal, vygeneruje auditovaný unified diff draft a podle režimu ověří, připraví deploy nebo E2E. Spuštění bez živého OpenWebUI:
 
     python3 codex/bin/agent_self_improve.py \
       --workspace ai-stack \
@@ -422,9 +422,11 @@ Pro návrh nové capability slouží režim `capability_develop`:
     python3 codex/bin/agent_self_improve.py \
       --workspace ai-stack \
       --mode capability_develop \
-      --capability-name workspace_profile \
+      --target-capability-name workspace_profile \
       --feature-request "Add bounded workspace profiling capability." \
       --dry-run
+
+`target_capability_name` je součást TaskSpec kontraktu. Planner tak nemusí schovávat název nové capability do volného textu; gateway ho předá do self-improve helperu a helper podle něj vytvoří `generated-unified.diff`. Ten je omezený na povolené cesty, typicky `docs/`, `codex/bin/`, `codex/gateway/` a kořenové provozní soubory, a ještě před apply musí projít `git apply --check`. Defaultní OpenWebUI agent loop spouští self-improve jako `dry_run=True`; skutečný apply má jít přes auditovaný admin/CLI krok po senior review.
 
 Přes gateway existuje stejná capability jako `agent_self_improve` a přímý endpoint `/v1/admin/agent/self-improve`. CLI cesta:
 
@@ -432,7 +434,9 @@ Přes gateway existuje stejná capability jako `agent_self_improve` a přímý e
 
 Rutina je silná, ale není neomezený shell. Nikdy nevypisuje tokeny, `.env` ani private SSH key, patch aplikuje jen z explicitně dodaného patch souboru, nejdřív kontroluje povolené cesty a `git apply --check`, a nikdy nenasazuje po selhaných smoke testech. Před živým E2E/deploy navíc povinně běží `gateway_runtime_fingerprint_check.py`; pokud live `/health` nehlásí stejný source epoch/fingerprint jako checkout, self-improve vrátí recovery místo falešného OK. Typické failure patterns jako `kde ted jsi?`, `jake mas capability?`, `vytvor tam ssh klic a vypis mi public`, bounded repo search, `max_cycles`, patch proposal, capability-development artifact, runtime gate a unikátní paralelní artefakty jsou pokryté `codex/bin/agent_self_improve_smoke.py`.
 
-`agent_capability_develop` je samostatná capability v katalogu. Nemá přidávat další prompt-specific keyword router; má vytvořit TaskSpec/acceptance criteria, registry změny, executor/workflow scope, roadmap/docs a testovací plán. Codex-local tím může odpracovat rutinní průzkum, návrh testů, patch proposal a smoke běhy, zatímco senior Codex drží finální architekturu, bezpečnostní hranice a review aplikovaného diffu.
+`agent_capability_develop` je samostatná capability v katalogu. Nemá přidávat další prompt-specific keyword router; má vytvořit TaskSpec/acceptance criteria, registry změny, executor/workflow scope, roadmap/docs, testovací plán a unified diff draft. Codex-local tím může odpracovat rutinní průzkum, návrh testů, patch proposal, diff draft, smoke běhy a recovery report, zatímco senior Codex drží finální architekturu, bezpečnostní hranice a review aplikovaného diffu.
+
+`workspace_search` preferuje `rg`, ale není na něm tvrdě závislé. Pokud runtime kontejner `rg` nemá, capability použije bounded Python fallback se stejnými skip pravidly pro `.git`, `codex/state`, `codex/audit`, logy, dependency a build adresáře. Deploy smoke tak nesmí selhat jen proto, že konkrétní runtime image nemá ripgrep.
 
 Stejná recovery metadata už dnes nenesou jen patch guidance, ale i retry záměr: gateway k failnutému kroku vrací `retry_action`, `retry_runner` a `retry_timeout`. Díky tomu `mentor_codex_local.py improve` po úspěšném safe patchi neudělá jen obecné `verify`, ale zkusí znovu právě ten capability krok, který předtím selhal, typicky `test`, `smoke`, `build` nebo `install`. Když ten retry uspěje, helper ještě jednou krátce přepočítá autopilot a zkusí další bezpečný krok, takže recovery loop nekončí hned v momentě, kdy se odblokuje první symptom.
 
