@@ -3821,6 +3821,36 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
     readiness = ((summary.get("report") or {}).get("capability_patch_readiness") or {}) if isinstance(summary.get("report"), dict) else {}
     runtime_gates = ((summary.get("report") or {}).get("runtime_gate_status") or {}) if isinstance(summary.get("report"), dict) else {}
     missing_acceptance_evidence = readiness.get("missing_acceptance_evidence") or []
+    workspace = str(summary.get("workspace") or "")
+    safe_apply_candidate_patch_file = str(generated_diff_result.get("safe_apply_candidate_patch_file") or "")
+    review_only_patch_file = str(generated_diff_result.get("review_only_patch_file") or "")
+    promotable_runtime_patch_file = str(generated_diff_result.get("promotable_runtime_patch_file") or "")
+    runtime_gate_command = "python3 codex/bin/gateway_runtime_fingerprint_check.py"
+    safe_apply_commands: list[str] = []
+    if safe_apply_candidate_patch_file:
+        safe_apply_commands.extend(
+            [
+                f"git apply --check {shlex.quote(safe_apply_candidate_patch_file)}",
+                (
+                    "python3 codex/bin/agent_self_improve.py "
+                    f"--workspace {shlex.quote(workspace or 'ai-stack')} "
+                    f"--mode patch --patch-file {shlex.quote(safe_apply_candidate_patch_file)}"
+                ),
+            ]
+        )
+    runtime_promotion_commands: list[str] = []
+    if promotable_runtime_patch_file:
+        runtime_promotion_commands.extend(
+            [
+                f"git apply --check {shlex.quote(promotable_runtime_patch_file)}",
+                runtime_gate_command,
+                (
+                    "python3 codex/bin/agent_self_improve.py "
+                    f"--workspace {shlex.quote(workspace or 'ai-stack')} "
+                    "--mode patch --patch-file /path/to/reviewed-runtime.patch"
+                ),
+            ]
+        )
     if blocked_paths:
         decision = "blocked_paths"
     elif review_only_artifacts:
@@ -3837,11 +3867,11 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
         "generated_diff_ok": generated_diff_ok,
         "generated_patch_file": generated_diff_result.get("patch_file") or "",
         "generated_patch_sha256": generated_diff_result.get("patch_sha256") or "",
-        "safe_apply_candidate_patch_file": generated_diff_result.get("safe_apply_candidate_patch_file") or "",
+        "safe_apply_candidate_patch_file": safe_apply_candidate_patch_file,
         "safe_apply_candidate_patch_sha256": generated_diff_result.get("safe_apply_candidate_patch_sha256") or "",
-        "review_only_patch_file": generated_diff_result.get("review_only_patch_file") or "",
+        "review_only_patch_file": review_only_patch_file,
         "review_only_patch_sha256": generated_diff_result.get("review_only_patch_sha256") or "",
-        "promotable_runtime_patch_file": generated_diff_result.get("promotable_runtime_patch_file") or "",
+        "promotable_runtime_patch_file": promotable_runtime_patch_file,
         "promotable_runtime_patch_sha256": generated_diff_result.get("promotable_runtime_patch_sha256") or "",
         "promotable_runtime_patch_check": generated_diff_result.get("promotable_runtime_patch_check") or {},
         "decision": decision,
@@ -3859,6 +3889,9 @@ def build_guarded_apply_manifest(summary: dict[str, Any], generated_diff_result:
             "confirm generated diff still matches current repo state",
             "re-run verify commands and live runtime fingerprint check before deploy",
         ],
+        "runtime_gate_command": runtime_gate_command,
+        "safe_apply_commands": safe_apply_commands,
+        "runtime_promotion_commands": runtime_promotion_commands,
         "promotion_blockers": (
             blocked_paths
             or (
@@ -4050,6 +4083,16 @@ def write_final_report(
             lines.append(f"  - `{item}`")
     if manifest.get("promotable_runtime_patch_file"):
         lines.append(f"- promotable runtime patch file: `{manifest.get('promotable_runtime_patch_file')}`")
+    if manifest.get("runtime_gate_command"):
+        lines.append(f"- runtime gate command: `{manifest.get('runtime_gate_command')}`")
+    if manifest.get("safe_apply_commands"):
+        lines.append("- safe apply commands:")
+        for item in manifest["safe_apply_commands"]:
+            lines.append(f"  - `{item}`")
+    if manifest.get("runtime_promotion_commands"):
+        lines.append("- runtime promotion commands:")
+        for item in manifest["runtime_promotion_commands"]:
+            lines.append(f"  - `{item}`")
     lines.append("- minimum verify commands:")
     for item in manifest["minimum_verify_commands"]:
         lines.append(f"  - `{item}`")

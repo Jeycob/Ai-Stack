@@ -580,6 +580,42 @@ def run_runtime_drift_blocks_e2e() -> None:
         print("AGENT_SELF_IMPROVE_RUNTIME_GATE_BLOCKS_E2E_OK")
 
 
+def run_runtime_drift_blocks_deploy() -> None:
+    with tempfile.TemporaryDirectory(prefix="asi-gate-deploy-") as tmp:
+        payload = run_self_improve(
+            [
+                "--workspace",
+                "ai-stack",
+                "--prompt",
+                "repo: Test2\nkde ted jsi?",
+                "--mode",
+                "deploy",
+                "--gateway-url",
+                "http://127.0.0.1:1",
+                "--audit-root",
+                str(Path(tmp) / "audit"),
+                "--command-timeout",
+                "30",
+            ],
+            timeout=80,
+            expect_ok=False,
+        )
+        deploy = payload.get("deploy") or {}
+        if deploy.get("reason") != "runtime_fingerprint_gate_failed":
+            raise SystemExit(f"expected deploy runtime gate failure, got {payload!r}")
+        gate = deploy.get("gate") or {}
+        if not gate or gate.get("ok") is not False:
+            raise SystemExit(f"expected failing deploy runtime gate payload, got {payload!r}")
+        report = payload.get("report") or {}
+        runtime_gate_status = report.get("runtime_gate_status") or {}
+        deploy_gate = runtime_gate_status.get("deploy") or {}
+        if deploy_gate.get("status") != "blocked":
+            raise SystemExit(f"expected blocked deploy runtime gate status, got {payload!r}")
+        if not deploy_gate.get("marker"):
+            raise SystemExit(f"expected deploy runtime gate marker in report, got {payload!r}")
+        print("AGENT_SELF_IMPROVE_RUNTIME_GATE_BLOCKS_DEPLOY_OK")
+
+
 def run_verify_dry_run() -> None:
     with tempfile.TemporaryDirectory(prefix="asi-verify-") as tmp:
         proc = subprocess.run(
@@ -631,6 +667,16 @@ def run_verify_dry_run() -> None:
         manifest_runtime_gate_status = manifest.get("runtime_gate_status") or {}
         if sorted(manifest_runtime_gate_status.keys()) != ["deploy", "e2e"]:
             raise SystemExit(f"expected runtime gate status in manifest, got {manifest!r}")
+        if manifest.get("runtime_gate_command") != "python3 codex/bin/gateway_runtime_fingerprint_check.py":
+            raise SystemExit(f"expected runtime gate command in manifest, got {manifest!r}")
+        if manifest.get("safe_apply_candidate_patch_file"):
+            commands = manifest.get("safe_apply_commands") or []
+            if len(commands) < 2 or not commands[0].startswith("git apply --check "):
+                raise SystemExit(f"expected guarded safe-apply commands in manifest, got {manifest!r}")
+        if manifest.get("promotable_runtime_patch_file"):
+            commands = manifest.get("runtime_promotion_commands") or []
+            if len(commands) < 3 or "gateway_runtime_fingerprint_check.py" not in " ".join(commands):
+                raise SystemExit(f"expected runtime promotion commands in manifest, got {manifest!r}")
         print("AGENT_SELF_IMPROVE_VERIFY_DRY_RUN_OK")
 
 
@@ -652,6 +698,7 @@ def main() -> int:
     run_max_cycles_mode()
     run_parallel_artifact_uniqueness()
     run_runtime_drift_blocks_e2e()
+    run_runtime_drift_blocks_deploy()
     run_verify_dry_run()
     print("AGENT_SELF_IMPROVE_SMOKE_OK")
     return 0
